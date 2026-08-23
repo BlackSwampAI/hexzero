@@ -1031,6 +1031,68 @@ describe('game API simulation boundary', () => {
     );
   });
 
+  it('exports a Full Safe simultaneous tick containing a lost record', async () => {
+    let failingAgentId: string | undefined;
+    const app = createApp({
+      provider: {
+        mode: 'scripted-test',
+        configured: true,
+        async decide(observation): Promise<ProviderDecision> {
+          failingAgentId ??= observation.agentId;
+          if (observation.agentId === failingAgentId)
+            throw new AgentProviderError({
+              code: 'timeout',
+              message: 'Deadline exhausted.',
+              retryable: false,
+            });
+          return {
+            decision: { worldAction: { type: 'wait' }, summary: 'Wait.' },
+            metadata: {
+              provider: 'scripted-test',
+              model: 'lost-tick-export-test',
+              latencyMs: 0,
+            },
+          };
+        },
+      },
+    });
+    const tickResponse = await app.request('/api/simulation/tick', {
+      method: 'POST',
+    });
+    expect(tickResponse.status).toBe(200);
+
+    const response = await app.request('/api/simulation/experiment/export', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        agents: { mode: 'all' },
+        turns: { mode: 'entire-retained' },
+        outcomes: [
+          'accepted',
+          'rejected',
+          'provider-error',
+          'operator-skipped',
+          'lost-tick',
+        ],
+        actions: ['move', 'infect', 'capture', 'wait'],
+        communications: { channel: 'all', status: 'all' },
+        level: 'full-safe',
+      }),
+    });
+    expect(response.status).toBe(200);
+    const { document } = experimentExportResponseSchema.parse(
+      await response.json(),
+    );
+    expect(document.schemaVersion).toBe(10);
+    const lostTick = document.turns.find(
+      ({ outcome }) => outcome === 'lost-tick',
+    );
+    expect(lostTick).toBeDefined();
+    expect(lostTick).not.toHaveProperty('worldActionResult');
+    expect(lostTick).not.toHaveProperty('communicationResult');
+    expect(lostTick).not.toHaveProperty('diplomacyResult');
+  });
+
   it('archives the exact supplied generated artifact through an injected writer', async () => {
     const archiveExperimentExport = vi.fn(
       (document: ExperimentExportDocument) => ({

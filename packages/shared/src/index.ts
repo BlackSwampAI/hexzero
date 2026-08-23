@@ -3734,6 +3734,7 @@ export const experimentExportDocumentSchema = z
         });
       if (
         turn.outcome !== 'provider-error' &&
+        turn.outcome !== 'lost-tick' &&
         turn.outcome !== 'operator-skipped' &&
         (Boolean(turn.worldActionResult) !== results ||
           Boolean(turn.communicationResult) !== results ||

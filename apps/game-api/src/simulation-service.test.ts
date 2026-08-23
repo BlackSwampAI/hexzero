@@ -818,17 +818,74 @@ describe('SimulationService', () => {
         .getSnapshot()
         .agentMemories.filter(({ entries }) => entries.length > 0),
     ).toHaveLength(7);
-    const exported = simulation.generateExperimentExport({
-      ...exportRequest('minimal'),
-      outcomes: [
-        'accepted',
-        'rejected',
-        'lost-tick',
-        'provider-error',
-        'operator-skipped',
-      ],
-    });
-    expect(exported.tickSummaries).toEqual([
+    const lostTickOutcomes = [
+      'accepted',
+      'rejected',
+      'lost-tick',
+      'provider-error',
+      'operator-skipped',
+    ] as const;
+    const customWithResults = {
+      turnObservations: false,
+      personalityTextHistory: false,
+      nearbyAgents: false,
+      recentEvents: false,
+      recentPublicMessages: false,
+      recentDirectMessages: false,
+      recentControlChanges: false,
+      validationDetails: true,
+      resultingEvents: true,
+      providerUsageMetadata: false,
+      initialWorldState: false,
+      currentWorldState: false,
+      computedMetrics: false,
+      communications: false,
+      controlChanges: false,
+    };
+    const exports = [
+      simulation.generateExperimentExport({
+        ...exportRequest('minimal'),
+        outcomes: lostTickOutcomes,
+      }),
+      simulation.generateExperimentExport({
+        ...exportRequest('standard'),
+        outcomes: lostTickOutcomes,
+      }),
+      simulation.generateExperimentExport({
+        ...exportRequest('full-safe'),
+        outcomes: lostTickOutcomes,
+      }),
+      simulation.generateExperimentExport({
+        ...exportRequest('custom'),
+        outcomes: lostTickOutcomes,
+        custom: customWithResults,
+      }),
+    ];
+    for (const exported of exports) {
+      expect(experimentExportDocumentSchema.safeParse(exported).success).toBe(
+        true,
+      );
+      const lostTick = exported.turns.find(
+        ({ outcome }) => outcome === 'lost-tick',
+      );
+      expect(lostTick).toBeDefined();
+      expect(lostTick).not.toHaveProperty('worldActionResult');
+      expect(lostTick).not.toHaveProperty('communicationResult');
+      expect(lostTick).not.toHaveProperty('diplomacyResult');
+    }
+    const minimalAccepted = exports[0]!.turns.find(
+      ({ outcome }) => outcome === 'accepted',
+    );
+    expect(minimalAccepted).not.toHaveProperty('worldActionResult');
+    for (const exported of exports.slice(1)) {
+      const accepted = exported.turns.find(
+        ({ outcome }) => outcome === 'accepted',
+      );
+      expect(accepted).toHaveProperty('worldActionResult');
+      expect(accepted).toHaveProperty('communicationResult');
+      expect(accepted).toHaveProperty('diplomacyResult');
+    }
+    expect(exports[0]!.tickSummaries).toEqual([
       expect.objectContaining({
         providerCallCount: 8,
         aggregateDecisionLatencyMs: 37,
