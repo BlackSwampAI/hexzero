@@ -30,12 +30,37 @@ describe('configurable world scenarios', () => {
     expect(first.feasible && first.scenario.patientZeroAgentId).toBe(
       DEVELOPMENT_AGENT_BLUEPRINTS[0]!.id,
     );
+    expect(first.feasible && first.scenario.objectiveVersion).toBe(
+      'durable-influence-v2',
+    );
     expect(
       first.feasible &&
         first.world.agents.map(({ id, currentCell }) => ({ id, currentCell })),
     ).toEqual(
       second.feasible &&
         second.world.agents.map(({ id, currentCell }) => ({ id, currentCell })),
+    );
+  });
+
+  it('previews the optional seeded casual cleaner reproducibly', () => {
+    const base = defaultWorldSetupRequest();
+    const request = {
+      ...base,
+      capabilities: { ...base.capabilities, simulatedPlayerPressure: true },
+      simulatedPlayer: {
+        enabled: true as const,
+        profile: 'casual-cleaner' as const,
+        seed: 'pressure-a',
+      },
+      objectiveVersion: 'durable-influence-v3' as const,
+    };
+    const first = previewWorldSetup(request, '2026-08-13T12:00:00.000Z');
+    const second = previewWorldSetup(request, '2026-08-13T12:00:00.000Z');
+    expect(first.feasible && first.world.simulatedPlayer).toEqual(
+      second.feasible && second.world.simulatedPlayer,
+    );
+    expect(first.feasible && first.world.simulatedPlayer?.profile).toBe(
+      'casual-cleaner',
     );
   });
 

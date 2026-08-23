@@ -132,6 +132,71 @@ function temporaryPath(name: string): string {
 }
 
 describe('experiment archive', () => {
+  it('archives simulated cleaner activity while preserving disabled exports', async () => {
+    const archive = new ArchiveDatabase({ path: ':memory:' });
+    const disabled = await currentExport(true);
+    expect(() => importExperimentExport(archive, disabled)).not.toThrow();
+    const raw = structuredClone(disabled);
+    raw.experiment.id =
+      '10000000-0000-4000-8000-000000000099' as typeof raw.experiment.id;
+    raw.experiment.scenario!.capabilities.simulatedPlayerPressure = true;
+    raw.experiment.scenario!.objectiveVersion = 'durable-influence-v3';
+    raw.experiment.scenario!.simulatedPlayer = {
+      enabled: true,
+      profile: 'casual-cleaner',
+      seed: 'archive-pressure',
+    };
+    raw.worldEvents = [
+      ...(raw.worldEvents ?? []),
+      {
+        id: '20000000-0000-4000-8000-000000000099' as NonNullable<
+          typeof raw.worldEvents
+        >[number]['id'],
+        type: 'simulated-player-clean-blocked',
+        occurredAt: NOW,
+        profile: 'casual-cleaner',
+        originatingTick: 1,
+        cell: raw.agents[0]!.currentCell,
+        blockingAgentId: raw.agents[0]!.id,
+      },
+    ];
+    raw.simulatedPlayerMetrics = {
+      movements: 0,
+      cellsDisinfected: 0,
+      blockedDisinfections: 1,
+    };
+    const document = experimentExportDocumentSchema.parse(raw);
+    importExperimentExport(archive, document);
+    expect(
+      archive.database
+        .prepare(
+          'SELECT tick_number, type, blocking_agent_id FROM simulated_player_activity WHERE experiment_id = ?',
+        )
+        .get(document.experiment.id),
+    ).toEqual({
+      tick_number: 1,
+      type: 'simulated-player-clean-blocked',
+      blocking_agent_id: raw.agents[0]!.id,
+    });
+    expect(
+      new ExperimentQueryService(archive).summary(document.experiment.id),
+    ).toMatchObject({
+      simulatedPlayer: {
+        movements: 0,
+        cellsDisinfected: 0,
+        blockedDisinfections: 1,
+      },
+    });
+    expect(
+      archive.database
+        .prepare(
+          'SELECT simulated_player_metrics_json AS metrics FROM experiments WHERE id = ?',
+        )
+        .get(document.experiment.id),
+    ).toEqual({ metrics: JSON.stringify(raw.simulatedPlayerMetrics) });
+    archive.close();
+  });
+
   it('migrates and queries schema-v10 tick attribution while accepting schema-v9', async () => {
     const archive = new ArchiveDatabase({ path: ':memory:' });
     const ticked = await currentExport(true);

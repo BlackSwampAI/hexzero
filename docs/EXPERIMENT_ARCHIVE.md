@@ -12,6 +12,10 @@ the CLI still provides no arbitrary SQL surface.
 Legacy scenarios with a null Patient Zero designation remain valid historical
 records. They retain null attribution and Patient Zero queries return no
 coordinator activity; current live setup requirements do not rewrite them.
+Migration 3 adds aggregate simulated-player metrics to experiments and the
+`simulated_player_activity` table. Every metrics-bearing safe export preserves
+movement/clean/block totals; Full Safe additionally preserves tick-attributed
+activity without deriving player behavior from agent turns.
 
 The experiment archive is a durable, local research surface for completed or partially retained exports. It does not participate in an active simulation: the Game API's in-memory engine remains authoritative, and an archive write cannot change an accepted game outcome. It imports schema-v10 and compatible schema-v9 JSON exports; it is not crash recovery, restartable simulation state, or a scheduler.
 

@@ -46,6 +46,8 @@ import {
   type ScenarioRosterEntry,
   type WorldSetupPreviewResponse,
   type WorldSetupRequest,
+  type SimulatedPlayerEvent,
+  type SimulatedPlayerState,
 } from '@hexzero/shared';
 
 export interface WorldState {
@@ -57,6 +59,139 @@ export interface WorldState {
     AllianceProposalId,
     AllianceProposal
   >;
+  readonly simulatedPlayer?: SimulatedPlayerState | null;
+}
+
+export interface AdvancedSimulatedPlayer {
+  state: WorldState;
+  events: SimulatedPlayerEvent[];
+}
+
+/**
+ * Advance the optional D1 casual cleaner for one virtual interval.
+ * It observes infection only, moves at most one adjacent cell toward the
+ * nearest infected cell, then attempts at most one disinfection. Agent
+ * positions are consulted only for authoritative co-located blocking.
+ */
+export function advanceCasualCleaner(
+  state: WorldState,
+  seed: string,
+  tickNumber: number,
+  context: Pick<EngineContext, 'createEventId' | 'now'>,
+): AdvancedSimulatedPlayer {
+  const player = state.simulatedPlayer;
+  if (!player) return { state, events: [] };
+  let currentCell = player.currentCell;
+  const infected = [...state.hexes]
+    .filter(
+      (entry): entry is [H3Cell, Extract<HexControl, { state: 'infected' }>] =>
+        entry[1].state === 'infected',
+    )
+    .map(([cell]) => cell);
+  if (!infected.length) return { state, events: [] };
+  const events: SimulatedPlayerEvent[] = [];
+  const eventBase = () => ({
+    id: context.createEventId() as SimulatedPlayerEvent['id'],
+    occurredAt: context.now(),
+    profile: 'casual-cleaner' as const,
+    originatingTick: tickNumber,
+  });
+  if (state.hexes.get(currentCell)?.state !== 'infected') {
+    const rankedTargets = infected
+      .map((cell) => ({
+        cell,
+        distance:
+          safeGridDistance(currentCell, cell) ?? Number.MAX_SAFE_INTEGER,
+        rank: seededNumber(`${seed}:target:${tickNumber}:${cell}`)(),
+      }))
+      .sort(
+        (a, b) =>
+          a.distance - b.distance ||
+          a.rank - b.rank ||
+          a.cell.localeCompare(b.cell),
+      );
+    const target = rankedTargets[0]?.cell;
+    if (target) {
+      const next = gridDisk(currentCell, 1)
+        .filter(
+          (cell) => cell !== currentCell && state.hexes.has(cell as H3Cell),
+        )
+        .map((cell) => ({
+          cell: h3CellSchema.parse(cell),
+          distance:
+            safeGridDistance(h3CellSchema.parse(cell), target) ??
+            Number.MAX_SAFE_INTEGER,
+          rank: seededNumber(`${seed}:step:${tickNumber}:${cell}`)(),
+        }))
+        .sort(
+          (a, b) =>
+            a.distance - b.distance ||
+            a.rank - b.rank ||
+            a.cell.localeCompare(b.cell),
+        )[0];
+      if (
+        next &&
+        next.distance <
+          (safeGridDistance(currentCell, target) ?? Number.MAX_SAFE_INTEGER)
+      ) {
+        events.push({
+          ...eventBase(),
+          type: 'simulated-player-moved',
+          fromCell: currentCell,
+          toCell: next.cell,
+        });
+        currentCell = next.cell;
+      }
+    }
+  }
+  let hexes = state.hexes;
+  let metrics = {
+    ...player.metrics,
+    movements:
+      player.metrics.movements +
+      events.filter(({ type }) => type === 'simulated-player-moved').length,
+  };
+  const current = state.hexes.get(currentCell);
+  if (current?.state === 'infected') {
+    const blocker = [...state.agents.values()].find(
+      ({ currentCell: agentCell }) => agentCell === currentCell,
+    );
+    if (blocker) {
+      events.push({
+        ...eventBase(),
+        type: 'simulated-player-clean-blocked',
+        cell: currentCell,
+        blockingAgentId: blocker.id,
+      });
+      metrics = {
+        ...metrics,
+        blockedDisinfections: metrics.blockedDisinfections + 1,
+      };
+    } else {
+      events.push({
+        ...eventBase(),
+        type: 'hex-disinfected',
+        cell: currentCell,
+        previousControllerAgentId: current.controllerAgentId,
+      });
+      hexes = new Map(state.hexes);
+      (hexes as Map<H3Cell, HexControl>).set(currentCell, {
+        state: 'open',
+        controllerAgentId: null,
+      });
+      metrics = {
+        ...metrics,
+        cellsDisinfected: metrics.cellsDisinfected + 1,
+      };
+    }
+  }
+  const nextState: WorldState = {
+    ...state,
+    hexes,
+    simulatedPlayer: { ...player, currentCell, metrics },
+    events: [...state.events, ...events],
+  };
+  return { state: nextState, events };
 }
 
 export type HexControl =
@@ -1263,8 +1398,17 @@ export function defaultWorldSetupRequest(): WorldSetupRequest {
       ),
       locked: false,
     },
-    objectiveVersion: OBJECTIVE_PROMPT_VERSION,
-    capabilities: { communication: true, diplomacy: true },
+    objectiveVersion: 'durable-influence-v2',
+    capabilities: {
+      communication: true,
+      diplomacy: true,
+      simulatedPlayerPressure: false,
+    },
+    simulatedPlayer: {
+      enabled: false,
+      profile: 'casual-cleaner',
+      seed: 'casual-cleaner-v1',
+    },
   };
 }
 
@@ -1370,6 +1514,17 @@ export function previewWorldSetup(
     events: [],
     alliances: [],
     pendingAllianceProposals: [],
+    simulatedPlayer: request.simulatedPlayer.enabled
+      ? {
+          profile: request.simulatedPlayer.profile,
+          currentCell: shuffled(cells, request.simulatedPlayer.seed)[0]!,
+          metrics: {
+            movements: 0,
+            cellsDisinfected: 0,
+            blockedDisinfections: 0,
+          },
+        }
+      : null,
   };
   const scenario: AppliedScenario = {
     ...request,
@@ -1450,6 +1605,7 @@ export function createDevelopmentWorld({
     events: [],
     alliances: [],
     pendingAllianceProposals: [],
+    simulatedPlayer: null,
   };
 }
 
@@ -1476,5 +1632,6 @@ export function toWorldState(snapshot: WorldSnapshot): WorldState {
         proposal,
       ]),
     ),
+    simulatedPlayer: structuredClone(snapshot.simulatedPlayer),
   };
 }

@@ -1,5 +1,10 @@
 # Testing
 
+Simulated-player coverage uses explicit offline seeds. Focused tests cover
+same-seed movement, accepted and occupied-cell-blocked disinfection,
+pre-observation ordering, cancellation atomicity, observation privacy,
+disabled compatibility, World Setup truthfulness, and export/SQLite round trips.
+
 Simultaneous-tick coverage is deterministic and offline. Scripted-provider tests
 assert frozen observations, bounded concurrent starts and one deadline,
 completion-order-independent resolution, seeded order and virtual-interval

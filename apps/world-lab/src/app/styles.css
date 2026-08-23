@@ -444,6 +444,21 @@ h2 {
   outline: 3px double #fff5d8;
   outline-offset: 2px;
 }
+
+.simulated-player-marker {
+  align-items: center;
+  background: #111827;
+  border: 2px solid #f8fafc;
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 55%);
+  color: #f8fafc;
+  display: flex;
+  font-size: 11px;
+  font-weight: 800;
+  height: 24px;
+  justify-content: center;
+  width: 24px;
+}
 .patient-zero-badge {
   display: inline-flex;
   margin-left: 0.4rem;

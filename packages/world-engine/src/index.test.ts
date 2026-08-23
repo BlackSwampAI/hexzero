@@ -11,6 +11,7 @@ import {
   applyCommunication,
   applyDiplomacy,
   applyWorldAction,
+  advanceCasualCleaner,
   areAdjacent,
   createDevelopmentWorld,
   deterministicAllianceColor,
@@ -56,6 +57,82 @@ describe('simultaneous tick determinism', () => {
     expect(interval).toBeGreaterThanOrEqual(5);
     expect(interval).toBeLessThanOrEqual(10);
     expect(interval).toBe(seededTickIntervalMinutes('scenario-a', 7, 5, 10));
+  });
+});
+
+describe('D1 casual cleaner authority', () => {
+  it('moves one adjacent step toward visible infection with stable tie-breaking', () => {
+    const before = stateWithAgent();
+    const pressured = {
+      ...before,
+      hexes: new Map(before.hexes).set(adjacent, {
+        state: 'infected' as const,
+        controllerAgentId: agentId,
+      }),
+      agents: new Map(),
+      simulatedPlayer: {
+        profile: 'casual-cleaner' as const,
+        currentCell: center,
+        metrics: { movements: 0, cellsDisinfected: 0, blockedDisinfections: 0 },
+      },
+    };
+    const first = advanceCasualCleaner(pressured, 'cleaner-route', 1, context);
+    const second = advanceCasualCleaner(pressured, 'cleaner-route', 1, context);
+    expect(first).toEqual(second);
+    expect(first.events.map(({ type }) => type)).toEqual([
+      'simulated-player-moved',
+      'hex-disinfected',
+    ]);
+    expect(first.state.simulatedPlayer?.currentCell).toBe(adjacent);
+  });
+
+  it('disinfects deterministically and clears controller authority', () => {
+    const before = stateWithAgent();
+    const pressured = {
+      ...before,
+      hexes: new Map(before.hexes).set(center, {
+        state: 'infected' as const,
+        controllerAgentId: agentId,
+      }),
+      agents: new Map(),
+      simulatedPlayer: {
+        profile: 'casual-cleaner' as const,
+        currentCell: center,
+        metrics: { movements: 0, cellsDisinfected: 0, blockedDisinfections: 0 },
+      },
+    };
+    const first = advanceCasualCleaner(pressured, 'cleaner-a', 1, context);
+    const second = advanceCasualCleaner(pressured, 'cleaner-a', 1, context);
+    expect(first).toEqual(second);
+    expect(first.state.hexes.get(center)).toEqual({
+      state: 'open',
+      controllerAgentId: null,
+    });
+    expect(first.events).toMatchObject([
+      { type: 'hex-disinfected', previousControllerAgentId: agentId },
+    ]);
+  });
+
+  it('blocks disinfection while an agent occupies the infected cell', () => {
+    const before = stateWithAgent();
+    const pressured = {
+      ...before,
+      hexes: new Map(before.hexes).set(center, {
+        state: 'infected' as const,
+        controllerAgentId: agentId,
+      }),
+      simulatedPlayer: {
+        profile: 'casual-cleaner' as const,
+        currentCell: center,
+        metrics: { movements: 0, cellsDisinfected: 0, blockedDisinfections: 0 },
+      },
+    };
+    const result = advanceCasualCleaner(pressured, 'cleaner-a', 1, context);
+    expect(result.state.hexes.get(center)?.state).toBe('infected');
+    expect(result.events).toMatchObject([
+      { type: 'simulated-player-clean-blocked', blockingAgentId: agentId },
+    ]);
+    expect(result.state.simulatedPlayer?.metrics.blockedDisinfections).toBe(1);
   });
 });
 

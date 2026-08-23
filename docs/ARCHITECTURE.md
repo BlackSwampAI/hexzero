@@ -2,6 +2,13 @@
 
 ## Simultaneous tick authority
 
+Before the frozen agent snapshot, the optional seeded `casual-cleaner` advances
+one deterministic virtual interval in the world engine. Its movement and
+disinfection/block events remain an uncommitted candidate until the complete
+agent tick commits, so cancellation cannot partially advance player pressure.
+The engine targets visible infection rather than hidden agent positions;
+positions are consulted only for authoritative co-located clean blocking.
+
 The Game API owns an operator-triggered tick transaction. It freezes the world
 and builds every observation before dispatching any model request. A
 provider-neutral runtime dispatcher starts jobs concurrently with bounded

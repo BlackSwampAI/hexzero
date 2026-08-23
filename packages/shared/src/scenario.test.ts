@@ -64,6 +64,58 @@ describe('scenario contracts', () => {
         maximumTickIntervalMinutes: 10,
       }).success,
     ).toBe(false);
+    expect(parsed.simulatedPlayer).toEqual({
+      enabled: false,
+      profile: 'casual-cleaner',
+      seed: 'casual-cleaner-v1',
+    });
+    expect(parsed.capabilities.simulatedPlayerPressure).toBe(false);
+    expect(parsed.objectiveVersion).toBe('durable-influence-v2');
+    expect(
+      worldSetupRequestSchema.safeParse({
+        ...parsed,
+        capabilities: {
+          ...parsed.capabilities,
+          simulatedPlayerPressure: true,
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      worldSetupRequestSchema.safeParse({
+        ...parsed,
+        objectiveVersion: 'durable-influence-v3',
+      }).success,
+    ).toBe(false);
+    expect(
+      worldSetupRequestSchema.safeParse({
+        ...parsed,
+        objectiveVersion: 'durable-influence-v2',
+        capabilities: {
+          ...parsed.capabilities,
+          simulatedPlayerPressure: true,
+        },
+        simulatedPlayer: {
+          enabled: true,
+          profile: 'casual-cleaner',
+          seed: 'pressure',
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      worldSetupRequestSchema.safeParse({
+        ...parsed,
+        objectiveVersion: 'durable-influence-v3',
+        capabilities: {
+          ...parsed.capabilities,
+          simulatedPlayerPressure: true,
+        },
+        simulatedPlayer: {
+          enabled: true,
+          profile: 'casual-cleaner',
+          seed: 'pressure',
+        },
+      }).success,
+    ).toBe(true);
   });
 
   it('centralizes temporary limits', () => {
@@ -200,6 +252,32 @@ describe('scenario contracts', () => {
     expect(
       archivedAppliedScenarioSchema.parse(archived).patientZeroAgentId,
     ).toBeNull();
+    expect(
+      archivedAppliedScenarioSchema.parse({
+        ...archived,
+        objectiveVersion: 'durable-influence-v1',
+      }).objectiveVersion,
+    ).toBe('durable-influence-v1');
+    const missingObjective = { ...archived } as Record<string, unknown>;
+    delete missingObjective.objectiveVersion;
+    expect(
+      archivedAppliedScenarioSchema.parse(missingObjective).objectiveVersion,
+    ).toBe('durable-influence-v2');
+    expect(
+      archivedAppliedScenarioSchema.safeParse({
+        ...archived,
+        objectiveVersion: 'durable-influence-v1',
+        capabilities: {
+          ...archived.capabilities,
+          simulatedPlayerPressure: true,
+        },
+        simulatedPlayer: {
+          enabled: true,
+          profile: 'casual-cleaner',
+          seed: 'legacy-pressure',
+        },
+      }).success,
+    ).toBe(false);
     expect(
       archivedAppliedScenarioSchema.safeParse({
         ...archived,

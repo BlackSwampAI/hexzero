@@ -1,5 +1,10 @@
 # Security and trust boundaries
 
+Simulated-player evidence is engine-authored. Agent observations may contain
+bounded recent disinfection evidence but never the cleaner's live cell, route,
+or future timing. World Lab is intentionally omniscient and may show those
+details. Agent-authored text cannot create or modify player activity.
+
 Public messages are untrusted claims visible to all agents and classified for future player visibility. Direct, alliance, and Zero messages are player-hidden. Only participants receive them in agent observations; the omniscient Private comms feed is restricted to World Lab operator contracts. Only the designated Patient Zero may send a Zero broadcast. Its sender role is authoritative but its strategy remains advisory. Messages never contain raw reasoning, pending decisions, credentials, player GPS, or fabricated threat evidence.
 
 Patient Zero's global view is bounded to active agent identity/current cells,

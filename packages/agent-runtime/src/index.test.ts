@@ -184,6 +184,32 @@ function errorResponse({
 }
 
 describe('OpenRouterAgentProvider', () => {
+  it('capability-gates the durable player-pressure objective', () => {
+    const request = buildOpenRouterRequest(
+      agentObservationSchema.parse({
+        ...observation,
+        playerPressure: {
+          enabled: true,
+          recentThreats: [
+            {
+              eventId: '67aa21b9-fc78-4b04-9f92-9862bf346f96',
+              kind: 'territory-disinfected',
+              cell: observation.currentCell.cell,
+              occurredAt: '2026-08-13T12:00:00.000Z',
+              distanceCells: 0,
+              affectedOwnTerritory: true,
+            },
+          ],
+        },
+      }),
+      TEST_MODEL,
+    );
+    expect(request.messages[0]!.content).toContain('durable-influence-v3');
+    expect(request.messages[0]!.content).toContain(
+      'live position and route are hidden',
+    );
+  });
+
   it('constructs a universal text request for one flat JSON object', () => {
     const request = buildOpenRouterRequest(observation, TEST_MODEL);
     expect(request.model).toBe(TEST_MODEL);

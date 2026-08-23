@@ -1140,6 +1140,104 @@ describe('WorldLab', () => {
     expect(overflowTrigger.closest('details')).not.toHaveAttribute('open');
   });
 
+  it('previews an explicitly seeded casual cleaner without enabling it by default', async () => {
+    let previewBody: ReturnType<typeof defaultWorldSetupRequest> | undefined;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith('/setup/preview')) {
+          previewBody = JSON.parse(String(init?.body));
+          return jsonResponse(previewWorldSetup(previewBody!));
+        }
+        return jsonResponse(initial);
+      }),
+    );
+    const user = userEvent.setup();
+    render(<WorldLab />);
+    await user.click(await screen.findByLabelText('More World Lab actions'));
+    await user.click(screen.getByRole('button', { name: 'World setup' }));
+    const enabled = screen.getByRole('checkbox', {
+      name: 'Enable casual cleaner',
+    });
+    expect(enabled).not.toBeChecked();
+    await user.click(enabled);
+    const seed = screen.getByLabelText('Casual cleaner seed');
+    await user.clear(seed);
+    await user.type(seed, 'ui-pressure-a');
+    await user.click(screen.getByRole('button', { name: 'Preview' }));
+    expect(previewBody).toMatchObject({
+      objectiveVersion: 'durable-influence-v3',
+      capabilities: { simulatedPlayerPressure: true },
+      simulatedPlayer: {
+        enabled: true,
+        profile: 'casual-cleaner',
+        seed: 'ui-pressure-a',
+      },
+    });
+    expect(await screen.findByText(/1 seeded casual cleaner/)).toBeVisible();
+    await user.click(enabled);
+    await user.click(screen.getByRole('button', { name: 'Preview' }));
+    expect(previewBody).toMatchObject({
+      objectiveVersion: 'durable-influence-v2',
+      capabilities: { simulatedPlayerPressure: false },
+      simulatedPlayer: { enabled: false },
+    });
+    expect(await screen.findByText(/player pressure disabled/)).toBeVisible();
+  });
+
+  it('shows omniscient casual-cleaner position identity and activity', async () => {
+    const pressured = simulationSnapshotSchema.parse({
+      ...initial,
+      scenario: {
+        ...initial.scenario,
+        objectiveVersion: 'durable-influence-v3',
+        capabilities: {
+          ...initial.scenario.capabilities,
+          simulatedPlayerPressure: true,
+        },
+        simulatedPlayer: {
+          enabled: true,
+          profile: 'casual-cleaner',
+          seed: 'ui-pressure-a',
+        },
+      },
+      world: {
+        ...initial.world,
+        simulatedPlayer: {
+          profile: 'casual-cleaner',
+          currentCell: initial.world.hexes[0]!.cell,
+          metrics: {
+            movements: 4,
+            cellsDisinfected: 2,
+            blockedDisinfections: 1,
+          },
+        },
+      },
+      experiment: {
+        ...initial.experiment,
+        simulatedPlayerMetrics: {
+          movements: 4,
+          cellsDisinfected: 2,
+          blockedDisinfections: 1,
+        },
+      },
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => jsonResponse(pressured)),
+    );
+    render(<WorldLab />);
+    expect(
+      await screen.findByTestId('simulated-player-activity'),
+    ).toHaveTextContent('Cleaner 4 moved · 2 cleaned · 1 blocked');
+    expect(
+      await screen.findByRole('img', {
+        name: 'Casual cleaner simulated player',
+      }),
+    ).toBeInTheDocument();
+  });
+
   it('shows Patient Zero in the roster, marker, inspector, setup selector, and private filter', async () => {
     const patientZero = initial.world.agents[0]!;
     const designated = simulationSnapshotSchema.parse({

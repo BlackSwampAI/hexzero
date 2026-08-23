@@ -65,6 +65,7 @@ import {
   type WorldEvent,
   type AllianceEvent,
   type AllianceProposalId,
+  type SimulatedPlayerEvent,
   worldSetupRequestSchema,
   type AppliedScenario,
   type WorldSetupPreviewResponse,
@@ -88,6 +89,7 @@ import {
   expireAllianceProposals,
   seededTickIntervalMinutes,
   seededTickOrder,
+  advanceCasualCleaner,
   toWorldState,
   type WorldState,
 } from '@hexzero/world-engine';
@@ -191,6 +193,7 @@ export class SimulationService {
   #availableModels = new Map<ModelId, CompatibleModel>();
   #agentGoals = new Map<AgentId, AgentGoalState>();
   #agentMemories = new Map<AgentId, MemoryEntry[]>();
+  #simulatedPlayerEvents: SimulatedPlayerEvent[] = [];
 
   constructor({
     provider,
@@ -308,6 +311,11 @@ export class SimulationService {
         metrics: this.#experimentMetrics.snapshot(agents.map(({ id }) => id)),
         currentTerritory: this.#territoryScoreboard(),
         currentAlliances: this.#allianceTerritorySummaries(),
+        simulatedPlayerMetrics: this.#state.simulatedPlayer?.metrics ?? {
+          movements: 0,
+          cellsDisinfected: 0,
+          blockedDisinfections: 0,
+        },
       },
     });
   }
@@ -339,6 +347,7 @@ export class SimulationService {
     this.#experimentStartedAt = this.#now();
     this.#experimentTurns = [];
     this.#configurationEvents = [];
+    this.#simulatedPlayerEvents = [];
     this.#initialExperimentAgents = structuredClone([
       ...this.#state.agents.values(),
     ]);
@@ -478,6 +487,7 @@ export class SimulationService {
     this.#experimentStartedAt = this.#now();
     this.#experimentTurns = [];
     this.#configurationEvents = [];
+    this.#simulatedPlayerEvents = [];
     this.#initialExperimentAgents = structuredClone([
       ...this.#state.agents.values(),
     ]);
@@ -940,9 +950,6 @@ export class SimulationService {
 
     const tickNumber = this.#completedTickCount + 1;
     const preTickState = this.#state;
-    const observations = new Map(
-      agents.map(({ id }) => [id, structuredClone(this.#buildObservation(id))]),
-    );
     const order = seededTickOrder(
       agents.map(({ id }) => id),
       this.#scenario.worldSeed,
@@ -957,6 +964,27 @@ export class SimulationService {
     const virtualTime = new Date(
       new Date(this.#virtualTime).getTime() + interval * 60_000,
     ).toISOString();
+    const playerAdvance = advanceCasualCleaner(
+      preTickState,
+      this.#scenario.simulatedPlayer.seed,
+      tickNumber,
+      { createEventId: this.#createEventId, now: () => virtualTime },
+    );
+    // Observation construction is synchronous. Temporarily point it at the
+    // uncommitted candidate so cancellation cannot expose or persist a partial
+    // player interval while every agent still observes the same frozen state.
+    this.#state = playerAdvance.state;
+    let observations: Map<AgentId, AgentObservation>;
+    try {
+      observations = new Map(
+        agents.map(({ id }) => [
+          id,
+          structuredClone(this.#buildObservation(id)),
+        ]),
+      );
+    } finally {
+      this.#state = preTickState;
+    }
     const controller = new AbortController();
     this.#busy = true;
     this.#activeRequestController = controller;
@@ -995,7 +1023,7 @@ export class SimulationService {
         communicationRangeKm: this.#scenario.communicationRangeKm,
         patientZeroAgentId: this.#scenario.patientZeroAgentId,
         tickNumber,
-        diplomacyRangeState: preTickState,
+        diplomacyRangeState: playerAdvance.state,
       };
       const recordOrdinal = new Map(
         order.map((agentId, index) => [
@@ -1003,7 +1031,7 @@ export class SimulationService {
           this.#completedTurnCount + index + 1,
         ]),
       );
-      let state = preTickState;
+      let state = playerAdvance.state;
       const actionResults = new Map<
         AgentId,
         ReturnType<typeof applyWorldAction>['result']
@@ -1154,6 +1182,7 @@ export class SimulationService {
         order,
         nextGoals,
         nextMemories,
+        playerAdvance.events,
       );
       this.#status = 'paused';
       return records;
@@ -1188,6 +1217,7 @@ export class SimulationService {
     order: AgentId[],
     goals: Map<AgentId, AgentGoalState>,
     memories: Map<AgentId, MemoryEntry[]>,
+    playerEvents: SimulatedPlayerEvent[],
   ): void {
     this.#state = state;
     this.#completedTickCount = tickNumber;
@@ -1196,6 +1226,10 @@ export class SimulationService {
     this.#resolutionOrder = [...order];
     this.#agentGoals = goals;
     this.#agentMemories = memories;
+    this.#simulatedPlayerEvents = [
+      ...this.#simulatedPlayerEvents,
+      ...structuredClone(playerEvents),
+    ].slice(-this.#experimentRetentionLimit * 2);
     this.#completedTurnCount = records.at(-1)!.turnNumber;
     this.#turns = retainCompleteTickGroups(
       [...this.#turns, ...records],
@@ -1717,6 +1751,7 @@ export class SimulationService {
       pendingAllianceProposals: structuredClone([
         ...(this.#state.pendingAllianceProposals?.values() ?? []),
       ]),
+      simulatedPlayer: structuredClone(this.#state.simulatedPlayer ?? null),
     };
   }
 
@@ -1746,6 +1781,7 @@ export class SimulationService {
         agentId,
         entries: structuredClone(this.#agentMemories.get(agentId) ?? []),
       })),
+      simulatedPlayerEvents: structuredClone(this.#simulatedPlayerEvents),
     };
   }
 
@@ -2024,6 +2060,36 @@ export class SimulationService {
           occurredAt: event.occurredAt,
         };
       });
+    const recentPlayerThreats = this.#scenario.capabilities
+      .simulatedPlayerPressure
+      ? this.#state.events
+          .filter(
+            (
+              event,
+            ): event is Extract<WorldEvent, { type: 'hex-disinfected' }> =>
+              event.type === 'hex-disinfected',
+          )
+          .map((event) => ({
+            event,
+            distanceCells: gridRingDistance(agent.currentCell, event.cell),
+            affectedOwnTerritory: event.previousControllerAgentId === agent.id,
+          }))
+          .filter(
+            ({ distanceCells, affectedOwnTerritory }) =>
+              affectedOwnTerritory || distanceCells <= 2,
+          )
+          .slice(-6)
+          .map(({ event, distanceCells, affectedOwnTerritory }) => ({
+            eventId: event.id,
+            kind: affectedOwnTerritory
+              ? ('territory-disinfected' as const)
+              : ('nearby-disinfection' as const),
+            cell: event.cell,
+            occurredAt: event.occurredAt,
+            distanceCells,
+            affectedOwnTerritory,
+          }))
+      : [];
     return agentObservationSchema.parse({
       agentId: agent.id,
       agentName: agent.name,
@@ -2178,6 +2244,10 @@ export class SimulationService {
           summary: summarizeAllianceEvent(event, this.#state),
         })),
       recentControlChanges,
+      playerPressure: {
+        enabled: this.#scenario.capabilities.simulatedPlayerPressure,
+        recentThreats: recentPlayerThreats,
+      },
       recentMovements,
     });
   }

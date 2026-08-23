@@ -21,6 +21,7 @@ import type {
   HexState,
   Alliance,
   SimulationSnapshot,
+  SimulatedPlayerState,
 } from '@hexzero/shared';
 import { resolveAgentColor } from './ui-color';
 import { DARK_TILE_ATTRIBUTION, DARK_TILE_URLS } from './map-config';
@@ -32,6 +33,7 @@ interface WorldMapProps {
   agents: AgentProfile[];
   alliances: Alliance[];
   patientZeroAgentId: AgentId | null;
+  simulatedPlayer: SimulatedPlayerState | null;
   selectedCell: H3Cell | null;
   selectedAgentId: AgentId | null;
   onSelectCell: (cell: H3Cell) => void;
@@ -115,6 +117,7 @@ export function WorldMap(props: WorldMapProps) {
     agents,
     alliances,
     patientZeroAgentId,
+    simulatedPlayer,
     selectedCell,
     selectedAgentId,
     onSelectCell,
@@ -441,7 +444,28 @@ export function WorldMap(props: WorldMapProps) {
         .addTo(map);
       markersRef.current.push(marker);
     }
-  }, [agents, alliances, mapReady, patientZeroAgentId, selectedAgentId]);
+    if (simulatedPlayer) {
+      const element = document.createElement('div');
+      element.className = 'simulated-player-marker';
+      element.setAttribute('role', 'img');
+      element.setAttribute('aria-label', 'Casual cleaner simulated player');
+      element.title = `Casual cleaner · ${simulatedPlayer.currentCell}`;
+      element.textContent = 'P';
+      const [lat, lng] = cellToLatLng(simulatedPlayer.currentCell);
+      markersRef.current.push(
+        new Marker({ element, offset: [0, 20] })
+          .setLngLat([lng, lat])
+          .addTo(map),
+      );
+    }
+  }, [
+    agents,
+    alliances,
+    mapReady,
+    patientZeroAgentId,
+    selectedAgentId,
+    simulatedPlayer,
+  ]);
 
   const overlayReady = overlayDiagnostics.status === 'ready';
   const overlayLabel = overlayReady
@@ -481,6 +505,14 @@ export function WorldMap(props: WorldMapProps) {
         <span data-testid="infected-count">
           {overlayDiagnostics.renderedInfectedCellCount} rendered infected
         </span>
+        {simulatedPlayer && (
+          <span data-testid="simulated-player-activity">
+            {' '}
+            · Cleaner {simulatedPlayer.metrics.movements} moved ·{' '}
+            {simulatedPlayer.metrics.cellsDisinfected} cleaned ·{' '}
+            {simulatedPlayer.metrics.blockedDisinfections} blocked
+          </span>
+        )}
       </p>
     </div>
   );

@@ -52,7 +52,7 @@ export const agentDecisionContractVersionSchema = z.enum([
   GOAL_AGENT_DECISION_CONTRACT_VERSION,
   AGENT_DECISION_CONTRACT_VERSION,
 ]);
-export const OBJECTIVE_PROMPT_VERSION = 'durable-influence-v2';
+export const OBJECTIVE_PROMPT_VERSION = 'durable-influence-v3';
 export const OPENROUTER_REQUIRED_PARAMETERS = ['max_tokens'] as const;
 export const DEVELOPMENT_WORLD_CONFIG = {
   latitude: 41.6528,
@@ -86,6 +86,39 @@ export const h3CellSchema = z
   .regex(/^[0-9a-f]{15}$/i, 'Expected an H3 cell index')
   .brand<'H3Cell'>();
 export type H3Cell = z.infer<typeof h3CellSchema>;
+
+export const simulatedPlayerProfileSchema = z.literal('casual-cleaner');
+export type SimulatedPlayerProfile = z.infer<
+  typeof simulatedPlayerProfileSchema
+>;
+export const simulatedPlayerConfigurationSchema = z
+  .object({
+    enabled: z.boolean(),
+    profile: simulatedPlayerProfileSchema,
+    seed: z.string().trim().min(1).max(80),
+  })
+  .strict();
+export type SimulatedPlayerConfiguration = z.infer<
+  typeof simulatedPlayerConfigurationSchema
+>;
+export const simulatedPlayerMetricsSchema = z
+  .object({
+    movements: z.number().int().nonnegative(),
+    cellsDisinfected: z.number().int().nonnegative(),
+    blockedDisinfections: z.number().int().nonnegative(),
+  })
+  .strict();
+export type SimulatedPlayerMetrics = z.infer<
+  typeof simulatedPlayerMetricsSchema
+>;
+export const simulatedPlayerStateSchema = z
+  .object({
+    profile: simulatedPlayerProfileSchema,
+    currentCell: h3CellSchema,
+    metrics: simulatedPlayerMetricsSchema,
+  })
+  .strict();
+export type SimulatedPlayerState = z.infer<typeof simulatedPlayerStateSchema>;
 
 export const hexStateSchema = z.enum(['open', 'infected']);
 export type HexState = z.infer<typeof hexStateSchema>;
@@ -562,6 +595,37 @@ const agentWaitedWorldEventSchema = worldEventBaseSchema.extend({
   type: z.literal('agent-waited'),
 });
 
+const simulatedPlayerEventBaseSchema = z.object({
+  id: eventIdSchema,
+  occurredAt: z.iso.datetime(),
+  profile: simulatedPlayerProfileSchema,
+  originatingTick: z.number().int().positive(),
+});
+export const simulatedPlayerMovedEventSchema =
+  simulatedPlayerEventBaseSchema.extend({
+    type: z.literal('simulated-player-moved'),
+    fromCell: h3CellSchema,
+    toCell: h3CellSchema,
+  });
+export const hexDisinfectedWorldEventSchema =
+  simulatedPlayerEventBaseSchema.extend({
+    type: z.literal('hex-disinfected'),
+    cell: h3CellSchema,
+    previousControllerAgentId: agentIdSchema,
+  });
+export const simulatedPlayerCleanBlockedEventSchema =
+  simulatedPlayerEventBaseSchema.extend({
+    type: z.literal('simulated-player-clean-blocked'),
+    cell: h3CellSchema,
+    blockingAgentId: agentIdSchema,
+  });
+export const simulatedPlayerEventSchema = z.discriminatedUnion('type', [
+  simulatedPlayerMovedEventSchema,
+  hexDisinfectedWorldEventSchema,
+  simulatedPlayerCleanBlockedEventSchema,
+]);
+export type SimulatedPlayerEvent = z.infer<typeof simulatedPlayerEventSchema>;
+
 const allianceEventBaseSchema = worldEventBaseSchema.extend({
   turnNumber: z.number().int().positive(),
 });
@@ -634,6 +698,18 @@ export const nonCommunicationWorldEventSchema = z.discriminatedUnion('type', [
 export type NonCommunicationWorldEvent = z.infer<
   typeof nonCommunicationWorldEventSchema
 >;
+export const safeExperimentWorldEventSchema = z.discriminatedUnion('type', [
+  agentMovedWorldEventSchema,
+  hexInfectedWorldEventSchema,
+  hexCapturedWorldEventSchema,
+  agentWaitedWorldEventSchema,
+  simulatedPlayerMovedEventSchema,
+  hexDisinfectedWorldEventSchema,
+  simulatedPlayerCleanBlockedEventSchema,
+]);
+export type SafeExperimentWorldEvent = z.infer<
+  typeof safeExperimentWorldEventSchema
+>;
 
 export const worldEventSchema = z.discriminatedUnion('type', [
   agentMovedWorldEventSchema,
@@ -650,6 +726,9 @@ export const worldEventSchema = z.discriminatedUnion('type', [
   agentJoinedAllianceEventSchema,
   agentLeftAllianceEventSchema,
   allianceDissolvedEventSchema,
+  simulatedPlayerMovedEventSchema,
+  hexDisinfectedWorldEventSchema,
+  simulatedPlayerCleanBlockedEventSchema,
 ]);
 export type WorldEvent = z.infer<typeof worldEventSchema>;
 
@@ -812,16 +891,30 @@ const worldSnapshotObjectSchema = z.object({
     .array(allianceProposalSchema)
     .max(WORLD_SCENARIO_LIMITS.maximumAgents)
     .default([]),
+  simulatedPlayer: simulatedPlayerStateSchema.nullable().default(null),
 });
 
 function validateWorldControllers(
   world: Pick<
     z.infer<typeof worldSnapshotObjectSchema>,
-    'hexes' | 'agents' | 'alliances' | 'pendingAllianceProposals'
+    | 'hexes'
+    | 'agents'
+    | 'alliances'
+    | 'pendingAllianceProposals'
+    | 'simulatedPlayer'
   >,
   context: z.RefinementCtx,
 ): void {
   const agentIds = new Set(world.agents.map(({ id }) => id));
+  if (
+    world.simulatedPlayer &&
+    !world.hexes.some(({ cell }) => cell === world.simulatedPlayer!.currentCell)
+  )
+    context.addIssue({
+      code: 'custom',
+      path: ['simulatedPlayer', 'currentCell'],
+      message: 'The simulated player must remain inside the world.',
+    });
   for (const [index, hex] of world.hexes.entries()) {
     if (hex.state === 'infected' && !agentIds.has(hex.controllerAgentId))
       context.addIssue({
@@ -1041,6 +1134,18 @@ export const observedControlChangeSchema = z.object({
   occurredAt: z.iso.datetime(),
 });
 export type ObservedControlChange = z.infer<typeof observedControlChangeSchema>;
+
+export const observedPlayerThreatSchema = z
+  .object({
+    eventId: eventIdSchema,
+    kind: z.enum(['territory-disinfected', 'nearby-disinfection']),
+    cell: h3CellSchema,
+    occurredAt: z.iso.datetime(),
+    distanceCells: z.number().int().nonnegative(),
+    affectedOwnTerritory: z.boolean(),
+  })
+  .strict();
+export type ObservedPlayerThreat = z.infer<typeof observedPlayerThreatSchema>;
 
 export const allianceTerritorySummarySchema = z
   .object({
@@ -1553,6 +1658,13 @@ const agentObservationObjectSchema = z.object({
   recentControlChanges: z
     .array(observedControlChangeSchema)
     .max(RECENT_CONTROL_CHANGE_LIMIT),
+  playerPressure: z
+    .object({
+      enabled: z.boolean(),
+      recentThreats: z.array(observedPlayerThreatSchema).max(6),
+    })
+    .strict()
+    .default({ enabled: false, recentThreats: [] }),
   recentMovements: z
     .array(
       z.object({
@@ -2230,11 +2342,24 @@ const worldSetupRequestObjectSchema = z
     modelConfiguration: experimentModelConfigurationSchema,
     behaviorConfiguration: behaviorConfigurationSchema,
     objectiveVersion: z
-      .enum(['durable-influence-v1', OBJECTIVE_PROMPT_VERSION])
-      .default(OBJECTIVE_PROMPT_VERSION),
+      .enum([
+        'durable-influence-v1',
+        'durable-influence-v2',
+        OBJECTIVE_PROMPT_VERSION,
+      ])
+      .default('durable-influence-v2'),
     capabilities: z
-      .object({ communication: z.boolean(), diplomacy: z.boolean() })
+      .object({
+        communication: z.boolean(),
+        diplomacy: z.boolean(),
+        simulatedPlayerPressure: z.boolean().default(false),
+      })
       .strict(),
+    simulatedPlayer: simulatedPlayerConfigurationSchema.default({
+      enabled: false,
+      profile: 'casual-cleaner',
+      seed: 'casual-cleaner-v1',
+    }),
   })
   .strict();
 
@@ -2246,7 +2371,34 @@ type WorldSetupValidationInput = Omit<
 function validateWorldSetupRequest(
   request: WorldSetupValidationInput,
   context: z.RefinementCtx,
+  allowArchivedDisabledV1 = false,
 ) {
+  const expectedObjective = request.simulatedPlayer.enabled
+    ? OBJECTIVE_PROMPT_VERSION
+    : 'durable-influence-v2';
+  if (
+    request.objectiveVersion !== expectedObjective &&
+    !(
+      allowArchivedDisabledV1 &&
+      !request.simulatedPlayer.enabled &&
+      request.objectiveVersion === 'durable-influence-v1'
+    )
+  )
+    context.addIssue({
+      code: 'custom',
+      path: ['objectiveVersion'],
+      message: `Objective attribution must be ${expectedObjective} for this simulated-player capability.`,
+    });
+  if (
+    request.capabilities.simulatedPlayerPressure !==
+    request.simulatedPlayer.enabled
+  )
+    context.addIssue({
+      code: 'custom',
+      path: ['capabilities', 'simulatedPlayerPressure'],
+      message:
+        'Simulated-player pressure capability must match the configured player.',
+    });
   if (request.minimumTickIntervalMinutes > request.maximumTickIntervalMinutes)
     context.addIssue({
       code: 'custom',
@@ -2315,8 +2467,9 @@ function validateAppliedScenario(
     startingCells: H3Cell[];
   },
   context: z.RefinementCtx,
+  allowArchivedDisabledV1 = false,
 ) {
-  validateWorldSetupRequest(scenario, context);
+  validateWorldSetupRequest(scenario, context, allowArchivedDisabledV1);
   if (scenario.startingCells.length !== scenario.roster.length)
     context.addIssue({
       code: 'custom',
@@ -2335,7 +2488,9 @@ export const archivedAppliedScenarioSchema = worldSetupRequestObjectSchema
     patientZeroAgentId: agentIdSchema.nullable(),
     ...appliedScenarioShape,
   })
-  .superRefine(validateAppliedScenario);
+  .superRefine((scenario, context) =>
+    validateAppliedScenario(scenario, context, true),
+  );
 
 export const worldSetupPreviewResponseSchema = z.discriminatedUnion(
   'feasible',
@@ -2464,10 +2619,43 @@ export const simulationSnapshotSchema = z
       currentAlliances: z
         .array(allianceTerritorySummarySchema)
         .max(WORLD_SCENARIO_LIMITS.maximumAgents),
+      simulatedPlayerMetrics: simulatedPlayerMetricsSchema.default({
+        movements: 0,
+        cellsDisinfected: 0,
+        blockedDisinfections: 0,
+      }),
     }),
   })
   .superRefine((snapshot, context) => {
     const rosterIds = new Set(snapshot.world.agents.map(({ id }) => id));
+    if (
+      snapshot.scenario.simulatedPlayer.enabled !==
+        Boolean(snapshot.world.simulatedPlayer) ||
+      snapshot.scenario.capabilities.simulatedPlayerPressure !==
+        Boolean(snapshot.world.simulatedPlayer)
+    )
+      context.addIssue({
+        code: 'custom',
+        path: ['world', 'simulatedPlayer'],
+        message:
+          'World simulated-player state must match the applied scenario capability.',
+      });
+    if (
+      JSON.stringify(snapshot.experiment.simulatedPlayerMetrics) !==
+      JSON.stringify(
+        snapshot.world.simulatedPlayer?.metrics ?? {
+          movements: 0,
+          cellsDisinfected: 0,
+          blockedDisinfections: 0,
+        },
+      )
+    )
+      context.addIssue({
+        code: 'custom',
+        path: ['experiment', 'simulatedPlayerMetrics'],
+        message:
+          'Experiment simulated-player metrics must match the authoritative world.',
+      });
     if (snapshot.tickNumber === 0) {
       if (
         snapshot.resolutionOrder.length !== 0 ||
@@ -3440,7 +3628,7 @@ export type ExperimentExportWorldState = z.infer<
   typeof experimentExportWorldStateSchema
 >;
 
-export const experimentExportDocumentSchema = z
+const experimentExportDocumentObjectSchema = z
   .object({
     schemaVersion: z.union([z.literal(9), z.literal(10)]),
     generatedAt: z.iso.datetime(),
@@ -3457,6 +3645,11 @@ export const experimentExportDocumentSchema = z
       matchingCommunicationCount: z.number().int().nonnegative(),
       matchingControlChangeCount: z.number().int().nonnegative(),
       matchingDiplomacyEventCount: z.number().int().nonnegative(),
+      matchingSimulatedPlayerEventCount: z
+        .number()
+        .int()
+        .nonnegative()
+        .default(0),
       firstMatchingTurn: z.number().int().positive().optional(),
       lastMatchingTurn: z.number().int().positive().optional(),
     }),
@@ -3496,7 +3689,8 @@ export const experimentExportDocumentSchema = z
       .optional(),
     initialWorld: experimentExportWorldStateSchema.optional(),
     currentWorld: experimentExportWorldStateSchema.optional(),
-    worldEvents: z.array(nonCommunicationWorldEventSchema).optional(),
+    worldEvents: z.array(safeExperimentWorldEventSchema).optional(),
+    simulatedPlayerMetrics: simulatedPlayerMetricsSchema.optional(),
     communications: z.array(exportedCommunicationSchema).optional(),
     controlChanges: z.array(exportedControlChangeSchema).optional(),
     allianceEvents: z.array(allianceEventSchema).optional(),
@@ -3662,6 +3856,12 @@ export const experimentExportDocumentSchema = z
         code: 'custom',
         message: 'Current alliance inclusion does not match the export level.',
       });
+    if (Boolean(document.simulatedPlayerMetrics) !== Boolean(requiresMetrics))
+      context.addIssue({
+        code: 'custom',
+        message:
+          'Simulated-player metrics inclusion does not match the export level.',
+      });
     const personalityHistory =
       level === 'full-safe' || custom?.personalityTextHistory;
     if (personalityHistory && document.configurationEvents === undefined)
@@ -3752,6 +3952,46 @@ export const experimentExportDocumentSchema = z
         });
     }
   });
+export const experimentExportDocumentSchema = z.preprocess((input) => {
+  if (typeof input !== 'object' || input === null || Array.isArray(input))
+    return input;
+  const document = input as Record<string, unknown>;
+  const experiment =
+    typeof document.experiment === 'object' && document.experiment !== null
+      ? (document.experiment as Record<string, unknown>)
+      : undefined;
+  const scenario =
+    typeof experiment?.scenario === 'object' && experiment.scenario !== null
+      ? (experiment.scenario as Record<string, unknown>)
+      : undefined;
+  const simulatedPlayer =
+    typeof scenario?.simulatedPlayer === 'object' &&
+    scenario.simulatedPlayer !== null
+      ? (scenario.simulatedPlayer as Record<string, unknown>)
+      : undefined;
+  const capabilities =
+    typeof scenario?.capabilities === 'object' && scenario.capabilities !== null
+      ? (scenario.capabilities as Record<string, unknown>)
+      : undefined;
+  const playerPressureEnabled =
+    simulatedPlayer?.enabled === true ||
+    capabilities?.simulatedPlayerPressure === true;
+  if (
+    (document.schemaVersion === 9 || document.schemaVersion === 10) &&
+    !playerPressureEnabled &&
+    document.metrics !== undefined &&
+    document.simulatedPlayerMetrics === undefined
+  )
+    return {
+      ...document,
+      simulatedPlayerMetrics: {
+        movements: 0,
+        cellsDisinfected: 0,
+        blockedDisinfections: 0,
+      },
+    };
+  return input;
+}, experimentExportDocumentObjectSchema);
 export type ExperimentExportDocument = z.infer<
   typeof experimentExportDocumentSchema
 >;

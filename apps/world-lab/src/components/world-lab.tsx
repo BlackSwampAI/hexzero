@@ -1218,6 +1218,7 @@ export function WorldLab() {
                 agents={snapshot.world.agents}
                 alliances={snapshot.world.alliances}
                 patientZeroAgentId={snapshot.scenario.patientZeroAgentId}
+                simulatedPlayer={snapshot.world.simulatedPlayer}
                 selectedCell={selectedCell}
                 selectedAgentId={inspectionAgentId}
                 onSelectCell={(cell) => {
@@ -1817,6 +1818,7 @@ function WorldSetupPanel({
       behaviorConfiguration: scenario.behaviorConfiguration,
       objectiveVersion: scenario.objectiveVersion,
       capabilities: scenario.capabilities,
+      simulatedPlayer: scenario.simulatedPlayer,
     });
   }, [snapshot.scenario]);
   const [draft, setDraft] = useState(initialDraft);
@@ -2225,6 +2227,45 @@ function WorldSetupPanel({
               }
             />
           </label>
+          <label>
+            <input
+              type="checkbox"
+              checked={draft.simulatedPlayer.enabled}
+              onChange={(event) =>
+                setDraft({
+                  ...draft,
+                  simulatedPlayer: {
+                    ...draft.simulatedPlayer,
+                    enabled: event.target.checked,
+                  },
+                  capabilities: {
+                    ...draft.capabilities,
+                    simulatedPlayerPressure: event.target.checked,
+                  },
+                  objectiveVersion: event.target.checked
+                    ? 'durable-influence-v3'
+                    : 'durable-influence-v2',
+                })
+              }
+            />
+            Enable casual cleaner
+          </label>
+          <label>
+            Casual cleaner seed
+            <input
+              value={draft.simulatedPlayer.seed}
+              disabled={!draft.simulatedPlayer.enabled}
+              onChange={(event) =>
+                setDraft({
+                  ...draft,
+                  simulatedPlayer: {
+                    ...draft.simulatedPlayer,
+                    seed: event.target.value,
+                  },
+                })
+              }
+            />
+          </label>
         </div>
       </section>
       <section className="setup-section">
@@ -2371,6 +2412,9 @@ function WorldSetupPanel({
               {preview.scenario.exactCellCount.toLocaleString()} exact cells ·{' '}
               {preview.scenario.areaSquareKilometers.toFixed(2)} km² ·{' '}
               {preview.scenario.startingCells.length} valid spawns
+              {preview.scenario.simulatedPlayer.enabled
+                ? ' · 1 seeded casual cleaner'
+                : ' · player pressure disabled'}
             </p>
             {preview.scenario.setupWarnings.map((warning) => (
               <p role="status" key={warning.code}>
