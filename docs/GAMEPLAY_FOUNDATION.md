@@ -255,6 +255,16 @@ adjacent H3 cell per explicit interval toward visible infection, uses its seed
 for stable tie-breaking, and attempts at most one disinfection. An occupied
 infected cell blocks cleaning. Other profiles and capture remain deferred.
 
+Slice D1.1 adds no cleaner mechanics. The single Patient Zero receives a
+current-interval-only global feed of authoritative successful disinfections and
+occupied-cell blocked-clean encounters. Entries identify the affected or
+blocking agent and current alliance when available, are deterministically
+ordered, and are capped at 128 with explicit totals and truncation; overflow
+retains the most recent events in chronological order. Event
+cells identify the historical disinfection or blocked-clean location; live
+player position, movement, route, target, identity, future timing, regional
+coordinators, and extra model calls remain excluded.
+
 Scenario configuration should include simulated-player count, profile mix, travel characteristics, cleaning aggressiveness, search persistence, and seed.
 
 Simulated players follow the same information and interaction rules intended for real players:
@@ -353,7 +363,10 @@ The intended sequence is:
 1. Configurable map scale, H3 resolution, and agent roster. **Implemented in the World Lab scenario milestone.**
 2. Goal-oriented prompt revision and versioned scenario attribution. **Implemented as `durable-influence-v1` without player-survival language.**
 3. Simultaneous agent ticks with a provider-neutral dispatcher and virtual clock. **Implemented as the pre-PR5 experiment foundation without background scheduling or Player Mode timing exposure.**
-4. Deterministic real-time simulated players and threat observations.
+4. Deterministic real-time simulated players and threat observations. **D1 and
+   D1.1 deliver one seeded casual cleaner, bounded local evidence, and the
+   single Patient Zero current-interval global feed; broader Player Mode
+   remains future work.**
 5. Comparative unattended World Lab experiments.
 6. Real GPS Player Mode using the already-tested capture and disinfection rules.
 7. Optional OpenRouter asynchronous batches and local multi-endpoint optimization where measurements justify them.

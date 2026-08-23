@@ -8,6 +8,13 @@ disinfection/block events remain an uncommitted candidate until the complete
 agent tick commits, so cancellation cannot partially advance player pressure.
 The engine targets visible infection rather than hidden agent positions;
 positions are consulted only for authoritative co-located clean blocking.
+Ordinary agents retain bounded own/nearby successful-clean evidence. The one
+configured Patient Zero additionally receives a deterministic, current-interval
+feed of successful cleans and occupied-cell blocks, capped at 128 entries with
+truthful total/truncation metadata; overflow retains the most recent entries in
+chronological order. Event cells are intentional historical clean/block
+locations. The feed excludes movement and the cleaner's live/current position,
+route, target, identity, and future-timing data.
 
 The Game API owns an operator-triggered tick transaction. It freezes the world
 and builds every observation before dispatching any model request. A

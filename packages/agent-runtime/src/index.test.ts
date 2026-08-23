@@ -208,6 +208,54 @@ describe('OpenRouterAgentProvider', () => {
     expect(request.messages[0]!.content).toContain(
       'live position and route are hidden',
     );
+    const patientZeroRequest = buildOpenRouterRequest(
+      agentObservationSchema.parse({
+        ...observation,
+        patientZero: {
+          agentId: observation.agentId,
+          agentName: observation.agentName,
+          isPatientZero: true,
+          directRangeBypass: true,
+        },
+        patientZeroGlobalView: {
+          agents: [],
+          individualTerritory: observation.territoryScoreboard,
+          allianceTerritory: [],
+          alliances: [],
+          activeAllianceProposals: [],
+          recentStrategicEvents: [],
+          recentTerritoryChanges: [],
+          playerThreatFeed: {
+            events: [
+              {
+                eventId: '77aa21b9-fc78-4b04-9f92-9862bf346f96',
+                kind: 'occupied-clean-blocked',
+                cell: observation.currentCell.cell,
+                occurredAt: '2026-08-13T12:00:01.000Z',
+                blockingAgentId: '2507bb46-7ae4-45ca-8dda-644c4f85ca14',
+                blockingAgentName: 'Rook',
+                blockingAllianceId: null,
+                blockingAllianceColor: null,
+              },
+            ],
+            totalEventCount: 1,
+            truncated: false,
+          },
+        },
+        playerPressure: { enabled: true, recentThreats: [] },
+      }),
+      TEST_MODEL,
+    );
+    expect(patientZeroRequest.messages[0]!.content).toContain(
+      "only this virtual interval's authoritative successful disinfections",
+    );
+    expect(patientZeroRequest.messages[0]!.content).toContain(
+      'coordinate only materially affected agents or alliances',
+    );
+    expect(patientZeroRequest.messages[0]!.content).toContain(
+      'otherwise choose communicationType "none"',
+    );
+    expect(patientZeroRequest.messages[1]!.content).toContain('Rook');
   });
 
   it('constructs a universal text request for one flat JSON object', () => {

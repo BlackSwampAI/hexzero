@@ -2093,8 +2093,66 @@ describe('WorldLab', () => {
   });
 
   it('shows a bounded read-only behavior trace and highlights observed cells', async () => {
-    const changed = afterInfection();
-    const agent = changed.world.agents[0]!;
+    const base = afterInfection();
+    const patientZeroId = base.scenario.patientZeroAgentId;
+    const agent = base.world.agents.find(({ id }) => id === patientZeroId)!;
+    const changed = simulationSnapshotSchema.parse({
+      ...base,
+      turns: base.turns.map((turn) =>
+        turn.agentId === patientZeroId
+          ? {
+              ...turn,
+              observation: {
+                ...turn.observation,
+                patientZero: {
+                  agentId: patientZeroId,
+                  agentName: agent.name,
+                  isPatientZero: true,
+                  directRangeBypass: true,
+                },
+                playerPressure: {
+                  enabled: true,
+                  recentThreats: [
+                    {
+                      eventId: '97aa21b9-fc78-4b04-9f92-9862bf346f96',
+                      kind: 'territory-disinfected',
+                      cell: agent.currentCell,
+                      occurredAt: turn.startedAt,
+                      distanceCells: 0,
+                      affectedOwnTerritory: true,
+                    },
+                  ],
+                },
+                patientZeroGlobalView: {
+                  agents: [],
+                  individualTerritory: turn.observation.territoryScoreboard,
+                  allianceTerritory: [],
+                  alliances: [],
+                  activeAllianceProposals: [],
+                  recentStrategicEvents: [],
+                  recentTerritoryChanges: [],
+                  playerThreatFeed: {
+                    events: [
+                      {
+                        eventId: '97aa21b9-fc78-4b04-9f92-9862bf346f96',
+                        kind: 'territory-disinfected',
+                        cell: agent.currentCell,
+                        occurredAt: turn.startedAt,
+                        affectedAgentId: agent.id,
+                        affectedAgentName: agent.name,
+                        affectedAllianceId: null,
+                        affectedAllianceColor: null,
+                      },
+                    ],
+                    totalEventCount: 2,
+                    truncated: true,
+                  },
+                },
+              },
+            }
+          : turn,
+      ),
+    });
     vi.stubGlobal(
       'fetch',
       vi.fn(() => jsonResponse(changed)),
@@ -2130,10 +2188,35 @@ describe('WorldLab', () => {
     expect(trace).toHaveTextContent('1 legal move target · Infect · Wait');
     expect(trace).toHaveTextContent('Chosen: Infect');
     expect(trace).toHaveTextContent(
+      'Local cleaner threat: own territory disinfected',
+    );
+    expect(trace).toHaveTextContent(
+      'Patient Zero global cleaner feed: 1/2 displayed · truncated',
+    );
+    expect(trace).not.toHaveTextContent(`${agent.name} lost`);
+    expect(trace).toHaveTextContent(
       'Model summary (self-reported, not proof): Infecting this open cell.',
     );
     expect(inspector).toHaveTextContent(
       'Observation evidence and self-reported summaries show correlation, not proven causation.',
+    );
+
+    await user.click(
+      within(trace).getByRole('button', { name: 'Highlight cell' }),
+    );
+    await waitFor(() =>
+      expect(mapLibreMock.latestSourceData).toEqual(
+        expect.objectContaining({
+          features: expect.arrayContaining([
+            expect.objectContaining({
+              properties: expect.objectContaining({
+                cell: agent.currentCell,
+                selected: true,
+              }),
+            }),
+          ]),
+        }),
+      ),
     );
 
     await user.click(

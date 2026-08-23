@@ -41,6 +41,7 @@ import {
   SimulationTurnCancelledError,
   SimulationValidationError,
   selectDiplomacyBlockerExamples,
+  selectMostRecentPatientZeroThreats,
   applyGoalRevision,
   applyMemoryOperation,
 } from './simulation-service';
@@ -98,6 +99,21 @@ function exportRequest(level: 'minimal' | 'standard' | 'full-safe' | 'custom') {
 }
 
 describe('SimulationService', () => {
+  it('retains the most recent Patient Zero threats in chronological order', () => {
+    const threats = Array.from({ length: 130 }, (_, index) => ({
+      eventId: `30000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
+      occurredAt: new Date(
+        new Date('2026-08-23T12:00:00.000Z').getTime() + index,
+      ).toISOString(),
+      ordinal: index,
+    })).reverse();
+    const selected = selectMostRecentPatientZeroThreats(threats);
+    expect(selected).toHaveLength(128);
+    expect(selected.map(({ ordinal }) => ordinal)).toEqual(
+      Array.from({ length: 128 }, (_, index) => index + 2),
+    );
+  });
+
   it('commits cleaner pressure before frozen observations without exposing live GPS', async () => {
     const seen: AgentObservation[] = [];
     const simulation = service({
@@ -162,6 +178,61 @@ describe('SimulationService', () => {
     expect(pressured.length).toBeGreaterThan(0);
     expect(pressured[0]!.playerPressure).not.toHaveProperty('currentCell');
     expect(snapshot.world.simulatedPlayer?.currentCell).toBeTruthy();
+    const patientZeroObservations = seen.filter(
+      ({ patientZero }) => patientZero.isPatientZero,
+    );
+    const ordinaryObservations = seen.filter(
+      ({ patientZero }) => !patientZero.isPatientZero,
+    );
+    expect(
+      ordinaryObservations.every(
+        ({ patientZeroGlobalView }) => patientZeroGlobalView === null,
+      ),
+    ).toBe(true);
+    expect(
+      patientZeroObservations.every(
+        ({ patientZeroGlobalView }) =>
+          patientZeroGlobalView?.playerThreatFeed !== null,
+      ),
+    ).toBe(true);
+    const intervalEventKeys = patientZeroObservations.map(
+      ({ patientZeroGlobalView }) =>
+        patientZeroGlobalView!.playerThreatFeed!.events.map(
+          ({ eventId, kind, cell, occurredAt }) =>
+            `${eventId}:${kind}:${cell}:${occurredAt}`,
+        ),
+    );
+    expect(intervalEventKeys.flat().length).toBeGreaterThan(0);
+    expect(new Set(intervalEventKeys.flat()).size).toBe(
+      intervalEventKeys.flat().length,
+    );
+    expect(
+      patientZeroObservations.flatMap(
+        ({ patientZeroGlobalView }) =>
+          patientZeroGlobalView!.playerThreatFeed!.events,
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'occupied-clean-blocked',
+          blockingAgentId: expect.any(String),
+          blockingAgentName: expect.any(String),
+        }),
+        expect.objectContaining({
+          kind: 'territory-disinfected',
+          affectedAgentId: expect.any(String),
+          affectedAgentName: expect.any(String),
+        }),
+      ]),
+    );
+    expect(
+      JSON.stringify(
+        patientZeroObservations.map(
+          ({ patientZeroGlobalView }) =>
+            patientZeroGlobalView?.playerThreatFeed,
+        ),
+      ),
+    ).not.toMatch(/fromCell|toCell|currentCell|route|target|profile|playerId/i);
     const redacted = simulation.generateExperimentExport({
       ...exportRequest('custom'),
       custom: {
@@ -190,6 +261,20 @@ describe('SimulationService', () => {
       ),
     ).toBe(true);
     expect(redacted).not.toHaveProperty('simulatedPlayerMetrics');
+    const redactedGlobalFeeds = redacted.turns
+      .map(
+        ({ observation }) =>
+          observation?.patientZeroGlobalView?.playerThreatFeed,
+      )
+      .filter((feed) => feed !== null && feed !== undefined);
+    expect(redactedGlobalFeeds.length).toBeGreaterThan(0);
+    expect(
+      redactedGlobalFeeds.every(
+        (feed) =>
+          feed.events.length === 0 &&
+          feed.truncated === feed.totalEventCount > 0,
+      ),
+    ).toBe(true);
   });
 
   it('keeps compact memory canonical and rejects full or missing operations independently', () => {
@@ -1318,6 +1403,9 @@ describe('SimulationService', () => {
     const directive = await simulation.executeNextTurn();
     const reply = await simulation.executeNextTurn();
     expect(directive.observation.patientZeroGlobalView?.agents).toHaveLength(8);
+    expect(
+      directive.observation.patientZeroGlobalView?.playerThreatFeed,
+    ).toBeNull();
     const diplomacySummary =
       directive.observation.patientZeroGlobalView?.diplomacySummary;
     expect(diplomacySummary).toMatchObject({
