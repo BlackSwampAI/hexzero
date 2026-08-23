@@ -1,5 +1,6 @@
 import { Hono, type Context } from 'hono';
 import { cors } from 'hono/cors';
+import { createHash } from 'node:crypto';
 import {
   BrowserTestAgentProvider,
   AgentProviderError,
@@ -865,9 +866,31 @@ export function createApp(options: AppOptions = {}) {
         400,
       );
     try {
+      const document =
+        'document' in request.data
+          ? request.data.document
+          : service.generateExperimentExport(
+              request.data.request,
+              request.data.generatedAt,
+            );
+      if (
+        'sha256' in request.data &&
+        createHash('sha256').update(JSON.stringify(document)).digest('hex') !==
+          request.data.sha256
+      )
+        return context.json(
+          apiErrorSchema.parse({
+            error: {
+              code: 'artifact_changed',
+              message:
+                'The experiment changed after this export was generated. Generate it again before saving.',
+            },
+          }),
+          409,
+        );
       return context.json(
         archiveExperimentExportResponseSchema.parse(
-          await archiveExperimentExport(request.data.document),
+          await archiveExperimentExport(document),
         ),
       );
     } catch (error) {

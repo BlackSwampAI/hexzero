@@ -1023,6 +1023,15 @@ async function openOverflow(user: ReturnType<typeof userEvent.setup>) {
   if (!menu.closest('details')?.hasAttribute('open')) await user.click(menu);
 }
 
+async function selectMinimalFixtureExport(
+  user: ReturnType<typeof userEvent.setup>,
+) {
+  await user.click(screen.getByRole('button', { name: 'Clear' }));
+  await user.click(screen.getByRole('checkbox', { name: /Ember/ }));
+  await user.click(screen.getByRole('checkbox', { name: 'lost tick' }));
+  await user.click(screen.getByRole('checkbox', { name: 'operator skipped' }));
+}
+
 async function openAgentsWorkspace(user: ReturnType<typeof userEvent.setup>) {
   await user.click(await screen.findByRole('button', { name: 'Agents' }));
 }
@@ -3216,6 +3225,7 @@ describe('WorldLab', () => {
     render(<WorldLab />);
     await openOverflow(user);
     await user.click(screen.getByRole('button', { name: 'Export' }));
+    await selectMinimalFixtureExport(user);
     expect(screen.getByRole('button', { name: 'Copy JSON' })).toBeDisabled();
     expect(
       screen.getByRole('button', { name: 'Download JSON' }),
@@ -3254,7 +3264,9 @@ describe('WorldLab', () => {
     const requestsBeforeArchive = fetchMock.mock.calls.length;
     fireEvent.click(archiveButton);
     fireEvent.click(archiveButton);
-    expect(fetchMock.mock.calls).toHaveLength(requestsBeforeArchive + 1);
+    await waitFor(() =>
+      expect(fetchMock.mock.calls).toHaveLength(requestsBeforeArchive + 1),
+    );
     expect(screen.getByRole('button', { name: 'Saving…' })).toBeDisabled();
     resolveArchive(
       await jsonResponse({
@@ -3266,13 +3278,24 @@ describe('WorldLab', () => {
         idempotent: false,
       }),
     );
-    expect(fetchMock.mock.calls.at(-1)).toEqual([
+    const [archiveUrl, archiveInit] = fetchMock.mock.calls.at(-1)!;
+    expect(archiveUrl).toEqual(
       expect.stringMatching(/\/experiment\/export\/archive$/),
+    );
+    expect(archiveInit).toEqual(
       expect.objectContaining({
         method: 'POST',
-        body: JSON.stringify({ document: validatedDocument }),
+        signal: expect.any(AbortSignal),
       }),
-    ]);
+    );
+    const archiveBody = JSON.parse(String(archiveInit?.body));
+    expect(archiveBody).toMatchObject({
+      request: validatedDocument.filters,
+      generatedAt: validatedDocument.generatedAt,
+      sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
+    expect(archiveBody).not.toHaveProperty('document');
+    expect(String(archiveInit?.body).length).toBeLessThan(10_000);
     expect(await screen.findByText(/saved to SQLite/)).toBeInTheDocument();
     fetchMock.mockRejectedValueOnce(new Error('archive unavailable'));
     await user.click(screen.getByRole('button', { name: 'Save to SQLite' }));
@@ -3300,6 +3323,102 @@ describe('WorldLab', () => {
       screen.getByText('Options changed — regenerate export.'),
     ).toBeInTheDocument();
     click.mockRestore();
+  });
+
+  it('invalidates a generated artifact when compact SQLite archival reports it changed', async () => {
+    const user = userEvent.setup();
+    const progressed = afterInfection();
+    const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse(progressed));
+    vi.stubGlobal('fetch', fetchMock);
+    render(<WorldLab />);
+    await openOverflow(user);
+    await user.click(screen.getByRole('button', { name: 'Export' }));
+    await selectMinimalFixtureExport(user);
+    const document = minimalExportDocument(progressed);
+    fetchMock.mockImplementationOnce(() => jsonResponse({ document }));
+    await user.click(screen.getByRole('button', { name: 'Generate export' }));
+    expect(
+      await screen.findByRole('button', { name: 'Save to SQLite' }),
+    ).toBeEnabled();
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          error: {
+            code: 'artifact_changed',
+            message:
+              'The experiment changed after this export was generated. Generate it again before saving.',
+          },
+        }),
+        {
+          status: 409,
+          headers: { 'Content-Type': 'application/json' },
+        },
+      ),
+    );
+    await user.click(screen.getByRole('button', { name: 'Save to SQLite' }));
+    expect(
+      await screen.findByText(
+        'The experiment changed after this export was generated. Generate it again before saving.',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Copy JSON' })).toBeDisabled();
+    expect(
+      screen.getByRole('button', { name: 'Download JSON' }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole('button', { name: 'Save to SQLite' }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole('button', { name: 'Generate export' }),
+    ).toBeEnabled();
+    expect(screen.queryByText(/saved to SQLite/)).not.toBeInTheDocument();
+  });
+
+  it('aborts a stalled compact SQLite archive request after ten seconds', async () => {
+    const user = userEvent.setup();
+    const progressed = afterInfection();
+    const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse(progressed));
+    vi.stubGlobal('fetch', fetchMock);
+    render(<WorldLab />);
+    await openOverflow(user);
+    await user.click(screen.getByRole('button', { name: 'Export' }));
+    await selectMinimalFixtureExport(user);
+    const document = minimalExportDocument(progressed);
+    fetchMock.mockImplementationOnce(() => jsonResponse({ document }));
+    await user.click(screen.getByRole('button', { name: 'Generate export' }));
+
+    let archiveStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      archiveStarted = resolve;
+    });
+    fetchMock.mockImplementationOnce(
+      (_input, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          archiveStarted();
+          init?.signal?.addEventListener(
+            'abort',
+            () => reject(new DOMException('Aborted', 'AbortError')),
+            { once: true },
+          );
+        }),
+    );
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(screen.getByRole('button', { name: 'Save to SQLite' }));
+      await started;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(
+        screen.getByText(/Could not confirm the SQLite save/),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole('button', { name: 'Save to SQLite' }),
+      ).toBeEnabled();
+      expect(screen.queryByText(/saved to SQLite/)).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('auto-pauses a fully infected world and disables automatic Start only', async () => {

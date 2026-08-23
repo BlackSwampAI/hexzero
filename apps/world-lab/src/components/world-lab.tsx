@@ -4796,6 +4796,7 @@ function ExperimentExportPanel({
     if (
       !document ||
       !documentIsCurrent ||
+      !parsedRequest.success ||
       operation !== null ||
       sqlitePendingRef.current
     )
@@ -4803,12 +4804,28 @@ function ExperimentExportPanel({
     sqlitePendingRef.current = true;
     setOperation('sqlite');
     setNotice(null);
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 10_000);
     try {
+      const sha256 = await sha256Hex(JSON.stringify(document));
       const response = await fetch(`${apiBase}/experiment/export/archive`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ document }),
+        body: JSON.stringify({
+          request: parsedRequest.data,
+          generatedAt: document.generatedAt,
+          sha256,
+        }),
+        signal: controller.signal,
       });
+      if (response.status === 409) {
+        setDocument(null);
+        setGeneratedRequestJson(null);
+        setNotice(
+          'The experiment changed after this export was generated. Generate it again before saving.',
+        );
+        return;
+      }
       if (!response.ok) throw new Error('archive request failed');
       const result = archiveExperimentExportResponseSchema.parse(
         await response.json(),
@@ -4823,6 +4840,7 @@ function ExperimentExportPanel({
         'Could not confirm the SQLite save. Retry safely with the same generated export.',
       );
     } finally {
+      window.clearTimeout(timeout);
       sqlitePendingRef.current = false;
       setOperation(null);
     }
@@ -5246,6 +5264,16 @@ function serializeExportDocument(document: ExperimentExportDocument): string {
   return document.filters.serialization === 'pretty'
     ? JSON.stringify(document, null, 2)
     : JSON.stringify(document);
+}
+
+async function sha256Hex(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(value),
+  );
+  return Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, '0'),
+  ).join('');
 }
 
 function EventLog({
