@@ -151,7 +151,7 @@ model compliance.
 
 ## Real-provider smoke
 
-The separately opted-in `pnpm smoke:openrouter -- <compatible-model-slug>` command makes one bounded OpenRouter call and validates the decision. It reads only `OPENROUTER_API_KEY` from `.env`; the model is an explicit argument. It is intentionally absent from default validation, Playwright, and CI and must not be run without deliberate authorization because it incurs third-party cost.
+The separately opted-in `pnpm smoke:openrouter -- <compatible-model-slug> [initial|stateful]` command makes one bounded OpenRouter call and validates the decision. The optional `stateful` scenario supplies an active goal and one populated memory so the goal and memory sentinel contract can be checked explicitly; the default is `initial`. It reads only `OPENROUTER_API_KEY` from `.env`; the model is an explicit argument. It is intentionally absent from default validation, Playwright, and CI and must not be run without deliberate authorization because it incurs third-party cost.
 
 World Lab also offers an explicit “Test selected model” probe. It uses the production text/flat-JSON contract and selected reasoning profile, does not advance or mutate the world, may incur a small charge, and is cached by model plus profile plus contract version. It is never invoked by deterministic validation or CI.
 
