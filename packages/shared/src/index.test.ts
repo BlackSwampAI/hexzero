@@ -49,6 +49,12 @@ import {
   agentGoalStateSchema,
   requestedGoalRevisionSchema,
   agentDecisionContractVersionSchema,
+  MEMORY_ENTRY_LIMIT,
+  MEMORY_TEXT_MAX_LENGTH,
+  memoryLedgerSchema,
+  requestedMemoryOperationSchema,
+  memoryOperationResultSchema,
+  createMemoryId,
 } from '.';
 
 const agentId = '128f3f38-6b7d-4db7-9e95-751b4ce2681e';
@@ -260,7 +266,7 @@ const snapshot = {
 };
 
 describe('agent observation and decision schemas', () => {
-  it('bounds goal state and preserves v3-v7 decision attribution', () => {
+  it('bounds goal state and preserves v3-v8 decision attribution', () => {
     expect(
       agentGoalStateSchema.safeParse({
         longTermGoal: 'x'.repeat(GOAL_TEXT_MAX_LENGTH + 1),
@@ -282,6 +288,7 @@ describe('agent observation and decision schemas', () => {
       'text-flat-json-v5',
       'text-flat-json-v6',
       'text-flat-json-v7',
+      'text-flat-json-v8',
     ])
       expect(agentDecisionContractVersionSchema.parse(version)).toBe(version);
   });
@@ -321,6 +328,99 @@ describe('agent observation and decision schemas', () => {
           goalAvailability,
         }).success,
       ).toBe(false);
+  });
+
+  it('bounds compact memory and requires exact canonical availability', () => {
+    const entries = Array.from({ length: MEMORY_ENTRY_LIMIT }, (_, index) => ({
+      id: `memory:${agentId}:${index + 1}`,
+      text: `Memory ${index + 1}`,
+      createdAtTick: index + 1,
+      revisedAtTick: index + 1,
+    }));
+    expect(memoryLedgerSchema.safeParse(entries).success).toBe(true);
+    expect(memoryLedgerSchema.safeParse([...entries, entries[0]]).success).toBe(
+      false,
+    );
+    expect(
+      requestedMemoryOperationSchema.safeParse({
+        operation: 'remember',
+        text: 'x'.repeat(MEMORY_TEXT_MAX_LENGTH + 1),
+      }).success,
+    ).toBe(false);
+    expect(
+      memoryLedgerSchema.safeParse([
+        {
+          id: 'memory:00000000-0000-9000-8000-000000000000:1',
+          text: 'Malformed owner identity.',
+          createdAtTick: 1,
+          revisedAtTick: 1,
+        },
+      ]).success,
+    ).toBe(false);
+    expect(
+      agentObservationSchema.safeParse({
+        ...observation,
+        currentMemory: entries,
+        memoryAvailability: {
+          remember: false,
+          revisableMemoryIds: entries.map(({ id }) => id),
+          forgettableMemoryIds: entries.map(({ id }) => id),
+        },
+      }).success,
+    ).toBe(true);
+    expect(
+      agentObservationSchema.safeParse({
+        ...observation,
+        currentMemory: entries,
+        memoryAvailability: {
+          remember: true,
+          revisableMemoryIds: entries.map(({ id }) => id).reverse(),
+          forgettableMemoryIds: entries.map(({ id }) => id),
+        },
+      }).success,
+    ).toBe(false);
+    const foreignId = createMemoryId(
+      agentIdSchema.parse('2507bb46-7ae4-45ca-8dda-644c4f85ca14'),
+      1,
+    );
+    expect(
+      agentObservationSchema.safeParse({
+        ...observation,
+        currentMemory: [{ ...entries[0]!, id: foreignId }],
+        memoryAvailability: {
+          remember: true,
+          revisableMemoryIds: [foreignId],
+          forgettableMemoryIds: [foreignId],
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      memoryLedgerSchema.safeParse([
+        {
+          ...entries[0]!,
+          id: createMemoryId(agentIdSchema.parse(agentId), 2),
+        },
+      ]).success,
+    ).toBe(false);
+    expect(memoryLedgerSchema.safeParse([entries[1], entries[0]]).success).toBe(
+      false,
+    );
+    expect(
+      memoryOperationResultSchema.safeParse({
+        requested: true,
+        accepted: false,
+        operation: 'forget',
+        reason: 'memory-full',
+      }).success,
+    ).toBe(false);
+    expect(
+      memoryOperationResultSchema.safeParse({
+        requested: true,
+        accepted: false,
+        operation: 'remember',
+        reason: 'memory-not-found',
+      }).success,
+    ).toBe(false);
   });
 
   it('keeps the maximum sparse Patient Zero diplomacy shape within budget', () => {
@@ -390,7 +490,7 @@ describe('agent observation and decision schemas', () => {
   });
 
   it('preserves established engine contract identifiers through branding changes', () => {
-    expect(AGENT_DECISION_CONTRACT_VERSION).toBe('text-flat-json-v7');
+    expect(AGENT_DECISION_CONTRACT_VERSION).toBe('text-flat-json-v8');
     expect(PREVIOUS_AGENT_DECISION_CONTRACT_VERSION).toBe('text-flat-json-v4');
     expect(FLUID_ALLIANCE_AGENT_DECISION_CONTRACT_VERSION).toBe(
       'text-flat-json-v5',

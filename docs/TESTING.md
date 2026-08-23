@@ -5,11 +5,21 @@ assert frozen observations, bounded concurrent starts and one deadline,
 completion-order-independent resolution, seeded order and virtual-interval
 reproduction, deterministic phased conflicts, isolated lost ticks, atomic
 cancellation, per-agent model/reasoning dispatch, complete-tick retention,
-schema-v10 export/archive behavior, schema-v9 compatibility, and bounded strategic goal establishment, continuation, revision, clearing, independent rejection, frozen-tick commit, and reset behavior. World Lab tests
+schema-v10 export/archive behavior, schema-v9 compatibility, bounded strategic
+goal establishment, continuation, revision, clearing, independent rejection,
+frozen-tick commit, and reset behavior, plus compact-memory remember, revise,
+forget, capacity, missing-ID, frozen-tick, lost/cancel, reset, and configuration
+preservation behavior. World Lab tests
 cover Single tick, 5/10/25/50/100 targets, the default target of 25, per-agent
 cost warnings, cancellation reconciliation, and lost-tick status.
 
-Focused deterministic coverage includes physical-distance messaging across H3 resolutions, the eight-agent observation cap, alliance long-range visibility and delivery, channel privacy, seeded move-affordance ordering, effective neutral/alliance colors, and operator-only private-feed filters. Provider tests remain offline and verify the flat `text-flat-json-v7` contract, its selective-communication, bounded goal, and diplomacy-affordance policy text, unchanged wire parsing, and legacy v3-v6 attribution compatibility.
+Focused deterministic coverage includes physical-distance messaging across H3
+resolutions, the eight-agent observation cap, alliance long-range visibility and
+delivery, channel privacy, seeded move-affordance ordering, effective
+neutral/alliance colors, and operator-only private-feed filters. Provider tests
+remain offline and verify the flat `text-flat-json-v8` contract, its
+selective-communication, bounded goal and memory, and diplomacy-affordance policy
+text, unchanged wire parsing, and legacy v3-v7 attribution compatibility.
 
 Patient Zero coverage verifies mandatory current-run defaults and rejection of
 missing/null/unknown selections while preserving null legacy exports, valid roster
@@ -17,7 +27,7 @@ designation, bounded exclusive global awareness, Zero authority and private
 fan-out, Patient-Zero-endpoint direct replies, ordinary range enforcement,
 immutable retry observations, normal world-action legality, export telemetry,
 and restrained World Lab role/filter rendering. Provider tests use
-`text-flat-json-v7`; no live provider or geocoder is involved. A worst-case
+`text-flat-json-v8`; no live provider or geocoder is involved. A worst-case
 32-agent test requires the serialized diplomacy summary to remain at or below
 4,096 UTF-8 bytes with deterministic ordering, fixed caps, stable blocker
 counts, explicit truncation, maximum-cap fixtures, diverse proposer coverage,

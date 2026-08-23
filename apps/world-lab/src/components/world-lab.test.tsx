@@ -947,6 +947,10 @@ function twelveAgentSnapshot(readyCount = 12): SimulationSnapshot {
       agentId: id,
       goal: null,
     })),
+    agentMemories: preview.world.agents.map(({ id }) => ({
+      agentId: id,
+      entries: [],
+    })),
     experiment: {
       ...initial.experiment,
       metrics: {
@@ -1836,6 +1840,12 @@ describe('WorldLab', () => {
     expect(
       within(emptyInspector).getByText('No goal operation recorded.'),
     ).toBeVisible();
+    expect(
+      within(emptyInspector).getByText('No compact memories.'),
+    ).toBeVisible();
+    expect(
+      within(emptyInspector).getByText('No memory operation recorded.'),
+    ).toBeVisible();
     emptyRender.unmount();
 
     const base = afterInfection();
@@ -1854,6 +1864,20 @@ describe('WorldLab', () => {
               }
             : null,
       })),
+      agentMemories: base.world.agents.map(({ id }) => ({
+        agentId: id,
+        entries:
+          id === agent.id
+            ? [
+                {
+                  id: `memory:${id}:1`,
+                  text: 'The northern route was blocked.',
+                  createdAtTick: 1,
+                  revisedAtTick: 2,
+                },
+              ]
+            : [],
+      })),
       turns: base.turns.map((turn) =>
         turn.agentId === agent.id && turn.outcome === 'accepted'
           ? {
@@ -1869,6 +1893,16 @@ describe('WorldLab', () => {
                 requested: true,
                 accepted: true,
                 operation: 'establish',
+              },
+              memoryOperation: {
+                operation: 'remember',
+                text: 'The northern route was blocked.',
+              },
+              memoryOperationResult: {
+                requested: true,
+                accepted: true,
+                operation: 'remember',
+                memoryId: `memory:${agent.id}:1`,
               },
             }
           : turn,
@@ -1894,6 +1928,12 @@ describe('WorldLab', () => {
     ).toBeVisible();
     expect(
       within(inspector).getByText('Agent reason: Start continuity.'),
+    ).toBeVisible();
+    expect(
+      within(inspector).getByText('The northern route was blocked.'),
+    ).toBeVisible();
+    expect(
+      within(inspector).getByText('Latest: remember · accepted'),
     ).toBeVisible();
   });
 

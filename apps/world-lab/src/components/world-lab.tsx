@@ -3811,11 +3811,20 @@ function AgentInspector({
   const currentGoal = snapshot.agentGoals.find(
     ({ agentId }) => agentId === agent.id,
   )?.goal;
+  const currentMemory =
+    snapshot.agentMemories.find(({ agentId }) => agentId === agent.id)
+      ?.entries ?? [];
   const latestGoalTurn = turns.findLast(
     (turn): turn is CompletedAgentTurnRecord =>
       (turn.outcome === 'accepted' || turn.outcome === 'rejected') &&
       turn.agentId === agent.id &&
       turn.goalRevisionResult.requested,
+  );
+  const latestMemoryTurn = turns.findLast(
+    (turn): turn is CompletedAgentTurnRecord =>
+      (turn.outcome === 'accepted' || turn.outcome === 'rejected') &&
+      turn.agentId === agent.id &&
+      turn.memoryOperationResult.requested,
   );
 
   const apply = async () => {
@@ -3935,6 +3944,32 @@ function AgentInspector({
             Agent reason: {latestGoalTurn.goalRevision.reason}
           </p>
         )}
+      <h3>Memories</h3>
+      {currentMemory.length ? (
+        <ol aria-label="Current agent memories">
+          {currentMemory.map((entry) => (
+            <li key={entry.id}>
+              <strong>{entry.text}</strong>
+              <br />
+              <span className="muted">
+                {entry.id} · created tick {entry.createdAtTick} · revised tick{' '}
+                {entry.revisedAtTick}
+              </span>
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <p className="muted">No compact memories.</p>
+      )}
+      <p aria-label="Latest memory result">
+        {latestMemoryTurn && latestMemoryTurn.memoryOperationResult.requested
+          ? `Latest: ${latestMemoryTurn.memoryOperationResult.operation} · ${
+              latestMemoryTurn.memoryOperationResult.accepted
+                ? 'accepted'
+                : `rejected (${latestMemoryTurn.memoryOperationResult.reason})`
+            }`
+          : 'No memory operation recorded.'}
+      </p>
       <h3>Relevant pending proposals</h3>
       {pendingProposals.length ? (
         <ol>

@@ -94,3 +94,7 @@ This is a private repository. Report suspected vulnerabilities privately to the 
 ## Agent goal text
 
 Strategic goals and revision reasons are bounded, agent-authored, untrusted data. They are supplied only inside immutable user-observation data, never interpolated into system instructions. The contract requests concise visible summaries and prohibits private chain-of-thought. Goal operations grant no engine authority and cannot bypass world, communication, or diplomacy validation.
+
+## Compact memory text
+
+Compact memories are bounded self-authored recollections, not authoritative facts. They remain subordinate observation data and are never interpolated into system instructions. Memory may not retain raw prompts, provider payloads, credentials, or private chain-of-thought. Server-issued IDs and tick attribution are authoritative; memory prose is not.
