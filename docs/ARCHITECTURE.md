@@ -194,8 +194,11 @@ Snapshots keep the newest 120 turn records and 120 world events. Observations ex
 ## Experiment telemetry and export
 
 World Lab archive writes remain downstream and manual. The browser submits the
-exact current schema-validated generated document; the Game API lazily opens the
-configured archive only for that request, delegates the transactional,
+current export filters, generation timestamp, and SHA-256 digest rather than
+re-uploading a potentially large document through the UI proxy. The Game API
+deterministically regenerates the schema-validated document, rejects it if its
+digest differs from the exact browser-generated artifact, lazily opens the
+configured archive only after that check, delegates the transactional,
 idempotent import to `packages/experiment-archive`, and closes the handle. The
 archive never becomes simulation authority.
 

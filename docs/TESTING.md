@@ -91,11 +91,11 @@ and approximately 768×900 with deterministic scripted data only.
 Command-navbar coverage verifies one persistent row, always-visible known cost, stable async control slots, accessible icon controls, exact absolute tick targets 5/10/25/50/100, current/past target advancement, hover/focus experiment details, responsive overflow, and removal of the provider badge and inspector export action. Map interaction coverage keeps agent-marker inspection independent from explicit hex selection and verifies that the map-local hex card dismisses on a background click. Export coverage separates preview from generation, includes lost ticks by default, invalidates artifacts after relevant option changes, prevents stale or duplicate copy/download, and checks accessible pending/ready/error states. Shared model-option tests require identical global/per-agent ordering and formatting. Effective-color tests cover current-alliance, retained, base, and neutral fallback precedence. Dark-map tests assert tokenless CARTO URLs and complete attribution without network access.
 
 Direct archive-write coverage validates the narrow request/response schemas,
-exact generated-document submission, pre-generation and stale-artifact
-disabling, synchronous duplicate-activation prevention, bounded notices,
-injected persistence without startup file creation, and idempotency through the
-existing importer. Tests use injected writers, in-memory SQLite, or temporary
-paths only.
+compact digest-verified regeneration of the exact generated document, mismatch
+rejection, pre-generation and stale-artifact disabling, synchronous
+duplicate-activation prevention, bounded notices, injected persistence without
+startup file creation, and idempotency through the existing importer. Tests use
+injected writers, in-memory SQLite, or temporary paths only.
 
 Behavior coverage verifies registry uniqueness/versioning, deterministic balanced and fully random assignment, independent profile dimensions, turn-one locking, reset semantics, exact diplomacy affordances, layered prompt trust language, bounded structural detail codes, turn attribution, and export preservation. Agent Controller coverage verifies accessible Overview/Models/Behavior tabs, default readiness, manual pre-turn selection, post-start locking, responsive dialog layout, and compact roster summaries.
 

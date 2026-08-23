@@ -2767,6 +2767,7 @@ export const apiErrorCodeSchema = z.enum([
   'invalid_request',
   'invalid_export',
   'invalid_artifact',
+  'artifact_changed',
   'archive_rejected',
   'archive_persistence_failed',
   'export_conflict',
@@ -3758,9 +3759,20 @@ export type ExperimentExportDocument = z.infer<
 export const experimentExportResponseSchema = z.object({
   document: experimentExportDocumentSchema,
 });
-export const archiveExperimentExportRequestSchema = z
+const generatedExperimentExportArchiveRequestSchema = z
   .object({ document: experimentExportDocumentSchema })
   .strict();
+const compactExperimentExportArchiveRequestSchema = z
+  .object({
+    request: experimentExportRequestSchema,
+    generatedAt: z.iso.datetime(),
+    sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  })
+  .strict();
+export const archiveExperimentExportRequestSchema = z.union([
+  generatedExperimentExportArchiveRequestSchema,
+  compactExperimentExportArchiveRequestSchema,
+]);
 export const archiveExperimentExportResponseSchema = z
   .object({
     experimentId: experimentIdSchema,

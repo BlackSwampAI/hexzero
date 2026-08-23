@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { createHash } from 'node:crypto';
 import {
   AgentProviderError,
   BrowserTestAgentProvider,
@@ -1141,6 +1142,99 @@ describe('game API simulation boundary', () => {
     expect(
       archiveExperimentExportResponseSchema.parse(await response.json()),
     ).toMatchObject({ inserted: 3, idempotent: false });
+  });
+
+  it('regenerates and verifies an exact artifact from a compact archive request', async () => {
+    const archiveExperimentExport = vi.fn(
+      (document: ExperimentExportDocument) => ({
+        experimentId: document.experiment.id,
+        inserted: 3,
+        existing: 0,
+        skipped: 0,
+        rejected: 0,
+        idempotent: false,
+      }),
+    );
+    const app = createApp({ archiveExperimentExport });
+    const request = {
+      agents: { mode: 'all' as const },
+      turns: { mode: 'entire-retained' as const },
+      outcomes: ['accepted' as const],
+      actions: ['wait' as const],
+      level: 'full-safe' as const,
+    };
+    const generatedResponse = await app.request(
+      '/api/simulation/experiment/export',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(request),
+      },
+    );
+    const generated = experimentExportResponseSchema.parse(
+      await generatedResponse.json(),
+    );
+    const response = await app.request(
+      '/api/simulation/experiment/export/archive',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          request,
+          generatedAt: generated.document.generatedAt,
+          sha256: createHash('sha256')
+            .update(JSON.stringify(generated.document))
+            .digest('hex'),
+        }),
+      },
+    );
+    expect(response.status).toBe(200);
+    expect(archiveExperimentExport).toHaveBeenCalledWith(generated.document);
+  });
+
+  it('rejects a compact archive request when the generated artifact changed', async () => {
+    const archiveExperimentExport = vi.fn();
+    const app = createApp({ archiveExperimentExport });
+    const exportRequest = {
+      agents: { mode: 'all' as const },
+      turns: { mode: 'entire-retained' as const },
+      outcomes: ['accepted' as const],
+      actions: ['wait' as const],
+      level: 'full-safe' as const,
+    };
+    const generatedResponse = await app.request(
+      '/api/simulation/experiment/export',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(exportRequest),
+      },
+    );
+    expect(generatedResponse.status).toBe(200);
+    const generated = experimentExportResponseSchema.parse(
+      await generatedResponse.json(),
+    );
+    const response = await app.request(
+      '/api/simulation/experiment/export/archive',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          request: generated.document.filters,
+          generatedAt: generated.document.generatedAt,
+          sha256: '0'.repeat(64),
+        }),
+      },
+    );
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: 'artifact_changed',
+        message:
+          'The experiment changed after this export was generated. Generate it again before saving.',
+      },
+    });
+    expect(archiveExperimentExport).not.toHaveBeenCalled();
   });
 
   it('rejects invalid archive artifacts before invoking persistence', async () => {

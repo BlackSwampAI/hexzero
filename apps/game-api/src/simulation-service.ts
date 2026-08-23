@@ -845,13 +845,16 @@ export class SimulationService {
     );
   }
 
-  generateExperimentExport(request: unknown): ExperimentExportDocument {
+  generateExperimentExport(
+    request: unknown,
+    generatedAt = this.#now(),
+  ): ExperimentExportDocument {
     if (this.#busy || this.#verificationBusy)
       throw new SimulationConflictError(
         'Export is unavailable while model execution is in progress.',
       );
     return experimentExportDocumentSchema.parse(
-      createExperimentExport(this.#experimentSource(), request, this.#now()),
+      createExperimentExport(this.#experimentSource(), request, generatedAt),
     );
   }
 

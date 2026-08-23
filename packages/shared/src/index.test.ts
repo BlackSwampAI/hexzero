@@ -1307,6 +1307,14 @@ describe('personality mutation contracts', () => {
     ).toBe(true);
     expect(
       apiErrorSchema.safeParse({
+        error: {
+          code: 'artifact_changed',
+          message: 'Generate the export again before saving.',
+        },
+      }).success,
+    ).toBe(true);
+    expect(
+      apiErrorSchema.safeParse({
         error: { code: 'provider_secret', message: 'unsafe' },
       }).success,
     ).toBe(false);
