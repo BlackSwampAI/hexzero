@@ -36,6 +36,8 @@ import {
   allianceSchema,
   allianceProposalSchema,
   patientZeroDiplomacySummarySchema,
+  patientZeroPlayerThreatFeedSchema,
+  PATIENT_ZERO_PLAYER_THREAT_FEED_LIMIT,
   diplomacyIntentSchema,
   diplomacyResultSchema,
   DEVELOPMENT_WORLD_CONFIG,
@@ -490,6 +492,94 @@ describe('agent observation and decision schemas', () => {
     );
   });
 
+  it('caps Patient Zero cleaner evidence with truthful overflow metadata', () => {
+    const events = Array.from(
+      { length: PATIENT_ZERO_PLAYER_THREAT_FEED_LIMIT },
+      (_, index) => ({
+        eventId: `30000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
+        kind: 'territory-disinfected' as const,
+        cell,
+        occurredAt: '2026-08-13T12:00:01.000Z',
+        affectedAgentId: agentId,
+        affectedAgentName: 'Ember',
+        affectedAllianceId: null,
+        affectedAllianceColor: null,
+      }),
+    );
+    expect(
+      patientZeroPlayerThreatFeedSchema.safeParse({
+        events,
+        totalEventCount: events.length + 1,
+        truncated: true,
+      }).success,
+    ).toBe(true);
+    expect(
+      patientZeroPlayerThreatFeedSchema.safeParse({
+        events: [
+          ...events,
+          {
+            ...events[0]!,
+            eventId: '30000000-0000-4000-8000-999999999999',
+          },
+        ],
+        totalEventCount: events.length + 1,
+        truncated: false,
+      }).success,
+    ).toBe(false);
+    expect(
+      patientZeroPlayerThreatFeedSchema.safeParse({
+        events,
+        totalEventCount: events.length,
+        truncated: true,
+      }).success,
+    ).toBe(false);
+    const globalView = {
+      agents: [],
+      individualTerritory: scoreboard,
+      allianceTerritory: [],
+      alliances: [],
+      activeAllianceProposals: [],
+      recentStrategicEvents: [],
+      recentTerritoryChanges: [],
+      playerThreatFeed: {
+        events: events.slice(0, 1),
+        totalEventCount: 1,
+        truncated: false,
+      },
+    };
+    expect(
+      agentObservationSchema.safeParse({
+        ...observation,
+        patientZeroGlobalView: globalView,
+      }).success,
+    ).toBe(false);
+    expect(
+      agentObservationSchema.safeParse({
+        ...observation,
+        patientZero: {
+          agentId,
+          agentName: 'Ember',
+          isPatientZero: true,
+          directRangeBypass: true,
+        },
+        patientZeroGlobalView: globalView,
+      }).success,
+    ).toBe(false);
+    expect(
+      agentObservationSchema.safeParse({
+        ...observation,
+        patientZero: {
+          agentId,
+          agentName: 'Ember',
+          isPatientZero: true,
+          directRangeBypass: true,
+        },
+        patientZeroGlobalView: globalView,
+        playerPressure: { enabled: true, recentThreats: [] },
+      }).success,
+    ).toBe(true);
+  });
+
   it('preserves established engine contract identifiers through branding changes', () => {
     expect(AGENT_DECISION_CONTRACT_VERSION).toBe('text-flat-json-v8');
     expect(PREVIOUS_AGENT_DECISION_CONTRACT_VERSION).toBe('text-flat-json-v4');
@@ -651,6 +741,11 @@ describe('agent observation and decision schemas', () => {
     expect(parsed.diplomacyAvailability.propose).toMatchObject({
       available: false,
       blockedRecipients: [],
+    });
+    expect(parsed.patientZeroGlobalView).toBeNull();
+    expect(parsed.playerPressure).toEqual({
+      enabled: false,
+      recentThreats: [],
     });
   });
 

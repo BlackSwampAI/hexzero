@@ -34,6 +34,7 @@ import {
   OPENROUTER_429_FALLBACK_BACKOFF_MS,
   WORLD_SCENARIO_LIMITS,
   PATIENT_ZERO_DIPLOMACY_SUMMARY_LIMITS,
+  PATIENT_ZERO_PLAYER_THREAT_FEED_LIMIT,
   MEMORY_ENTRY_LIMIT,
   personalitySchema,
   simulationSnapshotSchema,
@@ -104,6 +105,18 @@ const RESET_GENERATED_AT = '2026-08-13T12:00:00.000Z';
 const MAX_TURN_HISTORY = 120;
 const MAX_WORLD_EVENT_HISTORY = 120;
 const DEFAULT_EXPERIMENT_RETENTION = 5_000;
+
+export function selectMostRecentPatientZeroThreats<
+  T extends { eventId: string; occurredAt: string },
+>(events: readonly T[]): T[] {
+  return [...events]
+    .sort(
+      (left, right) =>
+        left.occurredAt.localeCompare(right.occurredAt) ||
+        left.eventId.localeCompare(right.eventId),
+    )
+    .slice(-PATIENT_ZERO_PLAYER_THREAT_FEED_LIMIT);
+}
 
 interface PendingFailedTurn {
   turnNumber: number;
@@ -2090,6 +2103,59 @@ export class SimulationService {
             affectedOwnTerritory,
           }))
       : [];
+    const patientZeroPlayerThreats = this.#scenario.capabilities
+      .simulatedPlayerPressure
+      ? this.#state.events
+          .filter(
+            (
+              event,
+            ): event is Extract<
+              WorldEvent,
+              { type: 'hex-disinfected' | 'simulated-player-clean-blocked' }
+            > =>
+              (event.type === 'hex-disinfected' ||
+                event.type === 'simulated-player-clean-blocked') &&
+              event.originatingTick === this.#completedTickCount + 1,
+          )
+          .toSorted(
+            (left, right) =>
+              left.occurredAt.localeCompare(right.occurredAt) ||
+              left.id.localeCompare(right.id),
+          )
+          .map((event) => {
+            const referencedAgentId =
+              event.type === 'hex-disinfected'
+                ? event.previousControllerAgentId
+                : event.blockingAgentId;
+            const referencedAgent = this.#state.agents.get(referencedAgentId);
+            if (!referencedAgent)
+              throw new Error(
+                'A simulated-player threat references an unknown agent.',
+              );
+            const alliance = getAgentAlliance(this.#state, referencedAgentId);
+            return event.type === 'hex-disinfected'
+              ? {
+                  eventId: event.id,
+                  kind: 'territory-disinfected' as const,
+                  cell: event.cell,
+                  occurredAt: event.occurredAt,
+                  affectedAgentId: referencedAgent.id,
+                  affectedAgentName: referencedAgent.name,
+                  affectedAllianceId: alliance?.id ?? null,
+                  affectedAllianceColor: alliance?.color ?? null,
+                }
+              : {
+                  eventId: event.id,
+                  kind: 'occupied-clean-blocked' as const,
+                  cell: event.cell,
+                  occurredAt: event.occurredAt,
+                  blockingAgentId: referencedAgent.id,
+                  blockingAgentName: referencedAgent.name,
+                  blockingAllianceId: alliance?.id ?? null,
+                  blockingAllianceColor: alliance?.color ?? null,
+                };
+          })
+      : [];
     return agentObservationSchema.parse({
       agentId: agent.id,
       agentName: agent.name,
@@ -2220,6 +2286,18 @@ export class SimulationService {
                     event.type === 'hex-captured',
                 )
                 .slice(-RECENT_CONTROL_CHANGE_LIMIT),
+              playerThreatFeed: this.#scenario.capabilities
+                .simulatedPlayerPressure
+                ? {
+                    events: selectMostRecentPatientZeroThreats(
+                      patientZeroPlayerThreats,
+                    ),
+                    totalEventCount: patientZeroPlayerThreats.length,
+                    truncated:
+                      patientZeroPlayerThreats.length >
+                      PATIENT_ZERO_PLAYER_THREAT_FEED_LIMIT,
+                  }
+                : null,
             }
           : null,
       territoryScoreboard: this.#territoryScoreboard(),

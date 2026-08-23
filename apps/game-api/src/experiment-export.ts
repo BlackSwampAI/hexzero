@@ -1357,6 +1357,17 @@ function exportTurn(
         ...observation.playerPressure,
         recentThreats: [],
       };
+    const globalThreatFeed =
+      observation.patientZeroGlobalView?.playerThreatFeed;
+    if (custom && !custom.recentControlChanges && globalThreatFeed)
+      observation.patientZeroGlobalView = {
+        ...observation.patientZeroGlobalView!,
+        playerThreatFeed: {
+          events: [],
+          totalEventCount: globalThreatFeed.totalEventCount,
+          truncated: globalThreatFeed.totalEventCount > 0,
+        },
+      };
     base.observation = observation;
   }
   if (

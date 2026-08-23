@@ -165,6 +165,29 @@ describe('experiment archive', () => {
       cellsDisinfected: 0,
       blockedDisinfections: 1,
     };
+    const patientZeroTurn = raw.turns.find(
+      ({ agentId }) => agentId === raw.experiment.scenario!.patientZeroAgentId,
+    )!;
+    patientZeroTurn.observation!.playerPressure = {
+      enabled: true,
+      recentThreats: [],
+    };
+    patientZeroTurn.observation!.patientZeroGlobalView!.playerThreatFeed = {
+      events: [
+        {
+          eventId: raw.worldEvents.at(-1)!.id,
+          kind: 'occupied-clean-blocked',
+          cell: raw.agents[0]!.currentCell,
+          occurredAt: NOW,
+          blockingAgentId: raw.agents[0]!.id,
+          blockingAgentName: raw.agents[0]!.name,
+          blockingAllianceId: null,
+          blockingAllianceColor: null,
+        },
+      ],
+      totalEventCount: 1,
+      truncated: false,
+    };
     const document = experimentExportDocumentSchema.parse(raw);
     importExperimentExport(archive, document);
     expect(
@@ -194,6 +217,26 @@ describe('experiment archive', () => {
         )
         .get(document.experiment.id),
     ).toEqual({ metrics: JSON.stringify(raw.simulatedPlayerMetrics) });
+    const archivedObservation = archive.database
+      .prepare(
+        'SELECT observation_json AS observation FROM turns WHERE experiment_id = ? AND agent_id = ?',
+      )
+      .get(document.experiment.id, patientZeroTurn.agentId) as {
+      observation: string;
+    };
+    expect(JSON.parse(archivedObservation.observation)).toMatchObject({
+      patientZeroGlobalView: {
+        playerThreatFeed: {
+          totalEventCount: 1,
+          events: [
+            {
+              kind: 'occupied-clean-blocked',
+              blockingAgentName: raw.agents[0]!.name,
+            },
+          ],
+        },
+      },
+    });
     archive.close();
   });
 

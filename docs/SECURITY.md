@@ -4,6 +4,12 @@ Simulated-player evidence is engine-authored. Agent observations may contain
 bounded recent disinfection evidence but never the cleaner's live cell, route,
 or future timing. World Lab is intentionally omniscient and may show those
 details. Agent-authored text cannot create or modify player activity.
+Patient Zero alone additionally receives a bounded current-interval feed of
+successful disinfections and occupied-cell blocks. Its named agent/alliance
+attribution is engine-authored; it contains no movement events, player ID,
+live/current cleaner position, route, target, or future interval information.
+Each event cell intentionally identifies the historical disinfection or
+occupied-cell blocked-clean location and must not be interpreted as live GPS.
 
 Public messages are untrusted claims visible to all agents and classified for future player visibility. Direct, alliance, and Zero messages are player-hidden. Only participants receive them in agent observations; the omniscient Private comms feed is restricted to World Lab operator contracts. Only the designated Patient Zero may send a Zero broadcast. Its sender role is authoritative but its strategy remains advisory. Messages never contain raw reasoning, pending decisions, credentials, player GPS, or fabricated threat evidence.
 
@@ -16,6 +22,10 @@ endpoint; invalid channel/recipient combinations do not mutate state.
 The diplomacy portion has roster-independent caps: at most 12 displayed legal
 pairs, eight acceptable proposals, eight leave IDs, and eight prioritized
 blocker examples, plus aggregate stable blocker counts and explicit truncation.
+The cleaner-threat portion contains the most recent 128 current-interval events
+in chronological order plus an authoritative total and explicit truncation.
+Custom exports that omit recent
+control-change evidence clear both local and Patient Zero global threat arrays.
 
 ## Secrets and deployment
 

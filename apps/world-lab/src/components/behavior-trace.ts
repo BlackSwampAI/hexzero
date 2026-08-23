@@ -16,7 +16,9 @@ export interface BehaviorTraceEvidence {
     | 'zero-message'
     | 'world-event'
     | 'territory'
-    | 'alliance-event';
+    | 'alliance-event'
+    | 'player-threat'
+    | 'patient-zero-threat';
   label: string;
   cell?: H3Cell;
 }
@@ -162,7 +164,74 @@ function collectEvidence(
     kind: 'world-event',
     label: `World: ${summary}`,
   }));
+  const localPlayerThreats = unseenBy(
+    observation.playerPressure.recentThreats,
+    prior?.playerPressure.recentThreats,
+    ({ eventId }) => eventId,
+  ).map(
+    ({
+      eventId,
+      kind,
+      cell,
+      distanceCells,
+    }): BehaviorTraceEvidence & {
+      eventId: string;
+    } => ({
+      eventId,
+      kind: 'player-threat',
+      label:
+        kind === 'territory-disinfected'
+          ? `Local cleaner threat: own territory disinfected at ${cell}`
+          : `Local cleaner threat: disinfection at ${cell} (${distanceCells} cells away)`,
+      cell,
+    }),
+  );
+  const localPlayerEventIds = new Set(
+    localPlayerThreats.map(({ eventId }) => eventId),
+  );
+  const globalFeed = observation.patientZeroGlobalView?.playerThreatFeed;
+  const priorGlobalFeed = prior?.patientZeroGlobalView?.playerThreatFeed;
+  const globalPlayerThreats = globalFeed
+    ? unseenBy(
+        globalFeed.events,
+        priorGlobalFeed?.events,
+        ({ eventId }) => eventId,
+      )
+        .filter(({ eventId }) => !localPlayerEventIds.has(eventId))
+        .map((event): BehaviorTraceEvidence => ({
+          kind: 'patient-zero-threat',
+          label:
+            event.kind === 'territory-disinfected'
+              ? `Patient Zero global cleaner feed: ${event.affectedAgentName}${
+                  event.affectedAllianceId
+                    ? ` (${event.affectedAllianceId})`
+                    : ''
+                } lost ${event.cell}`
+              : `Patient Zero global cleaner feed: ${event.blockingAgentName}${
+                  event.blockingAllianceId
+                    ? ` (${event.blockingAllianceId})`
+                    : ''
+                } blocked a clean at ${event.cell}`,
+          cell: event.cell,
+        }))
+    : [];
+  const globalFeedSummary: BehaviorTraceEvidence[] =
+    globalFeed && globalFeed.totalEventCount > 0
+      ? [
+          {
+            kind: 'patient-zero-threat',
+            label: `Patient Zero global cleaner feed: ${globalFeed.events.length}/${globalFeed.totalEventCount} displayed${globalFeed.truncated ? ' · truncated' : ''}`,
+          },
+        ]
+      : [];
   return [
+    ...globalFeedSummary,
+    ...localPlayerThreats.map(({ kind, label, cell }) => ({
+      kind,
+      label,
+      cell,
+    })),
+    ...globalPlayerThreats,
     ...inboundDirect,
     ...zeroMessages,
     ...allianceMessages,

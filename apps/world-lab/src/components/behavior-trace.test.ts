@@ -20,6 +20,7 @@ function acceptedTurn(
     inboundMessage?: boolean;
     territoryChange?: boolean;
     continuity?: boolean;
+    playerThreats?: boolean;
   } = {},
 ): AgentTurnRecord {
   const move = options.move ?? false;
@@ -115,6 +116,73 @@ function acceptedTurn(
             },
           ]
         : [],
+      ...(options.playerThreats
+        ? {
+            patientZero: {
+              agentId,
+              agentName: 'Ember',
+              isPatientZero: true,
+              directRangeBypass: true,
+            },
+            patientZeroGlobalView: {
+              agents: [],
+              individualTerritory: [
+                {
+                  agentId,
+                  name: 'Ember',
+                  color: '#d55e00',
+                  allianceId: null,
+                  effectiveColor: '#d55e00',
+                  controlledCellCount: 0,
+                },
+              ],
+              allianceTerritory: [],
+              alliances: [],
+              activeAllianceProposals: [],
+              recentStrategicEvents: [],
+              recentTerritoryChanges: [],
+              playerThreatFeed: {
+                events: [
+                  {
+                    eventId: '97aa21b9-fc78-4b04-9f92-9862bf346f96',
+                    kind: 'territory-disinfected',
+                    cell: adjacentCell,
+                    occurredAt,
+                    affectedAgentId: agentId,
+                    affectedAgentName: 'Ember',
+                    affectedAllianceId: null,
+                    affectedAllianceColor: null,
+                  },
+                  {
+                    eventId: 'a7aa21b9-fc78-4b04-9f92-9862bf346f96',
+                    kind: 'occupied-clean-blocked',
+                    cell: currentCell,
+                    occurredAt,
+                    blockingAgentId: otherAgentId,
+                    blockingAgentName: 'Rook',
+                    blockingAllianceId: null,
+                    blockingAllianceColor: null,
+                  },
+                ],
+                totalEventCount: 3,
+                truncated: true,
+              },
+            },
+            playerPressure: {
+              enabled: true,
+              recentThreats: [
+                {
+                  eventId: '97aa21b9-fc78-4b04-9f92-9862bf346f96',
+                  kind: 'territory-disinfected',
+                  cell: adjacentCell,
+                  occurredAt,
+                  distanceCells: 0,
+                  affectedOwnTerritory: true,
+                },
+              ],
+            },
+          }
+        : {}),
     },
     outcome: 'accepted',
     worldAction: move
@@ -242,5 +310,44 @@ describe('deriveBehaviorTrace', () => {
         'Memory remember: rejected (memory-full)',
       ],
     });
+  });
+
+  it('shows local and Patient Zero cleaner evidence without duplicating one event', () => {
+    const trace = deriveBehaviorTrace(
+      [acceptedTurn(1), acceptedTurn(2, { playerThreats: true })],
+      agentId,
+    );
+    const evidence = trace[0]!.evidence;
+    expect(evidence.slice(0, 2)).toEqual([
+      expect.objectContaining({
+        kind: 'patient-zero-threat',
+        label: 'Patient Zero global cleaner feed: 2/3 displayed · truncated',
+      }),
+      expect.objectContaining({
+        kind: 'player-threat',
+        label: expect.stringContaining('own territory disinfected'),
+      }),
+    ]);
+    expect(evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'player-threat',
+          label: expect.stringContaining('own territory disinfected'),
+          cell: adjacentCell,
+        }),
+        expect.objectContaining({
+          kind: 'patient-zero-threat',
+          label: 'Patient Zero global cleaner feed: 2/3 displayed · truncated',
+        }),
+        expect.objectContaining({
+          kind: 'patient-zero-threat',
+          label: expect.stringContaining('Rook blocked a clean'),
+          cell: currentCell,
+        }),
+      ]),
+    );
+    expect(
+      evidence.filter(({ label }) => label.includes('Ember lost')),
+    ).toHaveLength(0);
   });
 });

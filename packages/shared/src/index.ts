@@ -1147,6 +1147,76 @@ export const observedPlayerThreatSchema = z
   .strict();
 export type ObservedPlayerThreat = z.infer<typeof observedPlayerThreatSchema>;
 
+export const PATIENT_ZERO_PLAYER_THREAT_FEED_LIMIT = 128;
+const patientZeroDisinfectionThreatSchema = z
+  .object({
+    eventId: eventIdSchema,
+    kind: z.literal('territory-disinfected'),
+    cell: h3CellSchema,
+    occurredAt: z.iso.datetime(),
+    affectedAgentId: agentIdSchema,
+    affectedAgentName: z.string().trim().min(1).max(80),
+    affectedAllianceId: allianceIdSchema.nullable(),
+    affectedAllianceColor: z.enum(ALLIANCE_COLOR_PALETTE).nullable(),
+  })
+  .strict();
+const patientZeroBlockedCleanThreatSchema = z
+  .object({
+    eventId: eventIdSchema,
+    kind: z.literal('occupied-clean-blocked'),
+    cell: h3CellSchema,
+    occurredAt: z.iso.datetime(),
+    blockingAgentId: agentIdSchema,
+    blockingAgentName: z.string().trim().min(1).max(80),
+    blockingAllianceId: allianceIdSchema.nullable(),
+    blockingAllianceColor: z.enum(ALLIANCE_COLOR_PALETTE).nullable(),
+  })
+  .strict();
+export const patientZeroPlayerThreatEventSchema = z.discriminatedUnion('kind', [
+  patientZeroDisinfectionThreatSchema,
+  patientZeroBlockedCleanThreatSchema,
+]);
+export const patientZeroPlayerThreatFeedSchema = z
+  .object({
+    events: z
+      .array(patientZeroPlayerThreatEventSchema)
+      .max(PATIENT_ZERO_PLAYER_THREAT_FEED_LIMIT),
+    totalEventCount: z.number().int().nonnegative(),
+    truncated: z.boolean(),
+  })
+  .strict()
+  .superRefine((feed, context) => {
+    if (
+      feed.events.length > feed.totalEventCount ||
+      feed.truncated !== feed.totalEventCount > feed.events.length ||
+      new Set(feed.events.map(({ eventId }) => eventId)).size !==
+        feed.events.length
+    )
+      context.addIssue({
+        code: 'custom',
+        message: 'Patient Zero player-threat counts must be truthful.',
+      });
+    for (const event of feed.events) {
+      const allianceId =
+        event.kind === 'territory-disinfected'
+          ? event.affectedAllianceId
+          : event.blockingAllianceId;
+      const allianceColor =
+        event.kind === 'territory-disinfected'
+          ? event.affectedAllianceColor
+          : event.blockingAllianceColor;
+      if ((allianceId === null) !== (allianceColor === null))
+        context.addIssue({
+          code: 'custom',
+          message:
+            'Patient Zero player-threat alliance attribution must be complete.',
+        });
+    }
+  });
+export type PatientZeroPlayerThreatFeed = z.infer<
+  typeof patientZeroPlayerThreatFeedSchema
+>;
+
 export const allianceTerritorySummarySchema = z
   .object({
     allianceId: allianceIdSchema,
@@ -1422,6 +1492,9 @@ export const patientZeroGlobalViewSchema = z
       .max(WORLD_SCENARIO_LIMITS.maximumAgents)
       .default([]),
     diplomacySummary: patientZeroDiplomacySummarySchema.optional(),
+    playerThreatFeed: patientZeroPlayerThreatFeedSchema
+      .nullable()
+      .default(null),
   })
   .superRefine((view, context) => {
     if (
@@ -1682,6 +1755,25 @@ export const agentObservationSchema = agentObservationObjectSchema.transform(
     const expectedGoalOperations = observation.currentGoal
       ? ['keep', 'revise', 'complete', 'abandon']
       : ['establish'];
+    if (
+      observation.patientZeroGlobalView !== null &&
+      !observation.patientZero.isPatientZero
+    )
+      context.addIssue({
+        code: 'custom',
+        path: ['patientZeroGlobalView'],
+        message: 'Only Patient Zero may receive the global view.',
+      });
+    if (
+      observation.patientZeroGlobalView?.playerThreatFeed !== null &&
+      observation.patientZeroGlobalView?.playerThreatFeed !== undefined &&
+      !observation.playerPressure.enabled
+    )
+      context.addIssue({
+        code: 'custom',
+        path: ['patientZeroGlobalView', 'playerThreatFeed'],
+        message: 'Cleaner pressure must be enabled for its global feed.',
+      });
     if (
       observation.goalAvailability.active !==
         Boolean(observation.currentGoal) ||
