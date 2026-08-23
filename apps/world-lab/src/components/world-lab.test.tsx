@@ -1029,7 +1029,6 @@ async function openAgentsWorkspace(user: ReturnType<typeof userEvent.setup>) {
 
 describe('WorldLab', () => {
   it('migrates supported legacy browser preferences and rejects retired targets', async () => {
-    window.localStorage.setItem('agentborne.world-lab.follow-turn', 'false');
     window.localStorage.setItem(
       'agentborne.world-lab.activity-dock',
       'collapsed',
@@ -1038,9 +1037,6 @@ describe('WorldLab', () => {
     const first = render(<WorldLab />);
     await screen.findByRole('button', { name: 'Start' });
     await waitFor(() => {
-      expect(window.localStorage.getItem('hexzero.world-lab.follow-turn')).toBe(
-        'false',
-      );
       expect(
         window.localStorage.getItem('hexzero.world-lab.activity-dock'),
       ).toBe('collapsed');
@@ -1049,15 +1045,6 @@ describe('WorldLab', () => {
       ).toBe('25');
     });
     first.unmount();
-
-    window.localStorage.setItem('agentborne.world-lab.follow-turn', 'true');
-    const second = render(<WorldLab />);
-    await screen.findByRole('button', { name: 'Start' });
-    expect(window.localStorage.getItem('hexzero.world-lab.follow-turn')).toBe(
-      'false',
-    );
-
-    second.unmount();
     render(<WorldLab />);
     await screen.findByRole('button', { name: 'Start' });
   });
@@ -1452,9 +1439,17 @@ describe('WorldLab', () => {
         ],
       },
     });
+    const openRouterAllied = simulationSnapshotSchema.parse({
+      ...allied,
+      providerMode: 'openrouter',
+    });
     vi.stubGlobal(
       'fetch',
-      vi.fn(() => jsonResponse(allied)),
+      vi.fn((input: RequestInfo | URL) =>
+        String(input).endsWith('/models')
+          ? jsonResponse(compatibleCatalog)
+          : jsonResponse(openRouterAllied),
+      ),
     );
     const user = userEvent.setup();
     render(<WorldLab />);
@@ -1477,6 +1472,78 @@ describe('WorldLab', () => {
     expect(
       screen.getAllByText('Ember and Rook formed an alliance.'),
     ).toHaveLength(1);
+    const roster = screen.getByLabelText('Agent roster');
+    expect(
+      within(roster)
+        .getByRole('button', { name: /Ember/ })
+        .querySelector('.agent-swatch'),
+    ).toHaveStyle({ background: allianceColor });
+    await user.click(screen.getByRole('tab', { name: 'Agent' }));
+    expect(
+      within(screen.getByLabelText('Agent inspector'))
+        .getByRole('heading', { name: /Ember/ })
+        .querySelector('.agent-swatch'),
+    ).toHaveStyle({ background: allianceColor });
+    await user.click(screen.getByRole('button', { name: 'Agents' }));
+    await user.click(
+      await screen.findByRole('button', { name: /Open Agent Controller/ }),
+    );
+    await user.click(screen.getByRole('tab', { name: 'Overview' }));
+    expect(
+      within(screen.getByRole('tabpanel', { name: 'Overview' }))
+        .getByText('Ember')
+        .closest('button')
+        ?.querySelector('.agent-swatch'),
+    ).toHaveStyle({ background: allianceColor });
+  });
+
+  it('uses neutral affiliation color across roster, controller, inspector, and setup', async () => {
+    const openRouterInitial = openRouterSnapshot('example/alpha');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) =>
+        String(input).endsWith('/models')
+          ? jsonResponse(compatibleCatalog)
+          : jsonResponse(openRouterInitial),
+      ),
+    );
+    const user = userEvent.setup();
+    render(<WorldLab />);
+    const roster = await screen.findByLabelText('Agent roster');
+    expect(
+      within(roster)
+        .getByRole('button', { name: /Ember/ })
+        .querySelector('.agent-swatch'),
+    ).toHaveStyle({ background: NEUTRAL_AGENT_COLOR });
+    expect(
+      within(screen.getByLabelText('Agent inspector'))
+        .getByRole('heading', { name: /Ember/ })
+        .querySelector('.agent-swatch'),
+    ).toHaveStyle({ background: NEUTRAL_AGENT_COLOR });
+    await user.click(screen.getByRole('button', { name: 'Agents' }));
+    await user.click(
+      await screen.findByRole('button', { name: /Open Agent Controller/ }),
+    );
+    await user.click(screen.getByRole('tab', { name: 'Overview' }));
+    expect(
+      within(screen.getByRole('tabpanel', { name: 'Overview' }))
+        .getByText('Ember')
+        .closest('button')
+        ?.querySelector('.agent-swatch'),
+    ).toHaveStyle({ background: NEUTRAL_AGENT_COLOR });
+    await user.click(
+      screen.getByRole('button', { name: 'Close model selection' }),
+    );
+    await openOverflow(user);
+    await user.click(screen.getByRole('button', { name: 'World setup' }));
+    expect(
+      screen.queryByLabelText(`${world.agents[0]!.name} color`),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByLabelText(
+        `${world.agents[0]!.name} starts unaffiliated with neutral color`,
+      ),
+    ).toHaveStyle({ background: NEUTRAL_AGENT_COLOR });
   });
 
   it('deduplicates rendered H3 features before reporting readiness', async () => {
@@ -1580,121 +1647,28 @@ describe('WorldLab', () => {
     ).toBeInTheDocument();
   });
 
-  it('defaults Follow latest on and selects the latest resolved record', async () => {
-    const scheduled = afterInfection();
+  it('keeps an explicitly selected agent stable after a simultaneous tick', async () => {
+    const completed = completeTickResponse(afterInfection());
     vi.stubGlobal(
       'fetch',
-      vi.fn(() => jsonResponse(scheduled)),
-    );
-    render(<WorldLab />);
-    const roster = await screen.findByLabelText('Agent roster');
-    expect(
-      within(roster).getByRole('checkbox', { name: 'Follow latest' }),
-    ).toBeChecked();
-    expect(within(roster).getByText('Latest')).toBeInTheDocument();
-    expect(
-      screen.getByRole('heading', { name: new RegExp(world.agents[0]!.name) }),
-    ).toBeInTheDocument();
-  });
-
-  it('returns to the latest resolved agent when following is re-enabled', async () => {
-    const base = afterInfection();
-    const active = simulationSnapshotSchema.parse({
-      ...base,
-      turns: [{ ...afterInfection().turns[0]!, agentId: world.agents[3]!.id }],
-    });
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(() => jsonResponse(active)),
+      vi
+        .fn()
+        .mockImplementationOnce(() => jsonResponse(initial))
+        .mockImplementationOnce(() => jsonResponse(completed)),
     );
     const user = userEvent.setup();
     render(<WorldLab />);
-    const roster = await screen.findByLabelText('Agent roster');
-    expect(within(roster).getByText('Latest')).toBeInTheDocument();
-    expect(
-      screen.getByRole('heading', { name: new RegExp(world.agents[3]!.name) }),
-    ).toBeInTheDocument();
     await user.click(
-      within(roster).getByRole('button', {
-        name: new RegExp(world.agents[1]!.name),
-      }),
+      await screen.findByRole('button', { name: 'Select agent Rook' }),
     );
+    await user.click(screen.getByRole('button', { name: 'Single tick' }));
     expect(
-      within(roster).getByRole('checkbox', { name: 'Follow latest' }),
-    ).not.toBeChecked();
-    expect(
-      screen.getByRole('heading', { name: new RegExp(world.agents[1]!.name) }),
+      await screen.findByRole('heading', { name: /Rook/ }),
     ).toBeInTheDocument();
-    expect(within(roster).getByText('Latest')).toBeInTheDocument();
-    await user.click(
-      within(roster).getByRole('checkbox', { name: 'Follow latest' }),
-    );
-    expect(
-      screen.getByRole('heading', { name: new RegExp(world.agents[3]!.name) }),
-    ).toBeInTheDocument();
+    const roster = screen.getByLabelText('Agent roster');
+    expect(within(roster).queryByText('Follow latest')).not.toBeInTheDocument();
+    expect(within(roster).queryByText('Latest')).not.toBeInTheDocument();
   });
-
-  it('keyboard roster selection disables following and persists the preference locally only', async () => {
-    const user = userEvent.setup();
-    render(<WorldLab />);
-    const roster = await screen.findByLabelText('Agent roster');
-    const row = within(roster).getByRole('button', {
-      name: new RegExp(world.agents[4]!.name),
-    });
-    row.focus();
-    await user.keyboard('{Enter}');
-    expect(
-      within(roster).getByRole('checkbox', { name: 'Follow latest' }),
-    ).not.toBeChecked();
-    expect(window.localStorage.getItem('hexzero.world-lab.follow-turn')).toBe(
-      'false',
-    );
-    await openOverflow(user);
-    await user.click(screen.getByRole('button', { name: 'Export' }));
-    expect(
-      screen.getByRole('dialog', { name: 'Experiment export' }),
-    ).not.toHaveTextContent('Follow latest');
-  });
-
-  it.each([
-    ['paused between turns', 'paused', null, 1],
-    ['manual Retry completion', 'paused', null, 2],
-    ['operator Skip completion', 'paused', null, 3],
-    ['cancelled request reconciliation', 'paused', null, 4],
-    ['reset snapshot', 'paused', null, 0],
-    ['provider error', 'provider-error', null, 5],
-    ['lost-response reconciliation', 'paused', null, 6],
-    ['request in progress', 'running', 7, 0],
-  ] as const)(
-    'selects the latest resolved agent after %s',
-    async (_label, status, activeIndex, nextIndex) => {
-      const current = simulationSnapshotSchema.parse({
-        ...initial,
-        status,
-        activeAgentId:
-          activeIndex === null ? null : world.agents[activeIndex]!.id,
-        nextAgentId: world.agents[nextIndex]!.id,
-        turns: [
-          {
-            ...afterInfection().turns[0]!,
-            agentId: world.agents[nextIndex]!.id,
-          },
-        ],
-      });
-      vi.stubGlobal(
-        'fetch',
-        vi.fn(() => jsonResponse(current)),
-      );
-      render(<WorldLab />);
-      const expected = world.agents[nextIndex]!;
-      expect(
-        await screen.findByRole('heading', { name: new RegExp(expected.name) }),
-      ).toBeInTheDocument();
-      expect(
-        within(screen.getByLabelText('Agent roster')).getByText('Latest'),
-      ).toBeInTheDocument();
-    },
-  );
 
   it('renders accepted messages, directions, and hostile-looking text as plain text', async () => {
     const changed = afterMessage();
@@ -1733,7 +1707,7 @@ describe('WorldLab', () => {
     );
   });
 
-  it('renders bounded public world chat with sender, turn, time, and plain text', async () => {
+  it('renders legacy public chat with an explicit turn fallback and timestamp', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(() => jsonResponse(afterPublicMessage())),
@@ -1742,8 +1716,81 @@ describe('WorldLab', () => {
     const feed = await screen.findByLabelText('Public world chat');
     expect(feed).toHaveTextContent('Ember');
     expect(feed).toHaveTextContent('Turn 1');
+    expect(feed).toHaveTextContent(/\d{2}:\d{2}:\d{2}/);
     expect(feed).toHaveTextContent(HOSTILE_MESSAGE);
     expect(document.querySelector('img[src="x"]')).toBeNull();
+  });
+
+  it('uses tick-native labels for private and direct-message history', async () => {
+    const source = afterMessage();
+    const tick = completeTickResponse(source).snapshot;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => jsonResponse(tick)),
+    );
+    const user = userEvent.setup();
+    render(<WorldLab />);
+    const history = await screen.findByLabelText('Direct-message history');
+    expect(history).toHaveTextContent('Tick 1');
+    expect(history).toHaveTextContent(/\d{2}:\d{2}:\d{2}/);
+    await user.click(await screen.findByRole('tab', { name: 'Private comms' }));
+    const privateFeed = screen.getByLabelText('Private communications');
+    expect(privateFeed).toHaveTextContent('Tick 1 · Delivered');
+    expect(privateFeed).toHaveTextContent(/\d{2}:\d{2}:\d{2}/);
+  });
+
+  it('uses a tick-native label and attempt timestamp for rejected private communication', async () => {
+    const delivered = afterMessage();
+    const turn = delivered.turns[0]!;
+    if (turn.outcome !== 'accepted')
+      throw new Error('Expected a completed message fixture.');
+    const rejected = simulationSnapshotSchema.parse({
+      ...delivered,
+      world: { ...delivered.world, events: delivered.world.events.slice(0, 1) },
+      turns: [
+        {
+          ...turn,
+          communicationResult: {
+            requested: true,
+            accepted: false,
+            attempt: {
+              id: '97dd21b9-fc78-4b04-9f92-9862bf346f99',
+              agentId: turn.agentId,
+              occurredAt: '2026-08-13T12:00:01.000Z',
+              channel: 'direct',
+              recipientId: world.agents[1]!.id,
+              distance: 2,
+              message: HOSTILE_MESSAGE,
+            },
+            reason: 'self-message',
+            details: 'An agent cannot message itself.',
+          },
+        },
+      ],
+    });
+    const tick = completeTickResponse(rejected).snapshot;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => jsonResponse(tick)),
+    );
+    const user = userEvent.setup();
+    render(<WorldLab />);
+    await user.click(await screen.findByRole('tab', { name: 'Private comms' }));
+    const privateFeed = screen.getByLabelText('Private communications');
+    expect(privateFeed).toHaveTextContent('Tick 1 · Rejected: self-message');
+    expect(privateFeed).toHaveTextContent(/\d{2}:\d{2}:\d{2}/);
+  });
+
+  it('uses a tick-native label and timestamp in public chat', async () => {
+    const publicTick = completeTickResponse(afterPublicMessage()).snapshot;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => jsonResponse(publicTick)),
+    );
+    render(<WorldLab />);
+    const feed = await screen.findByLabelText('Public world chat');
+    expect(feed).toHaveTextContent('Tick 1');
+    expect(feed).toHaveTextContent(/\d{2}:\d{2}:\d{2}/);
   });
 
   it('renders public chat newest first in DOM order', async () => {
@@ -1804,6 +1851,7 @@ describe('WorldLab', () => {
     expect(privateFeed).toHaveTextContent('Ember');
     expect(privateFeed).toHaveTextContent('Rook');
     expect(privateFeed).toHaveTextContent('Turn 1 · Delivered');
+    expect(privateFeed).toHaveTextContent(/\d{2}:\d{2}:\d{2}/);
     expect(privateFeed).toHaveTextContent('2.00 km');
     await user.click(
       within(privateFeed).getByRole('button', { name: 'Alliance' }),
@@ -2060,6 +2108,11 @@ describe('WorldLab', () => {
     expect(
       screen.getByText('Latest structured observation').closest('details'),
     ).toHaveTextContent('Capture: blocked · capture-open-cell');
+    expect(
+      screen.getByText(
+        'Immutable input supplied for Tick 1 · record 1. It is not rewritten when the active personality changes.',
+      ),
+    ).toBeInTheDocument();
     await waitFor(() =>
       expect(screen.getByTestId('world-map')).toHaveAttribute(
         'data-rendered-infected-cell-count',
@@ -2189,7 +2242,7 @@ describe('WorldLab', () => {
     ).not.toBeInTheDocument();
   });
 
-  it('resets turn history and UI selections', async () => {
+  it('resets turn history while preserving an available agent selection', async () => {
     const changed = afterInfection();
     vi.stubGlobal(
       'fetch',
@@ -2200,6 +2253,9 @@ describe('WorldLab', () => {
     );
     const user = userEvent.setup();
     render(<WorldLab />);
+    await user.click(
+      await screen.findByRole('button', { name: 'Select agent Rook' }),
+    );
     await waitFor(() =>
       expect(screen.getByTestId('world-map')).toHaveAttribute(
         'data-rendered-infected-cell-count',
@@ -2227,6 +2283,8 @@ describe('WorldLab', () => {
         '0',
       ),
     );
+    await user.click(screen.getByRole('tab', { name: 'Agent' }));
+    expect(screen.getByRole('heading', { name: /Rook/ })).toBeInTheDocument();
   });
 
   it('supports hex selection independently of agent selection', async () => {
@@ -2941,7 +2999,9 @@ describe('WorldLab', () => {
       screen.getByText(world.agents[0]!.personality, { exact: true }),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/Immutable input supplied for tick 1 record 1/),
+      screen.getByText(
+        'Immutable input supplied for Tick 1 · record 1. It is not rewritten when the active personality changes.',
+      ),
     ).toBeInTheDocument();
     expect(
       screen.getByText(
