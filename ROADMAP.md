@@ -98,6 +98,11 @@ Slice A delivers bounded per-agent strategic goals with deterministic revision s
 
 Pre-PR-5 observability slice: add a local append-only SQLite experiment archive, transactional schema-v9 export import, bounded human/Codex queries, normalized comparisons, and FTS-searchable curated notes. The in-memory engine remains authoritative. Crash recovery, restartable simulation state, MCP, embeddings, vector search, and a database browser remain deferred.
 
+Follow-up observability slice: after explicit generation, World Lab can manually
+save the exact current safe artifact through the Game API to the configured
+SQLite archive. Preview remains optional. Automatic persistence, arbitrary
+paths or SQL, recovery, scheduling, MCP, and archive authority remain deferred.
+
 Persistent short- and long-term objectives, compact memories, plan revision, summaries, and longer simulation runs.
 
 ## PR 6 — Persistent autonomous world

@@ -8,7 +8,12 @@ import {
   type ProviderDecision,
 } from '@hexzero/agent-runtime';
 import {
+  ArchivePersistenceError,
+  ExperimentImportError,
+} from '@hexzero/experiment-archive';
+import {
   cancelledTurnResponseSchema,
+  archiveExperimentExportResponseSchema,
   apiErrorSchema,
   defaultWorldSetupResponseSchema,
   h3CellSchema,
@@ -24,6 +29,7 @@ import {
   updateAgentPersonalityResponseSchema,
   updateExperimentModelsResponseSchema,
   verifyModelResponseSchema,
+  type ExperimentExportDocument,
 } from '@hexzero/shared';
 import {
   createApp,
@@ -1024,6 +1030,137 @@ describe('game API simulation boundary', () => {
       /authorization|api[_-]?key|rawPrompt|rawBody|chainOfThought|privateReasoning/i,
     );
   });
+
+  it('archives the exact supplied generated artifact through an injected writer', async () => {
+    const archiveExperimentExport = vi.fn(
+      (document: ExperimentExportDocument) => ({
+        experimentId: document.experiment.id,
+        inserted: 3,
+        existing: 0,
+        skipped: 1,
+        rejected: 0,
+        idempotent: false,
+      }),
+    );
+    const app = createApp({
+      provider: new ScriptedAgentProvider([
+        { worldAction: { type: 'wait' }, summary: 'Wait.' },
+      ]),
+      archiveExperimentExport,
+    });
+    const request = {
+      agents: { mode: 'all' as const },
+      turns: { mode: 'entire-retained' as const },
+      outcomes: ['accepted' as const],
+      actions: ['wait' as const],
+      level: 'minimal' as const,
+    };
+    const generatedResponse = await app.request(
+      '/api/simulation/experiment/export',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(request),
+      },
+    );
+    const generated = experimentExportResponseSchema.parse(
+      await generatedResponse.json(),
+    );
+    const response = await app.request(
+      '/api/simulation/experiment/export/archive',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(generated),
+      },
+    );
+    expect(response.status).toBe(200);
+    expect(archiveExperimentExport).toHaveBeenCalledWith(generated.document);
+    expect(
+      archiveExperimentExportResponseSchema.parse(await response.json()),
+    ).toMatchObject({ inserted: 3, idempotent: false });
+  });
+
+  it('rejects invalid archive artifacts before invoking persistence', async () => {
+    const archiveExperimentExport = vi.fn();
+    const app = createApp({ archiveExperimentExport });
+    const response = await app.request(
+      '/api/simulation/experiment/export/archive',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ document: { schemaVersion: 10 } }),
+      },
+    );
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: 'invalid_artifact' },
+    });
+    expect(archiveExperimentExport).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      error: new ExperimentImportError('unsafe internal rejection detail'),
+      status: 422,
+      code: 'archive_rejected',
+      message: 'The experiment archive rejected the export safely.',
+    },
+    {
+      error: new ArchivePersistenceError('private filesystem detail'),
+      status: 500,
+      code: 'archive_persistence_failed',
+      message: 'The local experiment archive could not be updated.',
+    },
+    {
+      error: new ExperimentImportError(
+        'wrapped private persistence detail',
+        new ArchivePersistenceError('private database detail'),
+      ),
+      status: 500,
+      code: 'archive_persistence_failed',
+      message: 'The local experiment archive could not be updated.',
+    },
+  ])(
+    'maps archive failures to safe API errors',
+    async ({ error, status, code, message }) => {
+      const sourceApp = createApp();
+      const generatedResponse = await sourceApp.request(
+        '/api/simulation/experiment/export',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            agents: { mode: 'all' },
+            turns: { mode: 'entire-retained' },
+            outcomes: ['accepted'],
+            actions: ['wait'],
+            level: 'minimal',
+          }),
+        },
+      );
+      const generated = experimentExportResponseSchema.parse(
+        await generatedResponse.json(),
+      );
+      const app = createApp({
+        archiveExperimentExport: () => {
+          throw error;
+        },
+      });
+      const response = await app.request(
+        '/api/simulation/experiment/export/archive',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(generated),
+        },
+      );
+      expect(response.status).toBe(status);
+      const body = await response.json();
+      expect(body).toEqual({ error: { code, message } });
+      expect(JSON.stringify(body)).not.toMatch(/private|filesystem|database/);
+    },
+  );
 
   it.each([
     [{}, 400, 'invalid_export'],

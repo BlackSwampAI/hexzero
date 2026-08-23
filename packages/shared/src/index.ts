@@ -2759,6 +2759,9 @@ export const apiErrorCodeSchema = z.enum([
   'invalid_personality',
   'invalid_request',
   'invalid_export',
+  'invalid_artifact',
+  'archive_rejected',
+  'archive_persistence_failed',
   'export_conflict',
   'records_unavailable',
   'model_configuration_conflict',
@@ -3747,6 +3750,25 @@ export type ExperimentExportDocument = z.infer<
 export const experimentExportResponseSchema = z.object({
   document: experimentExportDocumentSchema,
 });
+export const archiveExperimentExportRequestSchema = z
+  .object({ document: experimentExportDocumentSchema })
+  .strict();
+export const archiveExperimentExportResponseSchema = z
+  .object({
+    experimentId: experimentIdSchema,
+    inserted: z.number().int().min(0).max(1_000_000),
+    existing: z.number().int().min(0).max(1_000_000),
+    skipped: z.number().int().min(0).max(1_000_000),
+    rejected: z.number().int().min(0).max(1_000_000),
+    idempotent: z.boolean(),
+  })
+  .strict();
+export type ArchiveExperimentExportRequest = z.infer<
+  typeof archiveExperimentExportRequestSchema
+>;
+export type ArchiveExperimentExportResponse = z.infer<
+  typeof archiveExperimentExportResponseSchema
+>;
 export const experimentImportRequestSchema = z
   .object({ document: z.unknown() })
   .strict();

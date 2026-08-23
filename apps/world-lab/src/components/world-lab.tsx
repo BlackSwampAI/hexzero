@@ -15,6 +15,7 @@ import {
   PERSONALITY_PROFILES,
   STRATEGY_PROFILES,
   assignBehavior,
+  archiveExperimentExportResponseSchema,
   cancelSimulationResponseSchema,
   cancelledTurnResponseSchema,
   experimentExportPreviewSchema,
@@ -4700,10 +4701,11 @@ function ExperimentExportPanel({
     string | null
   >(null);
   const [operation, setOperation] = useState<
-    'preview' | 'generate' | 'copy' | 'download' | null
+    'preview' | 'generate' | 'copy' | 'download' | 'sqlite' | null
   >(null);
   const [notice, setNotice] = useState<string | null>(null);
   const downloadPendingRef = useRef(false);
+  const sqlitePendingRef = useRef(false);
   const close = useCallback(() => onOpenChange(false), [onOpenChange]);
 
   const requestInput = {
@@ -4838,6 +4840,42 @@ function ExperimentExportPanel({
     }
   };
 
+  const saveToSqlite = async () => {
+    if (
+      !document ||
+      !documentIsCurrent ||
+      operation !== null ||
+      sqlitePendingRef.current
+    )
+      return;
+    sqlitePendingRef.current = true;
+    setOperation('sqlite');
+    setNotice(null);
+    try {
+      const response = await fetch(`${apiBase}/experiment/export/archive`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ document }),
+      });
+      if (!response.ok) throw new Error('archive request failed');
+      const result = archiveExperimentExportResponseSchema.parse(
+        await response.json(),
+      );
+      setNotice(
+        result.idempotent
+          ? `Experiment ${result.experimentId} was already saved to SQLite.`
+          : `Experiment ${result.experimentId} saved to SQLite · ${result.inserted} imported, ${result.existing} existing, ${result.skipped} skipped.`,
+      );
+    } catch {
+      setNotice(
+        'Could not confirm the SQLite save. Retry safely with the same generated export.',
+      );
+    } finally {
+      sqlitePendingRef.current = false;
+      setOperation(null);
+    }
+  };
+
   const toggle = <T extends string>(values: T[], value: T): T[] =>
     values.includes(value)
       ? values.filter((candidate) => candidate !== value)
@@ -4890,6 +4928,14 @@ function ExperimentExportPanel({
             onClick={() => void downloadJson()}
           >
             {operation === 'download' ? 'Downloading…' : 'Download JSON'}
+          </button>
+          <button
+            disabled={!documentIsCurrent || pending}
+            aria-busy={operation === 'sqlite'}
+            type="button"
+            onClick={() => void saveToSqlite()}
+          >
+            {operation === 'sqlite' ? 'Saving…' : 'Save to SQLite'}
           </button>
         </div>
       }

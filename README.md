@@ -134,6 +134,10 @@ See [Testing](docs/TESTING.md), [Architecture](docs/ARCHITECTURE.md), [Security]
 Completed schema-v10 exports and legacy schema-v9 exports can be imported into
 an ignored local SQLite archive and queried without repeatedly loading full JSON
 artifacts. See [Local experiment archive](docs/EXPERIMENT_ARCHIVE.md).
+After Generate export, World Lab can also save that exact current validated
+artifact to the configured local archive with **Save to SQLite**. Preview
+remains an optional estimate and does not gate generation or saving.
+The action is manual and idempotent; changed options require regeneration.
 
 ## Rename compatibility
 
