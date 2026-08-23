@@ -47,6 +47,15 @@ Its command navbar is the single persistent application-control row. Browser-ses
 
 The default basemap is tokenless CARTO Dark Matter with OpenStreetMap and CARTO attribution. Deterministic tests inspect its configuration and mocked MapLibre H3 sources without requesting external tiles.
 
+World Lab derives a six-record, newest-first Behavior Trace entirely from the
+bounded `AgentTurnRecord` snapshot already returned by the Game API. The trace
+compares consecutive observations for the selected agent, separates newly
+retained communication and board evidence, displays legal action affordances
+beside the selected action, and labels repeated or changed action patterns.
+Model summaries remain explicitly self-reported evidence rather than causal
+proof. Cell highlighting reuses browser selection state and creates no server
+mutation, new telemetry, retention, provider field, or world authority.
+
 Communication resolves against the authoritative pre-action snapshot. Public chat is globally observable and future-player-visible. Direct messages use H3-center great-circle distance and the scenario's bounded kilometer range. Alliance messages are private to current members regardless of distance. World Lab may inspect private traffic; player-facing contracts must not include that omniscient feed. Equivalent legal moves are ordered reproducibly from world seed, stable agent ID, and logical turn without process randomness.
 
 `apps/game-api` is a Hono service bound conservatively to loopback. Its single in-memory `SimulationService` owns the development session, monotonic completed-turn count, turn cursor, bounded histories, per-agent strategic goals and compact memory ledgers, and overlap lock. Goals and memories are not part of world-engine `Agent` ownership and grant no engine authority. It exposes:

@@ -1937,6 +1937,69 @@ describe('WorldLab', () => {
     ).toBeVisible();
   });
 
+  it('shows a bounded read-only behavior trace and highlights observed cells', async () => {
+    const changed = afterInfection();
+    const agent = changed.world.agents[0]!;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => jsonResponse(changed)),
+    );
+    const user = userEvent.setup();
+    render(<WorldLab />);
+    await user.click(
+      await screen.findByRole('button', {
+        name: new RegExp(`Select agent ${agent.name}`),
+      }),
+    );
+
+    const inspector = screen.getByLabelText('Agent inspector');
+    const trace = within(inspector).getByLabelText('Recent behavior trace');
+    const sectionNavigation = within(inspector).getByRole('navigation', {
+      name: `${agent.name} inspector sections`,
+    });
+    for (const section of [
+      'Trace',
+      'Goals',
+      'Memories',
+      'History',
+      'Configuration',
+      'Latest',
+    ])
+      expect(
+        within(sectionNavigation).getByRole('link', { name: section }),
+      ).toBeVisible();
+    expect(within(inspector).getByText('1/6 retained')).toBeVisible();
+    expect(trace).toHaveTextContent(
+      'First retained observation for this agent.',
+    );
+    expect(trace).toHaveTextContent('1 legal move target · Infect · Wait');
+    expect(trace).toHaveTextContent('Chosen: Infect');
+    expect(trace).toHaveTextContent(
+      'Model summary (self-reported, not proof): Infecting this open cell.',
+    );
+    expect(inspector).toHaveTextContent(
+      'Observation evidence and self-reported summaries show correlation, not proven causation.',
+    );
+
+    await user.click(
+      within(trace).getByRole('button', { name: 'Highlight observed cell' }),
+    );
+    await waitFor(() =>
+      expect(mapLibreMock.latestSourceData).toEqual(
+        expect.objectContaining({
+          features: expect.arrayContaining([
+            expect.objectContaining({
+              properties: expect.objectContaining({
+                cell: agent.currentCell,
+                selected: true,
+              }),
+            }),
+          ]),
+        }),
+      ),
+    );
+  });
+
   it('clears visible communications after reset', async () => {
     const changed = afterMessage();
     vi.stubGlobal(
@@ -1989,7 +2052,10 @@ describe('WorldLab', () => {
     expect(
       await screen.findByText('Infection · ' + world.agents[0]!.currentCell),
     ).toBeInTheDocument();
-    expect(screen.getByText('Infecting this open cell.')).toBeInTheDocument();
+    const latestTurn = screen
+      .getByRole('heading', { name: 'Latest turn' })
+      .closest('.turn-detail');
+    expect(latestTurn).toHaveTextContent('Summary: Infecting this open cell.');
     await user.click(screen.getByText('Latest structured observation'));
     expect(
       screen.getByText('Latest structured observation').closest('details'),

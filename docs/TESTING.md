@@ -41,6 +41,13 @@ assert only the prompt policy, contract attribution, parsing, and compatibility.
 
 Operator-workspace component coverage verifies that Live/Agents switching preserves the mounted execution state, agent selection routes to the semantic inspector, Scoreboard remains directly reachable, and failure/recovery activity stays bounded. Playwright exercises the persistent command bar, workspace navigation, contextual inspector tabs, tabbed activity dock, overflow-routed setup/export actions, and desktop/narrow viewport containment. These tests continue to use only the deterministic provider.
 
+Behavior Trace coverage verifies the six-record newest-first bound, consecutive
+observation-delta derivation, newly retained inbound evidence, legal-action and
+chosen-direction presentation, repeated/changed action labeling, explicit
+self-reported-not-causal wording, inspector section navigation, and browser-only
+cell highlighting. It uses existing turn records and never invokes a provider or
+mutates the simulation.
+
 Configurable-scenario coverage is deterministic and offline: `world-scenario-v1`, temporary roster/world limits, actual H3 count and area, radius presets, seeded identities and separated spawns, default compatibility, infeasibility, pure preview, atomic apply/current-scenario reset, dynamic assignment reconciliation, density warnings, and schema-v9 attribution. Geocoding uses injected fakes; browser coverage retains the default flow and adds a 469-cell/12-agent scenario flow.
 
 Legacy sequential recovery remains covered only as schema-v9 compatibility. Tick tests instead verify that an exhausted per-agent repair or transient retry becomes a final lost-tick record while sibling records commit, and that whole-tick cancellation commits nothing. No live provider call is made.
