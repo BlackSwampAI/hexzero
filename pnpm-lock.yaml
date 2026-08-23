@@ -31,6 +31,9 @@ importers:
       '@hexzero/agent-runtime':
         specifier: workspace:*
         version: link:../../packages/agent-runtime
+      '@hexzero/experiment-archive':
+        specifier: workspace:*
+        version: link:../../packages/experiment-archive
       '@hexzero/shared':
         specifier: workspace:*
         version: link:../../packages/shared

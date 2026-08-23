@@ -17,6 +17,13 @@ The experiment archive is a durable, local research surface for completed or par
 
 ## Storage and configuration
 
+World Lab provides a manual import path after an operator explicitly generates
+an export. Preview is optional. **Save to SQLite** sends that exact current
+artifact; stale artifacts are disabled. The API reuses the transactional,
+safe-field-scanned, idempotent importer, opens the configured archive lazily,
+and closes the handle. It accepts no browser-selected path and never writes
+automatically.
+
 `@hexzero/experiment-archive` uses SQLite built into the pinned Node 24 runtime. Versioned migrations create strict tables with foreign keys and indexes. File-backed databases enable WAL and a five-second busy timeout; imports use prepared statements inside one transaction. Tests use in-memory or temporary databases.
 
 The new default database is `.hexzero/experiments.sqlite`, an ignored development path. Resolution order is explicit `--db`, `HEXZERO_EXPERIMENT_DB`, legacy `AGENTBORNE_EXPERIMENT_DB`, an existing `.hexzero/experiments.sqlite`, an existing `.agentborne/experiments.sqlite`, then a new `.hexzero/experiments.sqlite`. Legacy selections emit a concise notice and open normally; no database is moved, overwritten, or recreated for branding.

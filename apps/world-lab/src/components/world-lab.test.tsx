@@ -3137,10 +3137,8 @@ describe('WorldLab', () => {
   it('copies and downloads the exact same validated generated JSON and revokes its URL', async () => {
     const user = userEvent.setup();
     const progressed = afterInfection();
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(() => jsonResponse(progressed)),
-    );
+    const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse(progressed));
+    vi.stubGlobal('fetch', fetchMock);
     const clipboardWrite = vi.fn(async () => undefined);
     Object.defineProperty(navigator, 'clipboard', {
       configurable: true,
@@ -3162,12 +3160,16 @@ describe('WorldLab', () => {
     expect(
       screen.getByRole('button', { name: 'Download JSON' }),
     ).toBeDisabled();
+    expect(
+      screen.getByRole('button', { name: 'Save to SQLite' }),
+    ).toBeDisabled();
     const document = minimalExportDocument(progressed);
-    vi.mocked(fetch).mockImplementationOnce(() => jsonResponse({ document }));
+    const validatedDocument = experimentExportDocumentSchema.parse(document);
+    fetchMock.mockImplementationOnce(() => jsonResponse({ document }));
     await user.click(screen.getByRole('button', { name: 'Generate export' }));
     await user.click(await screen.findByRole('button', { name: 'Copy JSON' }));
     expect(clipboardWrite).toHaveBeenCalledWith(
-      JSON.stringify(experimentExportDocumentSchema.parse(document)),
+      JSON.stringify(validatedDocument),
     );
     clipboardWrite.mockRejectedValueOnce(new Error('denied'));
     await user.click(screen.getByRole('button', { name: 'Copy JSON' }));
@@ -3179,6 +3181,50 @@ describe('WorldLab', () => {
     expect(downloadedFilename).toMatch(
       /^hexzero-experiment-.+-one-agent-entire-retained\.json$/,
     );
+    let resolveArchive!: (response: Response) => void;
+    fetchMock.mockImplementationOnce(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveArchive = resolve;
+        }),
+    );
+    const archiveButton = screen.getByRole('button', {
+      name: 'Save to SQLite',
+    });
+    const requestsBeforeArchive = fetchMock.mock.calls.length;
+    fireEvent.click(archiveButton);
+    fireEvent.click(archiveButton);
+    expect(fetchMock.mock.calls).toHaveLength(requestsBeforeArchive + 1);
+    expect(screen.getByRole('button', { name: 'Saving…' })).toBeDisabled();
+    resolveArchive(
+      await jsonResponse({
+        experimentId: document.experiment.id,
+        inserted: 4,
+        existing: 0,
+        skipped: 0,
+        rejected: 0,
+        idempotent: false,
+      }),
+    );
+    expect(fetchMock.mock.calls.at(-1)).toEqual([
+      expect.stringMatching(/\/experiment\/export\/archive$/),
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ document: validatedDocument }),
+      }),
+    ]);
+    expect(await screen.findByText(/saved to SQLite/)).toBeInTheDocument();
+    fetchMock.mockRejectedValueOnce(new Error('archive unavailable'));
+    await user.click(screen.getByRole('button', { name: 'Save to SQLite' }));
+    expect(
+      await screen.findByText(/Could not confirm the SQLite save/),
+    ).toBeInTheDocument();
+    const exportDialog = screen.getByRole('dialog', {
+      name: 'Experiment export',
+    });
+    expect(within(exportDialog).getByRole('status')).toHaveTextContent(
+      'Retry safely with the same generated export.',
+    );
     await user.selectOptions(
       screen.getByLabelText('JSON serialization'),
       'pretty',
@@ -3186,6 +3232,9 @@ describe('WorldLab', () => {
     expect(screen.getByRole('button', { name: 'Copy JSON' })).toBeDisabled();
     expect(
       screen.getByRole('button', { name: 'Download JSON' }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole('button', { name: 'Save to SQLite' }),
     ).toBeDisabled();
     expect(
       screen.getByText('Options changed — regenerate export.'),

@@ -70,6 +70,8 @@ Communication resolves against the authoritative pre-action snapshot. Public cha
 - `POST /api/simulation/personalities/restore-defaults` — restore all eight milestone personality directives without resetting progress
 - `POST /api/simulation/experiment/export/preview` — validate filters and report subset size, retention, cost, and approximate sharing tokens
 - `POST /api/simulation/experiment/export` — construct one schema-versioned safe JSON document
+- `POST /api/simulation/experiment/export/archive` — manually import the exact
+  generated safe document into the configured local SQLite archive
 - `GET /api/simulation/models` — return the cached, sanitized compatible model catalog
 - `POST /api/simulation/models/refresh` — explicitly refresh that catalog
 - `POST /api/simulation/models/verify` — make one explicit, non-mutating compatibility probe
@@ -191,6 +193,12 @@ Snapshots keep the newest 120 turn records and 120 world events. Observations ex
 
 ## Experiment telemetry and export
 
+World Lab archive writes remain downstream and manual. The browser submits the
+exact current schema-validated generated document; the Game API lazily opens the
+configured archive only for that request, delegates the transactional,
+idempotent import to `packages/experiment-archive`, and closes the handle. The
+archive never becomes simulation authority.
+
 The active experiment has a runtime-validated UUID, start time, versioned authoritative scenario and ordered initial roster, immutable configuration events, initial world, and up to 5,000 complete safe turns. The browser snapshot and world-event list remain capped at 120. Reset creates a new experiment from the current scenario and clears telemetry/cost; no previous experiments survive reset or process restart.
 
 Metrics and filtering are deterministic Game API responsibilities. Schema v10 adds mandatory tick attribution, first-class lost ticks, and per-tick summaries. `modelAttempts` is canonical for provider-call, latency, token, and cost totals so repairs and transient retries are not undercounted. Tick-native and unstarted tick-default experiments export v10; retained sequential experiments remain v9 and cannot mix execution modes. The Game API retains its documented older safe-import support for model configuration.
@@ -231,6 +239,8 @@ the wait.
 The rationale and deferrals are recorded in [ADR 0002](adr/0002-first-visible-llm-invasion.md).
 Personality ownership and reset semantics are recorded in [ADR 0003](adr/0003-session-personality-configuration.md).
 Experiment capture and export semantics are recorded in [ADR 0004](adr/0004-server-owned-experiment-telemetry.md).
+Manual direct SQLite archival of a generated artifact is recorded in
+[ADR 0021](adr/0021-manual-direct-sqlite-export.md).
 Nearby-message authority, observation bounds, and export selection semantics are recorded in [ADR 0005](adr/0005-nearby-agent-messaging.md).
 Contested control, capture, territory authority, and schema-v3 selection semantics are recorded in [ADR 0006](adr/0006-contested-hex-control.md).
 Decoupled communication and schema-v4 selection semantics are recorded in [ADR 0007](adr/0007-decoupled-world-communication.md).

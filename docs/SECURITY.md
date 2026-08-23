@@ -87,6 +87,12 @@ Actual cost is accepted only from OpenRouter's safe `usage.cost`. Missing cost i
 
 The offline experiment archive adds local persistence only for complete schema-validated safe exports and explicitly curated Markdown notes. Imports scan for prohibited credential/private-reasoning fields and recognizable credential values before a transaction begins; failures roll back. Both the canonical `.hexzero/` and compatible legacy `.agentborne/` database locations are ignored. The CLI exposes bounded typed queries, not arbitrary SQL, and adds no MCP, embedding, vector-store, or network-listener surface.
 
+World Lab may manually submit only the exact current generated export artifact
+to a narrow archive endpoint. The browser cannot supply a database path or SQL.
+The endpoint returns bounded counts and an experiment ID, never the resolved
+filesystem path, and uses safe invalid-artifact, rejection, and persistence
+errors without underlying diagnostics.
+
 ## Reporting
 
 This is a private repository. Report suspected vulnerabilities privately to the repository owners rather than opening a public issue.

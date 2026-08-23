@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@hexzero/agent-runtime": "workspace:*",
+    "@hexzero/experiment-archive": "workspace:*",
     "@hexzero/shared": "workspace:*",
     "@hexzero/world-engine": "workspace:*",
     "@hono/node-server": "2.1.0",

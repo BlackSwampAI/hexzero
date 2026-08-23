@@ -8,6 +8,8 @@ import {
   type AgentProvider,
 } from '@hexzero/agent-runtime';
 import {
+  archiveExperimentExportRequestSchema,
+  archiveExperimentExportResponseSchema,
   apiErrorSchema,
   AGENT_DECISION_CONTRACT_VERSION,
   cancelSimulationResponseSchema,
@@ -44,7 +46,15 @@ import {
   locationSearchResponseSchema,
   defaultWorldSetupResponseSchema,
   type ModelVerification,
+  type ArchiveExperimentExportResponse,
+  type ExperimentExportDocument,
 } from '@hexzero/shared';
+import {
+  ArchiveDatabase,
+  ArchivePersistenceError,
+  ExperimentImportError,
+  importExperimentExport,
+} from '@hexzero/experiment-archive';
 import {
   createDevelopmentWorld,
   generateDeterministicRoster,
@@ -65,6 +75,29 @@ export interface AppOptions {
   provider?: AgentProvider;
   catalog?: Pick<OpenRouterModelCatalog, 'getCatalog'>;
   geocoder?: Geocoder;
+  archiveExperimentExport?: (
+    document: ExperimentExportDocument,
+  ) =>
+    ArchiveExperimentExportResponse | Promise<ArchiveExperimentExportResponse>;
+}
+
+async function archiveExperimentExportDefault(
+  document: ExperimentExportDocument,
+): Promise<ArchiveExperimentExportResponse> {
+  const archive = new ArchiveDatabase();
+  try {
+    const report = importExperimentExport(archive, document);
+    return archiveExperimentExportResponseSchema.parse({
+      experimentId: report.experimentId,
+      inserted: report.inserted,
+      existing: report.existing,
+      skipped: report.skipped,
+      rejected: report.rejected,
+      idempotent: report.inserted === 0 && report.rejected === 0,
+    });
+  } finally {
+    archive.close();
+  }
 }
 
 export function resolveProviderModeFromEnvironment(
@@ -106,6 +139,8 @@ export function createApp(options: AppOptions = {}) {
     new OpenRouterModelCatalog({ apiKey: process.env.OPENROUTER_API_KEY });
   const modelVerifications = new Map<string, ModelVerification>();
   const geocoder = options.geocoder ?? new NominatimGeocoder();
+  const archiveExperimentExport =
+    options.archiveExperimentExport ?? archiveExperimentExportDefault;
   const turnMutations = new Map<string, Promise<unknown>>();
   const mutationPromise = <T>(
     context: Context,
@@ -812,6 +847,63 @@ export function createApp(options: AppOptions = {}) {
       );
     } catch (error) {
       return exportErrorResponse(context, error);
+    }
+  });
+
+  app.post('/api/simulation/experiment/export/archive', async (context) => {
+    const request = archiveExperimentExportRequestSchema.safeParse(
+      await context.req.json().catch(() => undefined),
+    );
+    if (!request.success)
+      return context.json(
+        apiErrorSchema.parse({
+          error: {
+            code: 'invalid_artifact',
+            message: 'The generated experiment export artifact is invalid.',
+          },
+        }),
+        400,
+      );
+    try {
+      return context.json(
+        archiveExperimentExportResponseSchema.parse(
+          await archiveExperimentExport(request.data.document),
+        ),
+      );
+    } catch (error) {
+      const persistenceFailure =
+        error instanceof ArchivePersistenceError ||
+        (error instanceof ExperimentImportError &&
+          error.cause instanceof ArchivePersistenceError);
+      if (persistenceFailure)
+        return context.json(
+          apiErrorSchema.parse({
+            error: {
+              code: 'archive_persistence_failed',
+              message: 'The local experiment archive could not be updated.',
+            },
+          }),
+          500,
+        );
+      if (error instanceof ExperimentImportError)
+        return context.json(
+          apiErrorSchema.parse({
+            error: {
+              code: 'archive_rejected',
+              message: 'The experiment archive rejected the export safely.',
+            },
+          }),
+          422,
+        );
+      return context.json(
+        apiErrorSchema.parse({
+          error: {
+            code: 'archive_persistence_failed',
+            message: 'The local experiment archive could not be updated.',
+          },
+        }),
+        500,
+      );
     }
   });
 

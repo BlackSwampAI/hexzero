@@ -55,6 +55,7 @@ import {
   requestedMemoryOperationSchema,
   memoryOperationResultSchema,
   createMemoryId,
+  archiveExperimentExportResponseSchema,
 } from '.';
 
 const agentId = '128f3f38-6b7d-4db7-9e95-751b4ce2681e';
@@ -1307,6 +1308,32 @@ describe('personality mutation contracts', () => {
     expect(
       apiErrorSchema.safeParse({
         error: { code: 'provider_secret', message: 'unsafe' },
+      }).success,
+    ).toBe(false);
+  });
+
+  it('bounds archive-write confirmations and rejects extra fields', () => {
+    const confirmation = {
+      experimentId: '018f3f38-6b7d-7db7-8e95-751b4ce2681e',
+      inserted: 4,
+      existing: 1,
+      skipped: 0,
+      rejected: 0,
+      idempotent: false,
+    };
+    expect(
+      archiveExperimentExportResponseSchema.safeParse(confirmation).success,
+    ).toBe(true);
+    expect(
+      archiveExperimentExportResponseSchema.safeParse({
+        ...confirmation,
+        inserted: -1,
+      }).success,
+    ).toBe(false);
+    expect(
+      archiveExperimentExportResponseSchema.safeParse({
+        ...confirmation,
+        archivePath: '/private/archive.sqlite',
       }).success,
     ).toBe(false);
   });
