@@ -22,6 +22,11 @@ memories. One keep, remember, revise, or forget request shares the existing
 inference and is validated independently; memories are untrusted recollections
 and grant no world authority.
 
+World Lab derives a bounded read-only Behavior Trace from retained turn records.
+It places observation changes, communication and board evidence, legal choices,
+chosen actions, action-pattern changes, and goal/memory continuity together while
+labeling model summaries as self-reported rather than proof of causation.
+
 ## Workspace
 
 | Path                          | Responsibility                                                   |

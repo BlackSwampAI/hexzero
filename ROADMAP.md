@@ -94,7 +94,7 @@ restart persistence, simulated players, threats, and Player Mode remain deferred
 
 ## PR 5 — Goals and memory
 
-Slice A delivers bounded per-agent strategic goals with deterministic revision semantics, safe attribution, and World Lab inspection. Slice B adds an eight-entry compact self-authored memory ledger in the same inference. Semantic/vector memory, embeddings, retrieval/ranking, relationship scores, shared alliance memory, restart persistence, and extra inference calls remain deferred.
+Slice A delivers bounded per-agent strategic goals with deterministic revision semantics, safe attribution, and World Lab inspection. Slice B adds an eight-entry compact self-authored memory ledger in the same inference. Slice C adds a browser-derived bounded Behavior Trace that places observation deltas, retained evidence, legal choices, selected actions, action patterns, and continuity operations together without changing simulation behavior. Semantic/vector memory, embeddings, retrieval/ranking, relationship scores, shared alliance memory, restart persistence, causal claims, simulated players, and extra inference calls remain deferred.
 
 Pre-PR-5 observability slice: add a local append-only SQLite experiment archive, transactional schema-v9 export import, bounded human/Codex queries, normalized comparisons, and FTS-searchable curated notes. The in-memory engine remains authoritative. Crash recovery, restartable simulation state, MCP, embeddings, vector search, and a database browser remain deferred.
 

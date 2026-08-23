@@ -63,6 +63,7 @@ import {
 import { WorldMap } from './world-map';
 import { buildModelOptions } from './model-options';
 import { resolveAgentColor } from './ui-color';
+import { BEHAVIOR_TRACE_LIMIT, deriveBehaviorTrace } from './behavior-trace';
 
 const apiBase =
   process.env.NEXT_PUBLIC_GAME_API_BASE_URL ?? '/api/game/simulation';
@@ -1324,6 +1325,7 @@ export function WorldLab() {
                     mutationDisabled={personalityControlsDisabled}
                     mutationPending={personalityPending}
                     onApplyPersonality={updatePersonality}
+                    onHighlightCell={setSelectedCell}
                     metrics={
                       snapshot.experiment.metrics.byAgent.find(
                         ({ agentId }) => agentId === selectedAgent.id,
@@ -3743,6 +3745,168 @@ function AllianceEventList({
   );
 }
 
+function AgentBehaviorTrace({
+  agent,
+  id,
+  turns,
+  onHighlightCell,
+}: {
+  agent: SimulationSnapshot['world']['agents'][number];
+  id: string;
+  turns: AgentTurnRecord[];
+  onHighlightCell?: (cell: H3Cell) => void;
+}) {
+  const entries = deriveBehaviorTrace(turns, agent.id);
+  return (
+    <section className="behavior-trace-panel" id={id}>
+      <div className="behavior-trace-heading">
+        <div>
+          <h3>Behavior trace</h3>
+          <p>
+            Observation evidence and self-reported summaries show correlation,
+            not proven causation.
+          </p>
+        </div>
+        <span>
+          {entries.length}/{BEHAVIOR_TRACE_LIMIT} retained
+        </span>
+      </div>
+      {entries.length === 0 ? (
+        <p className="muted">No retained behavior records for this agent.</p>
+      ) : (
+        <ol className="behavior-trace" aria-label="Recent behavior trace">
+          {entries.map((entry, index) => {
+            return (
+              <li key={entry.turn.turnNumber}>
+                <details open={index === 0}>
+                  <summary>
+                    <span>
+                      Tick {entry.turn.tickNumber ?? 'legacy'} · turn{' '}
+                      {entry.turn.turnNumber}
+                    </span>
+                    <span className={`outcome ${entry.turn.outcome}`}>
+                      {entry.turn.outcome}
+                    </span>
+                  </summary>
+                  <div className="behavior-trace-body">
+                    <div className="behavior-trace-block">
+                      <strong>What changed</strong>
+                      <ul>
+                        {entry.observedChanges.map((change) => (
+                          <li key={change}>{change}</li>
+                        ))}
+                      </ul>
+                    </div>
+                    <div className="behavior-trace-block">
+                      <strong>
+                        {entry.hasPreviousObservation
+                          ? 'New retained evidence'
+                          : 'Evidence visible at retained baseline'}
+                      </strong>
+                      {entry.evidence.length ? (
+                        <ul>
+                          {entry.evidence.map((evidence, evidenceIndex) => (
+                            <li key={`${evidence.kind}-${evidenceIndex}`}>
+                              {evidence.label}{' '}
+                              {evidence.cell && onHighlightCell && (
+                                <button
+                                  type="button"
+                                  className="trace-cell-button"
+                                  onClick={() =>
+                                    onHighlightCell(evidence.cell!)
+                                  }
+                                >
+                                  Highlight cell
+                                </button>
+                              )}
+                            </li>
+                          ))}
+                          {entry.evidenceTruncated && (
+                            <li>Additional evidence omitted from this view.</li>
+                          )}
+                        </ul>
+                      ) : (
+                        <p>
+                          {entry.hasPreviousObservation
+                            ? 'No new communication or board evidence retained.'
+                            : 'No retained communication or board evidence visible.'}
+                        </p>
+                      )}
+                    </div>
+                    <div className="behavior-trace-decision">
+                      <p>
+                        <strong>Observed cell:</strong>{' '}
+                        {entry.turn.observation.currentCell.cell}{' '}
+                        {onHighlightCell && (
+                          <button
+                            type="button"
+                            className="trace-cell-button"
+                            onClick={() =>
+                              onHighlightCell(
+                                entry.turn.observation.currentCell.cell,
+                              )
+                            }
+                          >
+                            Highlight observed cell
+                          </button>
+                        )}
+                      </p>
+                      <p>
+                        <strong>Legal choices:</strong>{' '}
+                        {entry.legalActions.join(' · ')}
+                      </p>
+                      <p>
+                        <strong>Chosen:</strong> {entry.chosenAction}{' '}
+                        {entry.chosenCell && onHighlightCell && (
+                          <button
+                            type="button"
+                            className="trace-cell-button"
+                            onClick={() => onHighlightCell(entry.chosenCell!)}
+                          >
+                            Highlight chosen cell
+                          </button>
+                        )}
+                      </p>
+                      {entry.actionPattern && (
+                        <p>
+                          <strong>Pattern:</strong> {entry.actionPattern}
+                        </p>
+                      )}
+                      <p>
+                        <strong>
+                          Model summary (self-reported, not proof):
+                        </strong>{' '}
+                        {entry.turn.outcome === 'accepted' ||
+                        entry.turn.outcome === 'rejected'
+                          ? entry.turn.summary
+                          : `${entry.turn.failure.code}: ${entry.turn.failure.message}`}
+                      </p>
+                    </div>
+                    <div className="behavior-trace-block">
+                      <strong>Continuity operations</strong>
+                      {entry.continuity.length ? (
+                        <ul>
+                          {entry.continuity.map((item) => (
+                            <li key={item}>{item}</li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p>
+                          No goal, memory, communication, or diplomacy update.
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </details>
+              </li>
+            );
+          })}
+        </ol>
+      )}
+    </section>
+  );
+}
+
 function AgentInspector({
   agent,
   snapshot,
@@ -3754,6 +3918,7 @@ function AgentInspector({
   mutationDisabled,
   mutationPending,
   onApplyPersonality,
+  onHighlightCell,
   metrics,
   controlledCellCount,
   controlChanges,
@@ -3776,6 +3941,7 @@ function AgentInspector({
     agentId: AgentId,
     personality: string,
   ) => Promise<boolean>;
+  onHighlightCell?: (cell: H3Cell) => void;
   metrics?: SimulationSnapshot['experiment']['metrics']['aggregate'];
   controlledCellCount: number;
   controlChanges: Array<
@@ -3826,6 +3992,7 @@ function AgentInspector({
       turn.agentId === agent.id &&
       turn.memoryOperationResult.requested,
   );
+  const inspectorSectionPrefix = `agent-${agent.id}`;
 
   const apply = async () => {
     const parsed = personalitySchema.safeParse(draft);
@@ -3849,6 +4016,17 @@ function AgentInspector({
           <span className="patient-zero-badge">Patient Zero</span>
         )}
       </h2>
+      <nav
+        className="agent-inspector-nav"
+        aria-label={`${agent.name} inspector sections`}
+      >
+        <a href={`#${inspectorSectionPrefix}-trace`}>Trace</a>
+        <a href={`#${inspectorSectionPrefix}-goals`}>Goals</a>
+        <a href={`#${inspectorSectionPrefix}-memories`}>Memories</a>
+        <a href={`#${inspectorSectionPrefix}-history`}>History</a>
+        <a href={`#${inspectorSectionPrefix}-configuration`}>Configuration</a>
+        <a href={`#${inspectorSectionPrefix}-latest`}>Latest</a>
+      </nav>
       <dl>
         <div>
           <dt>Patient Zero role</dt>
@@ -3903,7 +4081,13 @@ function AgentInspector({
           </dd>
         </div>
       </dl>
-      <h3>Goals</h3>
+      <AgentBehaviorTrace
+        agent={agent}
+        id={`${inspectorSectionPrefix}-trace`}
+        turns={turns}
+        onHighlightCell={onHighlightCell}
+      />
+      <h3 id={`${inspectorSectionPrefix}-goals`}>Goals</h3>
       {currentGoal ? (
         <dl aria-label="Current agent goal">
           <div>
@@ -3944,7 +4128,7 @@ function AgentInspector({
             Agent reason: {latestGoalTurn.goalRevision.reason}
           </p>
         )}
-      <h3>Memories</h3>
+      <h3 id={`${inspectorSectionPrefix}-memories`}>Memories</h3>
       {currentMemory.length ? (
         <ol aria-label="Current agent memories">
           {currentMemory.map((entry) => (
@@ -4026,7 +4210,9 @@ function AgentInspector({
           </span>
         )}
       </div>
-      <h3>Recent territory gains and losses</h3>
+      <h3 id={`${inspectorSectionPrefix}-history`}>
+        Recent territory gains and losses
+      </h3>
       {controlChanges.length === 0 ? (
         <p className="muted">
           No territory gains or losses for this agent yet.
@@ -4105,7 +4291,10 @@ function AgentInspector({
           })}
         </ol>
       )}
-      <div className="personality-heading">
+      <div
+        className="personality-heading"
+        id={`${inspectorSectionPrefix}-configuration`}
+      >
         <h3>Active personality</h3>
         {!editing && (
           <button
@@ -4205,7 +4394,7 @@ function AgentInspector({
         </div>
       )}
       {latestTurn ? (
-        <div className="turn-detail">
+        <div className="turn-detail" id={`${inspectorSectionPrefix}-latest`}>
           <h3>Latest turn</h3>
           <p className={`outcome ${latestTurn.outcome}`}>
             {latestTurn.outcome}
@@ -4382,7 +4571,9 @@ function AgentInspector({
           </details>
         </div>
       ) : (
-        <p className="muted">No completed turn for this agent yet.</p>
+        <p className="muted" id={`${inspectorSectionPrefix}-latest`}>
+          No completed turn for this agent yet.
+        </p>
       )}
       <h3>Recent records</h3>
       <ol className="compact-history">
