@@ -32,6 +32,7 @@ import {
   type AppliedScenario,
   type ExperimentTickSummary,
   type AgentGoalState,
+  type MemoryEntry,
 } from '@hexzero/shared';
 
 export interface ExperimentSource {
@@ -51,6 +52,7 @@ export interface ExperimentSource {
   behaviorConfiguration: BehaviorConfiguration;
   scenario: AppliedScenario;
   agentGoals: readonly { agentId: AgentId; goal: AgentGoalState | null }[];
+  agentMemories: readonly { agentId: AgentId; entries: MemoryEntry[] }[];
 }
 
 export class ExperimentExportValidationError extends Error {
@@ -782,6 +784,9 @@ export function createExperimentExport(
     currentGoals: source.agentGoals
       .filter(({ agentId }) => selectedSet.has(agentId))
       .map((entry) => structuredClone(entry)),
+    currentMemories: source.agentMemories
+      .filter(({ agentId }) => selectedSet.has(agentId))
+      .map((entry) => structuredClone(entry)),
     configurationEvents: source.configurationEvents
       .filter((event) =>
         'type' in event
@@ -1277,6 +1282,10 @@ function exportTurn(
             ? { goalRevision: structuredClone(turn.goalRevision) }
             : {}),
           goalRevisionResult: structuredClone(turn.goalRevisionResult),
+          ...(turn.memoryOperation
+            ? { memoryOperation: structuredClone(turn.memoryOperation) }
+            : {}),
+          memoryOperationResult: structuredClone(turn.memoryOperationResult),
           summary: turn.summary,
           worldActionSummary: turn.worldActionResult.accepted
             ? summarizeEvent(turn.worldActionResult.event)

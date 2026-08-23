@@ -16,6 +16,8 @@ import {
 export const MODEL_SUMMARY_MAX_LENGTH = 240;
 export const GOAL_TEXT_MAX_LENGTH = 160;
 export const GOAL_REVISION_REASON_MAX_LENGTH = 160;
+export const MEMORY_TEXT_MAX_LENGTH = 160;
+export const MEMORY_ENTRY_LIMIT = 8;
 export const MESSAGE_MAX_LENGTH = 280;
 /** Legacy H3-ring range retained only for schema-v5-v9 import compatibility. */
 export const MESSAGE_RANGE = 3;
@@ -40,12 +42,14 @@ export const PREVIOUS_AGENT_DECISION_CONTRACT_VERSION = 'text-flat-json-v4';
 export const FLUID_ALLIANCE_AGENT_DECISION_CONTRACT_VERSION =
   'text-flat-json-v5';
 export const PATIENT_ZERO_AGENT_DECISION_CONTRACT_VERSION = 'text-flat-json-v6';
-export const AGENT_DECISION_CONTRACT_VERSION = 'text-flat-json-v7';
+export const GOAL_AGENT_DECISION_CONTRACT_VERSION = 'text-flat-json-v7';
+export const AGENT_DECISION_CONTRACT_VERSION = 'text-flat-json-v8';
 export const agentDecisionContractVersionSchema = z.enum([
   LEGACY_AGENT_DECISION_CONTRACT_VERSION,
   PREVIOUS_AGENT_DECISION_CONTRACT_VERSION,
   FLUID_ALLIANCE_AGENT_DECISION_CONTRACT_VERSION,
   PATIENT_ZERO_AGENT_DECISION_CONTRACT_VERSION,
+  GOAL_AGENT_DECISION_CONTRACT_VERSION,
   AGENT_DECISION_CONTRACT_VERSION,
 ]);
 export const OBJECTIVE_PROMPT_VERSION = 'durable-influence-v2';
@@ -203,6 +207,162 @@ export const goalRevisionResultSchema = z.union([
     .strict(),
 ]);
 export type GoalRevisionResult = z.infer<typeof goalRevisionResultSchema>;
+
+export const memoryIdSchema = z
+  .string()
+  .regex(/^memory:[0-9a-fA-F-]{36}:[1-9]\d*$/)
+  .superRefine((value, context) => {
+    const finalSeparator = value.lastIndexOf(':');
+    const embeddedAgentId = value.slice('memory:'.length, finalSeparator);
+    if (!agentIdSchema.safeParse(embeddedAgentId).success)
+      context.addIssue({
+        code: 'custom',
+        message: 'Memory ID must embed a valid agent ID.',
+      });
+  })
+  .brand<'MemoryId'>();
+export type MemoryId = z.infer<typeof memoryIdSchema>;
+export function createMemoryId(agentId: AgentId, tick: number): MemoryId {
+  return memoryIdSchema.parse(`memory:${agentId}:${tick}`);
+}
+
+function memoryIdParts(id: MemoryId) {
+  const finalSeparator = id.lastIndexOf(':');
+  return {
+    agentId: id.slice('memory:'.length, finalSeparator),
+    tick: Number(id.slice(finalSeparator + 1)),
+  };
+}
+export const memoryEntrySchema = z
+  .object({
+    id: memoryIdSchema,
+    text: z.string().trim().min(1).max(MEMORY_TEXT_MAX_LENGTH),
+    createdAtTick: z.number().int().positive(),
+    revisedAtTick: z.number().int().positive(),
+  })
+  .strict()
+  .refine((entry) => entry.revisedAtTick >= entry.createdAtTick, {
+    message: 'Memory revision tick cannot precede creation.',
+  });
+export type MemoryEntry = z.infer<typeof memoryEntrySchema>;
+export const memoryLedgerSchema = z
+  .array(memoryEntrySchema)
+  .max(MEMORY_ENTRY_LIMIT)
+  .superRefine((entries, context) => {
+    if (new Set(entries.map(({ id }) => id)).size !== entries.length)
+      context.addIssue({
+        code: 'custom',
+        message: 'Memory IDs must be unique.',
+      });
+    entries.forEach((entry, index) => {
+      if (memoryIdParts(entry.id).tick !== entry.createdAtTick)
+        context.addIssue({
+          code: 'custom',
+          path: [index, 'id'],
+          message: 'Memory ID tick must match its creation tick.',
+        });
+      if (index > 0 && entries[index - 1]!.createdAtTick >= entry.createdAtTick)
+        context.addIssue({
+          code: 'custom',
+          path: [index, 'createdAtTick'],
+          message: 'Memory entries must be in strict creation order.',
+        });
+    });
+  });
+export function memoryLedgerForAgentSchema(agentId: AgentId) {
+  return memoryLedgerSchema.superRefine((entries, context) => {
+    entries.forEach((entry, index) => {
+      if (memoryIdParts(entry.id).agentId !== agentId)
+        context.addIssue({
+          code: 'custom',
+          path: [index, 'id'],
+          message: 'Memory ID must belong to the owning agent.',
+        });
+    });
+  });
+}
+export const memoryOperationSchema = z.enum([
+  'keep',
+  'remember',
+  'revise',
+  'forget',
+]);
+export const requestedMemoryOperationSchema = z.discriminatedUnion(
+  'operation',
+  [
+    z.object({ operation: z.literal('keep') }).strict(),
+    z
+      .object({
+        operation: z.literal('remember'),
+        text: z.string().trim().min(1).max(MEMORY_TEXT_MAX_LENGTH),
+      })
+      .strict(),
+    z
+      .object({
+        operation: z.literal('revise'),
+        memoryId: memoryIdSchema,
+        text: z.string().trim().min(1).max(MEMORY_TEXT_MAX_LENGTH),
+      })
+      .strict(),
+    z
+      .object({ operation: z.literal('forget'), memoryId: memoryIdSchema })
+      .strict(),
+  ],
+);
+export type RequestedMemoryOperation = z.infer<
+  typeof requestedMemoryOperationSchema
+>;
+export const memoryOperationResultSchema = z.union([
+  z.object({ requested: z.literal(false) }).strict(),
+  z
+    .object({
+      requested: z.literal(true),
+      accepted: z.literal(true),
+      operation: z.literal('keep'),
+    })
+    .strict(),
+  z
+    .object({
+      requested: z.literal(true),
+      accepted: z.literal(true),
+      operation: z.literal('remember'),
+      memoryId: memoryIdSchema,
+    })
+    .strict(),
+  z
+    .object({
+      requested: z.literal(true),
+      accepted: z.literal(true),
+      operation: z.literal('revise'),
+      memoryId: memoryIdSchema,
+    })
+    .strict(),
+  z
+    .object({
+      requested: z.literal(true),
+      accepted: z.literal(true),
+      operation: z.literal('forget'),
+      memoryId: memoryIdSchema,
+    })
+    .strict(),
+  z
+    .object({
+      requested: z.literal(true),
+      accepted: z.literal(false),
+      operation: z.literal('remember'),
+      reason: z.literal('memory-full'),
+    })
+    .strict(),
+  z
+    .object({
+      requested: z.literal(true),
+      accepted: z.literal(false),
+      operation: z.enum(['revise', 'forget']),
+      reason: z.literal('memory-not-found'),
+    })
+    .strict(),
+]);
+export type MemoryOperationResult = z.infer<typeof memoryOperationResultSchema>;
 
 export const moveActionSchema = z.object({
   type: z.literal('move'),
@@ -1193,6 +1353,19 @@ const agentObservationObjectSchema = z.object({
     })
     .strict()
     .default({ active: false, availableOperations: ['establish'] }),
+  currentMemory: memoryLedgerSchema.default([]),
+  memoryAvailability: z
+    .object({
+      remember: z.boolean(),
+      revisableMemoryIds: z.array(memoryIdSchema).max(MEMORY_ENTRY_LIMIT),
+      forgettableMemoryIds: z.array(memoryIdSchema).max(MEMORY_ENTRY_LIMIT),
+    })
+    .strict()
+    .default({
+      remember: true,
+      revisableMemoryIds: [],
+      forgettableMemoryIds: [],
+    }),
   currentCell: cellObservationSchema,
   captureEligibility: captureEligibilitySchema,
   actionAvailability: z
@@ -1414,6 +1587,31 @@ export const agentObservationSchema = agentObservationObjectSchema.transform(
         message:
           'Goal availability must exactly match the current goal state in canonical order.',
       });
+    const memoryIds = observation.currentMemory.map(({ id }) => id);
+    const owningMemory = memoryLedgerForAgentSchema(
+      observation.agentId,
+    ).safeParse(observation.currentMemory);
+    if (
+      !owningMemory.success ||
+      observation.memoryAvailability.remember !==
+        observation.currentMemory.length < MEMORY_ENTRY_LIMIT ||
+      observation.memoryAvailability.revisableMemoryIds.length !==
+        memoryIds.length ||
+      observation.memoryAvailability.forgettableMemoryIds.length !==
+        memoryIds.length ||
+      observation.memoryAvailability.revisableMemoryIds.some(
+        (id, index) => id !== memoryIds[index],
+      ) ||
+      observation.memoryAvailability.forgettableMemoryIds.some(
+        (id, index) => id !== memoryIds[index],
+      )
+    )
+      context.addIssue({
+        code: 'custom',
+        path: ['memoryAvailability'],
+        message:
+          'Memory availability must exactly match the canonical current ledger.',
+      });
     return {
       ...observation,
       behavior: observation.behavior ?? {
@@ -1497,6 +1695,7 @@ export const agentDecisionSchema = z
     communication: communicationIntentSchema.nullish(),
     diplomacy: diplomacyIntentSchema.nullish(),
     goalRevision: requestedGoalRevisionSchema.optional(),
+    memoryOperation: requestedMemoryOperationSchema.optional(),
     summary: z.string().trim().min(1).max(MODEL_SUMMARY_MAX_LENGTH),
   })
   .strict();
@@ -1508,6 +1707,7 @@ export const providerDecisionEnvelopeSchema = z
     communication: z.unknown().optional(),
     diplomacy: z.unknown().optional(),
     goalRevision: requestedGoalRevisionSchema.optional(),
+    memoryOperation: requestedMemoryOperationSchema.optional(),
     summary: z.string().trim().min(1).max(MODEL_SUMMARY_MAX_LENGTH),
   })
   .strict();
@@ -1852,6 +2052,10 @@ const completedTurnFields = {
   diplomacyResult: diplomacyResultSchema,
   goalRevision: requestedGoalRevisionSchema.optional(),
   goalRevisionResult: goalRevisionResultSchema.default({ requested: false }),
+  memoryOperation: requestedMemoryOperationSchema.optional(),
+  memoryOperationResult: memoryOperationResultSchema.default({
+    requested: false,
+  }),
 };
 
 export const agentTurnRecordSchema = z
@@ -2231,6 +2435,13 @@ export const simulationSnapshotSchema = z
           .strict(),
       )
       .default([]),
+    agentMemories: z
+      .array(
+        z
+          .object({ agentId: agentIdSchema, entries: memoryLedgerSchema })
+          .strict(),
+      )
+      .default([]),
     turns: z.array(agentTurnRecordSchema).max(120),
     experiment: z.object({
       id: z.uuid().brand<'ExperimentId'>(),
@@ -2304,6 +2515,22 @@ export const simulationSnapshotSchema = z
         code: 'custom',
         path: ['agentGoals'],
         message: 'Goal entries must cover the current roster exactly.',
+      });
+    if (
+      snapshot.agentMemories.length > 0 &&
+      (snapshot.agentMemories.length !== rosterIds.size ||
+        new Set(snapshot.agentMemories.map(({ agentId }) => agentId)).size !==
+          rosterIds.size ||
+        snapshot.agentMemories.some(
+          ({ agentId, entries }) =>
+            !rosterIds.has(agentId) ||
+            !memoryLedgerForAgentSchema(agentId).safeParse(entries).success,
+        ))
+    )
+      context.addIssue({
+        code: 'custom',
+        path: ['agentMemories'],
+        message: 'Memory ledgers must cover the current roster exactly.',
       });
     if (
       snapshot.behaviorConfiguration &&
@@ -2418,6 +2645,10 @@ export const simulationSnapshotSchema = z
       snapshot.agentGoals.length > 0
         ? snapshot.agentGoals
         : snapshot.world.agents.map(({ id }) => ({ agentId: id, goal: null })),
+    agentMemories:
+      snapshot.agentMemories.length > 0
+        ? snapshot.agentMemories
+        : snapshot.world.agents.map(({ id }) => ({ agentId: id, entries: [] })),
     behaviorConfiguration: snapshot.behaviorConfiguration ?? {
       registryVersion: 1 as const,
       assignmentMode: 'balanced-random' as const,
@@ -3081,6 +3312,7 @@ export const experimentExportTurnSchema = z
     communication: communicationIntentSchema.optional(),
     diplomacy: diplomacyIntentSchema.optional(),
     goalRevision: requestedGoalRevisionSchema.optional(),
+    memoryOperation: requestedMemoryOperationSchema.optional(),
     summary: z.string().trim().min(1).max(MODEL_SUMMARY_MAX_LENGTH).optional(),
     worldActionSummary: z.string().trim().min(1).max(300).optional(),
     communicationSummary: z.string().trim().min(1).max(300).optional(),
@@ -3091,6 +3323,7 @@ export const experimentExportTurnSchema = z
     communicationResult: communicationResultSchema.optional(),
     diplomacyResult: diplomacyResultSchema.optional(),
     goalRevisionResult: goalRevisionResultSchema.optional(),
+    memoryOperationResult: memoryOperationResultSchema.optional(),
     failure: providerFailureSchema.optional(),
     provider: providerMetadataSchema.optional(),
     modelAttempts: z.array(modelAttemptSchema).max(1_000).default([]),
@@ -3242,6 +3475,14 @@ export const experimentExportDocumentSchema = z
       )
       .max(WORLD_SCENARIO_LIMITS.maximumAgents)
       .optional(),
+    currentMemories: z
+      .array(
+        z
+          .object({ agentId: agentIdSchema, entries: memoryLedgerSchema })
+          .strict(),
+      )
+      .max(WORLD_SCENARIO_LIMITS.maximumAgents)
+      .optional(),
     initialWorld: experimentExportWorldStateSchema.optional(),
     currentWorld: experimentExportWorldStateSchema.optional(),
     worldEvents: z.array(nonCommunicationWorldEventSchema).optional(),
@@ -3286,6 +3527,27 @@ export const experimentExportDocumentSchema = z
           path: ['currentGoals'],
           message:
             'Current goals must cover every exported agent exactly once.',
+        });
+    }
+    if (document.currentMemories) {
+      const exportedIds = new Set(document.agents.map(({ id }) => id));
+      const selectedIds = new Set(document.selection.selectedAgentIds);
+      if (
+        document.currentMemories.length !== document.agents.length ||
+        new Set(document.currentMemories.map(({ agentId }) => agentId)).size !==
+          document.currentMemories.length ||
+        document.currentMemories.some(
+          ({ agentId, entries }) =>
+            !exportedIds.has(agentId) ||
+            !selectedIds.has(agentId) ||
+            !memoryLedgerForAgentSchema(agentId).safeParse(entries).success,
+        )
+      )
+        context.addIssue({
+          code: 'custom',
+          path: ['currentMemories'],
+          message:
+            'Current memories must cover every exported agent exactly once.',
         });
     }
     const hasTickMetadata = (turn: (typeof document.turns)[number]) =>

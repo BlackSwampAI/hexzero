@@ -75,6 +75,12 @@ async function currentExport(tick = false): Promise<ExperimentExportDocument> {
                 planSummary: 'Expand methodically.',
                 reason: 'Create archive-safe continuity.',
               },
+          memoryOperation: observation.currentMemory.length
+            ? { operation: 'keep' }
+            : {
+                operation: 'remember',
+                text: 'Archive-safe compact memory.',
+              },
           summary: 'Deterministic archive fixture.',
         },
         metadata: {

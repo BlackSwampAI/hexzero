@@ -19,6 +19,7 @@ import {
   experimentExportPreviewSchema,
   experimentModelConfigurationSchema,
   modelSupportsReasoningProfile,
+  createMemoryId,
   updateExperimentModelsRequestSchema,
   updateExperimentBehaviorRequestSchema,
   h3CellSchema,
@@ -33,6 +34,7 @@ import {
   OPENROUTER_429_FALLBACK_BACKOFF_MS,
   WORLD_SCENARIO_LIMITS,
   PATIENT_ZERO_DIPLOMACY_SUMMARY_LIMITS,
+  MEMORY_ENTRY_LIMIT,
   personalitySchema,
   simulationSnapshotSchema,
   type Agent,
@@ -41,6 +43,9 @@ import {
   type AgentGoalState,
   type GoalRevisionResult,
   type RequestedGoalRevision,
+  type MemoryEntry,
+  type MemoryOperationResult,
+  type RequestedMemoryOperation,
   type AgentTurnRecord,
   type ExperimentExportDocument,
   type ExperimentExportPreview,
@@ -185,6 +190,7 @@ export class SimulationService {
   #availableModelIds = new Set<ModelId>();
   #availableModels = new Map<ModelId, CompatibleModel>();
   #agentGoals = new Map<AgentId, AgentGoalState>();
+  #agentMemories = new Map<AgentId, MemoryEntry[]>();
 
   constructor({
     provider,
@@ -285,6 +291,10 @@ export class SimulationService {
         agentId: id,
         goal: structuredClone(this.#agentGoals.get(id) ?? null),
       })),
+      agentMemories: agents.map(({ id }) => ({
+        agentId: id,
+        entries: structuredClone(this.#agentMemories.get(id) ?? []),
+      })),
       turns: this.#turns,
       experiment: {
         id: this.#experimentId,
@@ -324,6 +334,7 @@ export class SimulationService {
     this.#cancellationRequested = false;
     this.#pendingFailedTurn = null;
     this.#agentGoals = new Map();
+    this.#agentMemories = new Map();
     this.#experimentId = experimentIdSchema.parse(this.#createExperimentId());
     this.#experimentStartedAt = this.#now();
     this.#experimentTurns = [];
@@ -462,6 +473,7 @@ export class SimulationService {
     this.#cancellationRequested = false;
     this.#pendingFailedTurn = null;
     this.#agentGoals = new Map();
+    this.#agentMemories = new Map();
     this.#experimentId = experimentIdSchema.parse(this.#createExperimentId());
     this.#experimentStartedAt = this.#now();
     this.#experimentTurns = [];
@@ -1062,6 +1074,8 @@ export class SimulationService {
       };
       const nextGoals = new Map(this.#agentGoals);
       const goalResults = new Map<AgentId, GoalRevisionResult>();
+      const nextMemories = new Map(this.#agentMemories);
+      const memoryResults = new Map<AgentId, MemoryOperationResult>();
       for (const agentId of order) {
         const result = byAgent.get(agentId)!;
         if (result.outcome === 'lost-tick') continue;
@@ -1073,6 +1087,14 @@ export class SimulationService {
         goalResults.set(agentId, applied.result);
         if (applied.goal) nextGoals.set(agentId, applied.goal);
         else nextGoals.delete(agentId);
+        const appliedMemory = applyMemoryOperation(
+          this.#agentMemories.get(agentId) ?? [],
+          result.decision.decision.memoryOperation,
+          agentId,
+          tickNumber,
+        );
+        memoryResults.set(agentId, appliedMemory.result);
+        nextMemories.set(agentId, appliedMemory.entries);
       }
 
       const records = order.map((agentId, index) => {
@@ -1110,6 +1132,8 @@ export class SimulationService {
           diplomacy: diplomacyIntentSchema.safeParse(decision.diplomacy).data,
           goalRevision: decision.goalRevision,
           goalRevisionResult: goalResults.get(agentId),
+          memoryOperation: decision.memoryOperation,
+          memoryOperationResult: memoryResults.get(agentId),
           summary: decision.summary,
           worldActionResult: actionResult,
           communicationResult: communicationResults.get(agentId)!,
@@ -1126,6 +1150,7 @@ export class SimulationService {
         interval,
         order,
         nextGoals,
+        nextMemories,
       );
       this.#status = 'paused';
       return records;
@@ -1159,6 +1184,7 @@ export class SimulationService {
     interval: number,
     order: AgentId[],
     goals: Map<AgentId, AgentGoalState>,
+    memories: Map<AgentId, MemoryEntry[]>,
   ): void {
     this.#state = state;
     this.#completedTickCount = tickNumber;
@@ -1166,6 +1192,7 @@ export class SimulationService {
     this.#lastTickIntervalMinutes = interval;
     this.#resolutionOrder = [...order];
     this.#agentGoals = goals;
+    this.#agentMemories = memories;
     this.#completedTurnCount = records.at(-1)!.turnNumber;
     this.#turns = retainCompleteTickGroups(
       [...this.#turns, ...records],
@@ -1460,6 +1487,12 @@ export class SimulationService {
         providerResult.decision.goalRevision,
         turnNumber,
       );
+      const appliedMemory = applyMemoryOperation(
+        this.#agentMemories.get(agent.id) ?? [],
+        providerResult.decision.memoryOperation,
+        agent.id,
+        turnNumber,
+      );
 
       const completed = {
         turnNumber,
@@ -1473,6 +1506,8 @@ export class SimulationService {
         diplomacy,
         goalRevision: providerResult.decision.goalRevision,
         goalRevisionResult: appliedGoal.result,
+        memoryOperation: providerResult.decision.memoryOperation,
+        memoryOperationResult: appliedMemory.result,
         summary: providerResult.decision.summary,
         worldActionResult: appliedAction.result,
         communicationResult: appliedCommunication.result,
@@ -1513,6 +1548,7 @@ export class SimulationService {
       this.#commitCompletedTurn(record, candidateState, agents.length, {
         agentId: agent.id,
         goal: appliedGoal.goal,
+        memoryEntries: appliedMemory.entries,
       });
       this.#status = 'paused';
       return record;
@@ -1583,7 +1619,11 @@ export class SimulationService {
     record: AgentTurnRecord,
     state: WorldState,
     agentCount: number,
-    goalCommit?: { agentId: AgentId; goal: AgentGoalState | undefined },
+    goalCommit?: {
+      agentId: AgentId;
+      goal: AgentGoalState | undefined;
+      memoryEntries?: MemoryEntry[];
+    },
   ): void {
     const turns = [...this.#turns, record].slice(-MAX_TURN_HISTORY);
     const cursor = (this.#cursor + 1) % agentCount;
@@ -1592,6 +1632,8 @@ export class SimulationService {
     if (goalCommit?.goal)
       this.#agentGoals.set(goalCommit.agentId, goalCommit.goal);
     else if (goalCommit) this.#agentGoals.delete(goalCommit.agentId);
+    if (goalCommit?.memoryEntries)
+      this.#agentMemories.set(goalCommit.agentId, goalCommit.memoryEntries);
     this.#behaviorConfiguration = {
       ...this.#behaviorConfiguration,
       locked: true,
@@ -1697,6 +1739,10 @@ export class SimulationService {
         agentId,
         goal: structuredClone(this.#agentGoals.get(agentId) ?? null),
       })),
+      agentMemories: [...this.#state.agents.keys()].map((agentId) => ({
+        agentId,
+        entries: structuredClone(this.#agentMemories.get(agentId) ?? []),
+      })),
     };
   }
 
@@ -1748,6 +1794,7 @@ export class SimulationService {
     const agent = this.#state.agents.get(agentId);
     if (!agent) throw new Error('The active agent does not exist.');
     const currentGoal = this.#agentGoals.get(agentId) ?? null;
+    const currentMemory = this.#agentMemories.get(agentId) ?? [];
     const stateFor = (cell: H3Cell) => {
       const state = this.#state.hexes.get(cell);
       if (!state) throw new Error('Observation cell is outside the world.');
@@ -1986,6 +2033,12 @@ export class SimulationService {
             availableOperations: ['keep', 'revise', 'complete', 'abandon'],
           }
         : { active: false, availableOperations: ['establish'] },
+      currentMemory: structuredClone(currentMemory),
+      memoryAvailability: {
+        remember: currentMemory.length < MEMORY_ENTRY_LIMIT,
+        revisableMemoryIds: currentMemory.map(({ id }) => id),
+        forgettableMemoryIds: currentMemory.map(({ id }) => id),
+      },
       currentCell: stateFor(agent.currentCell),
       captureEligibility,
       actionAvailability: {
@@ -2646,5 +2699,87 @@ export function applyGoalRevision(
   return {
     goal: undefined,
     result: { requested: true, accepted: true, operation: requested.operation },
+  };
+}
+
+export function applyMemoryOperation(
+  current: readonly MemoryEntry[],
+  requested: RequestedMemoryOperation | undefined,
+  agentId: AgentId,
+  tick: number,
+): { entries: MemoryEntry[]; result: MemoryOperationResult } {
+  const entries = current.map((entry) => structuredClone(entry));
+  if (!requested) return { entries, result: { requested: false } };
+  if (requested.operation === 'keep')
+    return {
+      entries,
+      result: { requested: true, accepted: true, operation: 'keep' },
+    };
+  if (requested.operation === 'remember') {
+    if (entries.length >= MEMORY_ENTRY_LIMIT)
+      return {
+        entries,
+        result: {
+          requested: true,
+          accepted: false,
+          operation: 'remember',
+          reason: 'memory-full',
+        },
+      };
+    const id = createMemoryId(agentId, tick);
+    return {
+      entries: [
+        ...entries,
+        {
+          id,
+          text: requested.text,
+          createdAtTick: tick,
+          revisedAtTick: tick,
+        },
+      ],
+      result: {
+        requested: true,
+        accepted: true,
+        operation: 'remember',
+        memoryId: id,
+      },
+    };
+  }
+  const index = entries.findIndex(({ id }) => id === requested.memoryId);
+  if (index < 0)
+    return {
+      entries,
+      result: {
+        requested: true,
+        accepted: false,
+        operation: requested.operation,
+        reason: 'memory-not-found',
+      },
+    };
+  if (requested.operation === 'forget') {
+    entries.splice(index, 1);
+    return {
+      entries,
+      result: {
+        requested: true,
+        accepted: true,
+        operation: 'forget',
+        memoryId: requested.memoryId,
+      },
+    };
+  }
+  entries[index] = {
+    ...entries[index]!,
+    text: requested.text,
+    revisedAtTick: tick,
+  };
+  return {
+    entries,
+    result: {
+      requested: true,
+      accepted: true,
+      operation: 'revise',
+      memoryId: requested.memoryId,
+    },
   };
 }

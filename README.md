@@ -7,7 +7,7 @@ coordinator; the deterministic default is the first default-roster agent.
 The role receives bounded global strategic information and can send private
 advisory directives, but remains subject to the same movement and world-action
 rules as every other agent. The universal flat provider contract is
-`text-flat-json-v7`; the objective remains `durable-influence-v2`. For every
+`text-flat-json-v8`; the objective remains `durable-influence-v2`. For every
 agent, including Patient Zero, no message is the normal choice unless a message
 adds new decision-relevant value; routine action narration and filler are
 explicitly discouraged.
@@ -16,6 +16,11 @@ Agents may also maintain one bounded, model-authored strategic goal across
 ticks. Goal revisions share the single flat provider response, are independently
 validated, and grant no world authority. Active goals are experiment-local,
 in-memory state and are cleared by reset or process restart.
+
+Each agent also has a process-local ledger of at most eight concise self-authored
+memories. One keep, remember, revise, or forget request shares the existing
+inference and is validated independently; memories are untrusted recollections
+and grant no world authority.
 
 ## Workspace
 

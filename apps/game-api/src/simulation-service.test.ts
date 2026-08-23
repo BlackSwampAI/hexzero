@@ -17,6 +17,7 @@ import {
   agentTurnRecordSchema,
   experimentExportDocumentSchema,
   h3CellSchema,
+  memoryIdSchema,
   type Alliance,
   type AgentId,
   type AgentObservation,
@@ -40,6 +41,7 @@ import {
   SimulationValidationError,
   selectDiplomacyBlockerExamples,
   applyGoalRevision,
+  applyMemoryOperation,
 } from './simulation-service';
 import {
   calculateExperimentMetrics,
@@ -95,6 +97,75 @@ function exportRequest(level: 'minimal' | 'standard' | 'full-safe' | 'custom') {
 }
 
 describe('SimulationService', () => {
+  it('keeps compact memory canonical and rejects full or missing operations independently', () => {
+    const agent = agentIdSchema.parse('128f3f38-6b7d-4db7-9e95-751b4ce2681e');
+    const remembered = applyMemoryOperation(
+      [],
+      { operation: 'remember', text: 'The northern route was blocked.' },
+      agent,
+      1,
+    );
+    expect(remembered).toMatchObject({
+      entries: [
+        {
+          text: 'The northern route was blocked.',
+          createdAtTick: 1,
+          revisedAtTick: 1,
+        },
+      ],
+      result: { accepted: true, operation: 'remember' },
+    });
+    const id = remembered.entries[0]!.id;
+    const revised = applyMemoryOperation(
+      remembered.entries,
+      { operation: 'revise', memoryId: id, text: 'The route reopened.' },
+      agent,
+      2,
+    );
+    expect(revised.entries[0]).toMatchObject({
+      id,
+      text: 'The route reopened.',
+      createdAtTick: 1,
+      revisedAtTick: 2,
+    });
+    expect(remembered.entries[0]!.text).toBe('The northern route was blocked.');
+    expect(
+      applyMemoryOperation(
+        revised.entries,
+        {
+          operation: 'forget',
+          memoryId: memoryIdSchema.parse(
+            'memory:00000000-0000-4000-8000-000000000999:1',
+          ),
+        },
+        agent,
+        3,
+      ).result,
+    ).toMatchObject({ accepted: false, reason: 'memory-not-found' });
+    const full = Array.from({ length: 8 }, (_, index) => ({
+      id: memoryIdSchema.parse(`memory:${agent}:${index + 1}`),
+      text: `Memory ${index + 1}`,
+      createdAtTick: index + 1,
+      revisedAtTick: index + 1,
+    }));
+    expect(
+      applyMemoryOperation(
+        full,
+        { operation: 'remember', text: 'Overflow.' },
+        agent,
+        9,
+      ).result,
+    ).toMatchObject({ accepted: false, reason: 'memory-full' });
+    expect(
+      applyMemoryOperation(
+        revised.entries,
+        { operation: 'forget', memoryId: id },
+        agent,
+        3,
+      ).entries,
+    ).toEqual([]);
+  });
+
   it('keeps, revises, completes, and abandons active goal state deterministically', () => {
     const initial = applyGoalRevision(
       undefined,
@@ -161,11 +232,22 @@ describe('SimulationService', () => {
             planSummary: 'Infect locally before moving outward.',
             reason: 'Create strategic continuity.',
           },
+          memoryOperation: {
+            operation: 'remember',
+            text: 'The corridor plan began here.',
+          },
           summary: 'Establish a corridor goal.',
         },
         {
           worldAction: { type: 'wait' },
           goalRevision: { operation: 'complete', reason: 'No goal exists.' },
+          memoryOperation: {
+            operation: 'revise',
+            memoryId: memoryIdSchema.parse(
+              'memory:00000000-0000-4000-8000-000000000999:1',
+            ),
+            text: 'This memory is unavailable.',
+          },
           summary: 'Wait while requesting an unavailable completion.',
         },
       ]),
@@ -186,6 +268,26 @@ describe('SimulationService', () => {
         .agentGoals.find(({ agentId }) => agentId === established.agentId)
         ?.goal,
     ).toMatchObject({ establishedAtTick: 1, revisedAtTick: 1 });
+    expect(
+      simulation
+        .getSnapshot()
+        .agentMemories.find(({ agentId }) => agentId === established.agentId)
+        ?.entries,
+    ).toEqual([
+      expect.objectContaining({ text: 'The corridor plan began here.' }),
+    ]);
+    simulation.updateAgentPersonality(
+      established.agentId,
+      'A deliberate memory-preservation test personality.',
+    );
+    expect(
+      simulation
+        .getSnapshot()
+        .agentMemories.find(({ agentId }) => agentId === established.agentId)
+        ?.entries,
+    ).toEqual([
+      expect.objectContaining({ text: 'The corridor plan began here.' }),
+    ]);
     simulation.restoreDefaultPersonalities();
     expect(
       simulation
@@ -217,7 +319,37 @@ describe('SimulationService', () => {
     expect(exported.turns[0]).toMatchObject({
       goalRevision: { operation: 'establish' },
       goalRevisionResult: { accepted: true, operation: 'establish' },
+      memoryOperation: { operation: 'remember' },
+      memoryOperationResult: { accepted: true, operation: 'remember' },
     });
+    expect(exported.currentMemories).toContainEqual({
+      agentId: established.agentId,
+      entries: [
+        expect.objectContaining({ text: 'The corridor plan began here.' }),
+      ],
+    });
+    expect(
+      experimentExportDocumentSchema.safeParse({
+        ...exported,
+        currentMemories: [
+          exported.currentMemories![0],
+          exported.currentMemories![0],
+        ],
+      }).success,
+    ).toBe(false);
+    const memorySelectionMismatch = structuredClone(exported);
+    delete memorySelectionMismatch.currentGoals;
+    memorySelectionMismatch.selection.selectedAgentIds =
+      memorySelectionMismatch.selection.selectedAgentIds.slice(1);
+    expect(
+      experimentExportDocumentSchema.safeParse(memorySelectionMismatch).success,
+    ).toBe(false);
+    expect(
+      experimentExportDocumentSchema.safeParse({
+        ...exported,
+        currentMemories: exported.currentMemories!.slice(1),
+      }).success,
+    ).toBe(false);
     simulation.importModelConfiguration(exported);
     expect(
       simulation
@@ -225,6 +357,14 @@ describe('SimulationService', () => {
         .agentGoals.find(({ agentId }) => agentId === established.agentId)
         ?.goal,
     ).toMatchObject({ longTermGoal: 'Control a durable corridor.' });
+    expect(
+      simulation
+        .getSnapshot()
+        .agentMemories.find(({ agentId }) => agentId === established.agentId)
+        ?.entries,
+    ).toEqual([
+      expect.objectContaining({ text: 'The corridor plan began here.' }),
+    ]);
     expect(
       experimentExportDocumentSchema.safeParse({
         ...exported,
@@ -268,11 +408,22 @@ describe('SimulationService', () => {
         operation: 'complete',
         reason: 'goal-not-active',
       },
+      memoryOperationResult: {
+        requested: true,
+        accepted: false,
+        operation: 'revise',
+        reason: 'memory-not-found',
+      },
     });
     simulation.reset();
     expect(simulation.getSnapshot().agentGoals.every(({ goal }) => !goal)).toBe(
       true,
     );
+    expect(
+      simulation
+        .getSnapshot()
+        .agentMemories.every(({ entries }) => entries.length === 0),
+    ).toBe(true);
   });
 
   it('freezes simultaneous goal observations and commits every completed revision together', async () => {
@@ -293,6 +444,10 @@ describe('SimulationService', () => {
               planSummary: 'Wait for this deterministic test.',
               reason: 'Establish initial continuity.',
             },
+            memoryOperation: {
+              operation: 'remember',
+              text: `Initial memory for ${observation.agentName}.`,
+            },
             summary: 'Establish a strategic goal.',
           },
           metadata: {
@@ -307,8 +462,16 @@ describe('SimulationService', () => {
     const records = await simulation.executeNextTick();
     expect(seen).toHaveLength(records.length);
     expect(seen.every(({ currentGoal }) => currentGoal === null)).toBe(true);
+    expect(seen.every(({ currentMemory }) => currentMemory.length === 0)).toBe(
+      true,
+    );
     expect(
       simulation.getSnapshot().agentGoals.every(({ goal }) => goal !== null),
+    ).toBe(true);
+    expect(
+      simulation
+        .getSnapshot()
+        .agentMemories.every(({ entries }) => entries.length === 1),
     ).toBe(true);
     expect(records.every((record) => record.outcome === 'accepted')).toBe(true);
   });
@@ -614,6 +777,10 @@ describe('SimulationService', () => {
               planSummary: 'Wait safely.',
               reason: 'Start continuity.',
             },
+            memoryOperation: {
+              operation: 'remember',
+              text: 'This sibling decision completed.',
+            },
             summary: 'Wait.',
           },
           metadata: {
@@ -640,6 +807,16 @@ describe('SimulationService', () => {
     ).toBeNull();
     expect(
       simulation.getSnapshot().agentGoals.filter(({ goal }) => goal),
+    ).toHaveLength(7);
+    expect(
+      simulation
+        .getSnapshot()
+        .agentMemories.find(({ agentId }) => agentId === failingAgent)?.entries,
+    ).toEqual([]);
+    expect(
+      simulation
+        .getSnapshot()
+        .agentMemories.filter(({ entries }) => entries.length > 0),
     ).toHaveLength(7);
     const exported = simulation.generateExperimentExport({
       ...exportRequest('minimal'),
@@ -696,6 +873,7 @@ describe('SimulationService', () => {
       turns: before.turns,
       world: before.world,
       agentGoals: before.agentGoals,
+      agentMemories: before.agentMemories,
     });
   });
 

@@ -2,6 +2,7 @@
 
 The archive accepts current schema-v10 exports and legacy schema-v9 exports.
 Schema-v10 may add safe goal revision/result and current-goal fields. Current archive imports validate and preserve compatibility while normalized goal analytics remain deferred; the archive never restores active goal state.
+Schema-v10 may also include compact memory requests, results, and current ledgers. The archive accepts these additive fields observationally but does not normalize, rank, retrieve, or restore memory.
 Migration 2 adds nullable tick number, deterministic tick position, virtual
 time, and interval columns so legacy rows remain valid. Schema-v10 lost-tick
 outcomes are preserved as source outcomes; canonical summaries continue to be

@@ -149,6 +149,9 @@ function toWireArguments(content: string): string {
     goalShortTerm: 'Secure the nearby cells.',
     goalPlanSummary: 'Expand methodically from the current position.',
     goalRevisionReason: 'No active strategic goal exists.',
+    memoryOperation: 'keep',
+    memoryId: '',
+    memoryText: '',
     summary: decision.summary,
   });
 }
@@ -292,7 +295,8 @@ describe('OpenRouterAgentProvider', () => {
   it('makes selective communication the universal default without changing wire fields', () => {
     const guidance = buildOpenRouterRequest(observation, TEST_MODEL)
       .messages[0]!.content;
-    expect(guidance).toContain('DECISION CONTRACT (text-flat-json-v7)');
+    expect(guidance).toContain('DECISION CONTRACT (text-flat-json-v8)');
+    expect(guidance).toContain('COMPACT MEMORY');
     expect(guidance).toContain('GOAL CONTINUITY');
     expect(guidance).toContain(
       'communicationType "none" is the normal/default choice',
@@ -382,6 +386,9 @@ describe('OpenRouterAgentProvider', () => {
             goalShortTerm: 'Secure this area.',
             goalPlanSummary: 'Expand one cell at a time.',
             goalRevisionReason: 'No goal is active.',
+            memoryOperation: 'keep',
+            memoryId: '',
+            memoryText: '',
             summary: 'Accept the invitation.',
           }),
         ),
@@ -419,6 +426,9 @@ describe('OpenRouterAgentProvider', () => {
             goalShortTerm: '',
             goalPlanSummary: '',
             goalRevisionReason: '',
+            memoryOperation: 'keep',
+            memoryId: '',
+            memoryText: '',
             summary: 'Keep the goal.',
           }),
         ),
@@ -434,6 +444,139 @@ describe('OpenRouterAgentProvider', () => {
       },
     });
   });
+
+  it('returns safe repair feedback for contradictory v8 memory sentinels', async () => {
+    const provider = new OpenRouterAgentProvider({
+      apiKey: 'secret-test-key',
+      fetchImplementation: vi.fn(async () =>
+        textResponse(
+          JSON.stringify({
+            worldActionType: 'wait',
+            targetCell: '',
+            communicationType: 'none',
+            communicationRecipientId: '',
+            communicationMessage: '',
+            diplomacyType: 'none',
+            diplomacyRecipientId: '',
+            diplomacyProposalId: '',
+            goalOperation: 'keep',
+            goalLongTerm: '',
+            goalShortTerm: '',
+            goalPlanSummary: '',
+            goalRevisionReason: '',
+            memoryOperation: 'remember',
+            memoryId: 'memory:128f3f38-6b7d-4db7-9e95-751b4ce2681e:1',
+            memoryText: 'Remember this.',
+            summary: 'Wait.',
+          }),
+        ),
+      ),
+    });
+    await expect(
+      provider.decide(observation, TEST_MODEL),
+    ).rejects.toMatchObject({
+      failure: {
+        code: 'invalid-decision',
+        retryable: true,
+        validationCodes: ['invalid-action-fields', 'contradictory-fields'],
+      },
+    });
+  });
+
+  it('keeps an invalid memory ID repair code generic and safe', async () => {
+    const provider = new OpenRouterAgentProvider({
+      apiKey: 'secret-test-key',
+      fetchImplementation: vi.fn(async () =>
+        textResponse(
+          JSON.stringify({
+            worldActionType: 'wait',
+            targetCell: '',
+            communicationType: 'none',
+            communicationRecipientId: '',
+            communicationMessage: '',
+            diplomacyType: 'none',
+            diplomacyRecipientId: '',
+            diplomacyProposalId: '',
+            goalOperation: 'keep',
+            goalLongTerm: '',
+            goalShortTerm: '',
+            goalPlanSummary: '',
+            goalRevisionReason: '',
+            memoryOperation: 'forget',
+            memoryId: 'not-a-memory-id',
+            memoryText: '',
+            summary: 'Forget a memory.',
+          }),
+        ),
+      ),
+    });
+    await expect(
+      provider.decide(observation, TEST_MODEL),
+    ).rejects.toMatchObject({
+      failure: {
+        validationCodes: ['invalid-action-fields'],
+      },
+    });
+  });
+
+  it.each([
+    [
+      'remember',
+      '',
+      'The northern route was blocked.',
+      {
+        operation: 'remember',
+        text: 'The northern route was blocked.',
+      },
+    ],
+    [
+      'revise',
+      'memory:128f3f38-6b7d-4db7-9e95-751b4ce2681e:1',
+      'The northern route reopened.',
+      {
+        operation: 'revise',
+        memoryId: 'memory:128f3f38-6b7d-4db7-9e95-751b4ce2681e:1',
+        text: 'The northern route reopened.',
+      },
+    ],
+    [
+      'forget',
+      'memory:128f3f38-6b7d-4db7-9e95-751b4ce2681e:1',
+      '',
+      {
+        operation: 'forget',
+        memoryId: 'memory:128f3f38-6b7d-4db7-9e95-751b4ce2681e:1',
+      },
+    ],
+  ])(
+    'normalizes a successful %s memory operation',
+    (memoryOperation, memoryId, memoryText, expected) => {
+      expect(
+        normalizeFlatDecision({
+          worldActionType: 'wait',
+          targetCell: '',
+          communicationType: 'none',
+          communicationRecipientId: '',
+          communicationMessage: '',
+          diplomacyType: 'none',
+          diplomacyRecipientId: '',
+          diplomacyProposalId: '',
+          goalOperation: 'keep',
+          goalLongTerm: '',
+          goalShortTerm: '',
+          goalPlanSummary: '',
+          goalRevisionReason: '',
+          memoryOperation,
+          memoryId,
+          memoryText,
+          summary: 'Wait.',
+        }),
+      ).toMatchObject({
+        success: true,
+        data: { memoryOperation: expected },
+      });
+    },
+  );
 
   it('preserves an explicit model override', () => {
     expect(
@@ -474,11 +617,11 @@ describe('OpenRouterAgentProvider', () => {
 
   it.each([
     [
-      '```json\n{"worldActionType":"wait","targetCell":"","communicationType":"none","communicationRecipientId":"","communicationMessage":"","diplomacyType":"none","diplomacyRecipientId":"","diplomacyProposalId":"","goalOperation":"keep","goalLongTerm":"","goalShortTerm":"","goalPlanSummary":"","goalRevisionReason":"","summary":"Wait."}\n```',
+      '```json\n{"worldActionType":"wait","targetCell":"","communicationType":"none","communicationRecipientId":"","communicationMessage":"","diplomacyType":"none","diplomacyRecipientId":"","diplomacyProposalId":"","goalOperation":"keep","goalLongTerm":"","goalShortTerm":"","goalPlanSummary":"","goalRevisionReason":"","memoryOperation":"keep","memoryId":"","memoryText":"","summary":"Wait."}\n```',
       'Wait.',
     ],
     [
-      'Decision: {"worldActionType":"wait","targetCell":"","communicationType":"none","communicationRecipientId":"","communicationMessage":"","diplomacyType":"none","diplomacyRecipientId":"","diplomacyProposalId":"","goalOperation":"keep","goalLongTerm":"","goalShortTerm":"","goalPlanSummary":"","goalRevisionReason":"","summary":"Extracted.",}',
+      'Decision: {"worldActionType":"wait","targetCell":"","communicationType":"none","communicationRecipientId":"","communicationMessage":"","diplomacyType":"none","diplomacyRecipientId":"","diplomacyProposalId":"","goalOperation":"keep","goalLongTerm":"","goalShortTerm":"","goalPlanSummary":"","goalRevisionReason":"","memoryOperation":"keep","memoryId":"","memoryText":"","summary":"Extracted.",}',
       'Extracted.',
     ],
   ])(
@@ -512,6 +655,9 @@ describe('OpenRouterAgentProvider', () => {
         goalShortTerm: 'Secure this area.',
         goalPlanSummary: 'Expand one cell at a time.',
         goalRevisionReason: 'No goal is active.',
+        memoryOperation: 'keep',
+        memoryId: '',
+        memoryText: '',
         summary: 'Wait.',
       }),
     ).toMatchObject({
@@ -537,6 +683,9 @@ describe('OpenRouterAgentProvider', () => {
         goalShortTerm: '',
         goalPlanSummary: '',
         goalRevisionReason: '',
+        memoryOperation: 'keep',
+        memoryId: '',
+        memoryText: '',
         summary: 'Wait.',
       }).success,
     ).toBe(false);
