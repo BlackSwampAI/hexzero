@@ -49,7 +49,7 @@ The default basemap is tokenless CARTO Dark Matter with OpenStreetMap and CARTO 
 
 Communication resolves against the authoritative pre-action snapshot. Public chat is globally observable and future-player-visible. Direct messages use H3-center great-circle distance and the scenario's bounded kilometer range. Alliance messages are private to current members regardless of distance. World Lab may inspect private traffic; player-facing contracts must not include that omniscient feed. Equivalent legal moves are ordered reproducibly from world seed, stable agent ID, and logical turn without process randomness.
 
-`apps/game-api` is a Hono service bound conservatively to loopback. Its single in-memory `SimulationService` owns the development session, monotonic completed-turn count, turn cursor, bounded histories, and overlap lock. It exposes:
+`apps/game-api` is a Hono service bound conservatively to loopback. Its single in-memory `SimulationService` owns the development session, monotonic completed-turn count, turn cursor, bounded histories, per-agent strategic goal state, and overlap lock. Goal state is not part of world-engine `Agent` ownership and grants no engine authority. It exposes:
 
 - `GET /api/simulation` — current authoritative snapshot
 - `POST /api/simulation/tick` — one simultaneous decision opportunity for every active roster agent
@@ -88,7 +88,7 @@ counts and truncation flags preserve global shape without a roster-sized
 feasibility expansion. Historical exports may retain a null designation, but
 that read compatibility never creates a coordinator-free live scenario.
 
-The universal `text-flat-json-v6` prompt makes `communicationType: "none"` the
+The universal `text-flat-json-v7` prompt makes `communicationType: "none"` the
 normal choice for ordinary agents and Patient Zero unless a message adds new
 decision-relevant value. Concrete requests or replies, negotiation,
 observed-fact warnings, changed plans, border/conflict coordination, and

@@ -45,6 +45,10 @@ import {
   type CompatibleModel,
   assignBehavior,
   NEUTRAL_AGENT_COLOR,
+  GOAL_TEXT_MAX_LENGTH,
+  agentGoalStateSchema,
+  requestedGoalRevisionSchema,
+  agentDecisionContractVersionSchema,
 } from '.';
 
 const agentId = '128f3f38-6b7d-4db7-9e95-751b4ce2681e';
@@ -256,6 +260,69 @@ const snapshot = {
 };
 
 describe('agent observation and decision schemas', () => {
+  it('bounds goal state and preserves v3-v7 decision attribution', () => {
+    expect(
+      agentGoalStateSchema.safeParse({
+        longTermGoal: 'x'.repeat(GOAL_TEXT_MAX_LENGTH + 1),
+        shortTermGoal: 'Secure the frontier.',
+        planSummary: 'Expand deliberately.',
+        establishedAtTick: 2,
+        revisedAtTick: 1,
+      }).success,
+    ).toBe(false);
+    expect(
+      requestedGoalRevisionSchema.safeParse({
+        operation: 'keep',
+        reason: 'Contradictory extra field.',
+      }).success,
+    ).toBe(false);
+    for (const version of [
+      'text-flat-json-v3',
+      'text-flat-json-v4',
+      'text-flat-json-v5',
+      'text-flat-json-v6',
+      'text-flat-json-v7',
+    ])
+      expect(agentDecisionContractVersionSchema.parse(version)).toBe(version);
+  });
+
+  it('requires exact canonical goal availability while defaulting legacy observations', () => {
+    expect(agentObservationSchema.safeParse(observation).success).toBe(true);
+    const goal = {
+      longTermGoal: 'Hold a durable corridor.',
+      shortTermGoal: 'Secure the frontier.',
+      planSummary: 'Expand methodically.',
+      establishedAtTick: 1,
+      revisedAtTick: 1,
+    };
+    const active = {
+      ...observation,
+      currentGoal: goal,
+      goalAvailability: {
+        active: true,
+        availableOperations: ['keep', 'revise', 'complete', 'abandon'],
+      },
+    };
+    expect(agentObservationSchema.safeParse(active).success).toBe(true);
+    for (const goalAvailability of [
+      {
+        active: false,
+        availableOperations: ['keep', 'revise', 'complete', 'abandon'],
+      },
+      {
+        active: true,
+        availableOperations: ['keep', 'keep', 'complete', 'abandon'],
+      },
+      { active: true, availableOperations: ['keep', 'revise', 'complete'] },
+    ])
+      expect(
+        agentObservationSchema.safeParse({
+          ...active,
+          goalAvailability,
+        }).success,
+      ).toBe(false);
+  });
+
   it('keeps the maximum sparse Patient Zero diplomacy shape within budget', () => {
     const agentIds = Array.from({ length: 32 }, (_, index) =>
       agentIdSchema.parse(
@@ -323,7 +390,7 @@ describe('agent observation and decision schemas', () => {
   });
 
   it('preserves established engine contract identifiers through branding changes', () => {
-    expect(AGENT_DECISION_CONTRACT_VERSION).toBe('text-flat-json-v6');
+    expect(AGENT_DECISION_CONTRACT_VERSION).toBe('text-flat-json-v7');
     expect(PREVIOUS_AGENT_DECISION_CONTRACT_VERSION).toBe('text-flat-json-v4');
     expect(FLUID_ALLIANCE_AGENT_DECISION_CONTRACT_VERSION).toBe(
       'text-flat-json-v5',

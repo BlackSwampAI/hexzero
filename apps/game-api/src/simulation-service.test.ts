@@ -39,6 +39,7 @@ import {
   SimulationTurnCancelledError,
   SimulationValidationError,
   selectDiplomacyBlockerExamples,
+  applyGoalRevision,
 } from './simulation-service';
 import {
   calculateExperimentMetrics,
@@ -94,6 +95,224 @@ function exportRequest(level: 'minimal' | 'standard' | 'full-safe' | 'custom') {
 }
 
 describe('SimulationService', () => {
+  it('keeps, revises, completes, and abandons active goal state deterministically', () => {
+    const initial = applyGoalRevision(
+      undefined,
+      {
+        operation: 'establish',
+        longTermGoal: 'Hold a corridor.',
+        shortTermGoal: 'Infect the frontier.',
+        planSummary: 'Expand north.',
+        reason: 'Begin a plan.',
+      },
+      1,
+    ).goal!;
+    expect(applyGoalRevision(initial, { operation: 'keep' }, 2)).toEqual({
+      goal: initial,
+      result: { requested: true, accepted: true, operation: 'keep' },
+    });
+    const revised = applyGoalRevision(
+      initial,
+      {
+        operation: 'revise',
+        longTermGoal: 'Hold a corridor.',
+        shortTermGoal: 'Turn east.',
+        planSummary: 'Avoid the occupied route.',
+        reason: 'The frontier changed.',
+      },
+      3,
+    );
+    expect(revised.goal).toMatchObject({
+      establishedAtTick: 1,
+      revisedAtTick: 3,
+      shortTermGoal: 'Turn east.',
+    });
+    expect(
+      applyGoalRevision(
+        revised.goal,
+        { operation: 'complete', reason: 'Done.' },
+        4,
+      ),
+    ).toMatchObject({
+      goal: undefined,
+      result: { accepted: true, operation: 'complete' },
+    });
+    expect(
+      applyGoalRevision(
+        revised.goal,
+        { operation: 'abandon', reason: 'Blocked.' },
+        4,
+      ),
+    ).toMatchObject({
+      goal: undefined,
+      result: { accepted: true, operation: 'abandon' },
+    });
+  });
+
+  it('applies bounded goal revisions independently from world actions and clears them on reset', async () => {
+    const simulation = service(
+      new ScriptedAgentProvider([
+        {
+          worldAction: { type: 'wait' },
+          goalRevision: {
+            operation: 'establish',
+            longTermGoal: 'Control a durable corridor.',
+            shortTermGoal: 'Secure the current frontier.',
+            planSummary: 'Infect locally before moving outward.',
+            reason: 'Create strategic continuity.',
+          },
+          summary: 'Establish a corridor goal.',
+        },
+        {
+          worldAction: { type: 'wait' },
+          goalRevision: { operation: 'complete', reason: 'No goal exists.' },
+          summary: 'Wait while requesting an unavailable completion.',
+        },
+      ]),
+    );
+
+    const established = await simulation.executeNextTurn();
+    expect(established).toMatchObject({
+      outcome: 'accepted',
+      goalRevisionResult: {
+        requested: true,
+        accepted: true,
+        operation: 'establish',
+      },
+    });
+    expect(
+      simulation
+        .getSnapshot()
+        .agentGoals.find(({ agentId }) => agentId === established.agentId)
+        ?.goal,
+    ).toMatchObject({ establishedAtTick: 1, revisedAtTick: 1 });
+    simulation.restoreDefaultPersonalities();
+    expect(
+      simulation
+        .getSnapshot()
+        .agentGoals.find(({ agentId }) => agentId === established.agentId)
+        ?.goal,
+    ).toMatchObject({ longTermGoal: 'Control a durable corridor.' });
+    const modelConfiguration = simulation.getSnapshot().modelConfiguration;
+    simulation.updateModelConfiguration({
+      globalModelId: modelConfiguration.globalModelId,
+      globalReasoningProfile: modelConfiguration.globalReasoningProfile,
+      overrides: modelConfiguration.overrides,
+    });
+    expect(
+      simulation
+        .getSnapshot()
+        .agentGoals.find(({ agentId }) => agentId === established.agentId)
+        ?.goal,
+    ).toMatchObject({ longTermGoal: 'Control a durable corridor.' });
+    const exported = simulation.generateExperimentExport(
+      exportRequest('full-safe'),
+    );
+    expect(exported.currentGoals).toContainEqual({
+      agentId: established.agentId,
+      goal: expect.objectContaining({
+        longTermGoal: 'Control a durable corridor.',
+      }),
+    });
+    expect(exported.turns[0]).toMatchObject({
+      goalRevision: { operation: 'establish' },
+      goalRevisionResult: { accepted: true, operation: 'establish' },
+    });
+    simulation.importModelConfiguration(exported);
+    expect(
+      simulation
+        .getSnapshot()
+        .agentGoals.find(({ agentId }) => agentId === established.agentId)
+        ?.goal,
+    ).toMatchObject({ longTermGoal: 'Control a durable corridor.' });
+    expect(
+      experimentExportDocumentSchema.safeParse({
+        ...exported,
+        currentGoals: [exported.currentGoals![0], exported.currentGoals![0]],
+      }).success,
+    ).toBe(false);
+    expect(
+      experimentExportDocumentSchema.safeParse({
+        ...exported,
+        currentGoals: exported.currentGoals!.slice(1),
+      }).success,
+    ).toBe(false);
+    expect(
+      experimentExportDocumentSchema.safeParse({
+        ...exported,
+        currentGoals: Array.from(
+          { length: 33 },
+          () => exported.currentGoals![0],
+        ),
+      }).success,
+    ).toBe(false);
+    expect(
+      experimentExportDocumentSchema.safeParse({
+        ...exported,
+        currentGoals: [
+          {
+            agentId: '00000000-0000-4000-8000-000000000999',
+            goal: null,
+          },
+        ],
+      }).success,
+    ).toBe(false);
+
+    const independentlyRejected = await simulation.executeNextTurn();
+    expect(independentlyRejected).toMatchObject({
+      outcome: 'accepted',
+      worldActionResult: { accepted: true },
+      goalRevisionResult: {
+        requested: true,
+        accepted: false,
+        operation: 'complete',
+        reason: 'goal-not-active',
+      },
+    });
+    simulation.reset();
+    expect(simulation.getSnapshot().agentGoals.every(({ goal }) => !goal)).toBe(
+      true,
+    );
+  });
+
+  it('freezes simultaneous goal observations and commits every completed revision together', async () => {
+    const seen: AgentObservation[] = [];
+    const provider: AgentProvider = {
+      mode: 'scripted-test',
+      model: 'deterministic-script',
+      configured: true,
+      async decide(observation) {
+        seen.push(structuredClone(observation));
+        return {
+          decision: {
+            worldAction: { type: 'wait' },
+            goalRevision: {
+              operation: 'establish',
+              longTermGoal: `Durable influence for ${observation.agentName}.`,
+              shortTermGoal: 'Hold the local frontier.',
+              planSummary: 'Wait for this deterministic test.',
+              reason: 'Establish initial continuity.',
+            },
+            summary: 'Establish a strategic goal.',
+          },
+          metadata: {
+            provider: 'scripted-test',
+            model: 'deterministic-script',
+            latencyMs: 0,
+          },
+        };
+      },
+    };
+    const simulation = service(provider);
+    const records = await simulation.executeNextTick();
+    expect(seen).toHaveLength(records.length);
+    expect(seen.every(({ currentGoal }) => currentGoal === null)).toBe(true);
+    expect(
+      simulation.getSnapshot().agentGoals.every(({ goal }) => goal !== null),
+    ).toBe(true);
+    expect(records.every((record) => record.outcome === 'accepted')).toBe(true);
+  });
+
   it('requires a known Patient Zero at the live setup boundary', () => {
     const simulation = service(
       new ScriptedAgentProvider([
@@ -386,7 +605,17 @@ describe('SimulationService', () => {
             latencyMs: 37,
           });
         return {
-          decision: { worldAction: { type: 'wait' }, summary: 'Wait.' },
+          decision: {
+            worldAction: { type: 'wait' },
+            goalRevision: {
+              operation: 'establish',
+              longTermGoal: 'Preserve durable influence.',
+              shortTermGoal: 'Hold position.',
+              planSummary: 'Wait safely.',
+              reason: 'Start continuity.',
+            },
+            summary: 'Wait.',
+          },
           metadata: {
             provider: 'scripted-test',
             model: 'deterministic-script',
@@ -404,6 +633,14 @@ describe('SimulationService', () => {
       records.filter(({ outcome }) => outcome === 'accepted'),
     ).toHaveLength(7);
     expect(simulation.getSnapshot().tickNumber).toBe(1);
+    expect(
+      simulation
+        .getSnapshot()
+        .agentGoals.find(({ agentId }) => agentId === failingAgent)?.goal,
+    ).toBeNull();
+    expect(
+      simulation.getSnapshot().agentGoals.filter(({ goal }) => goal),
+    ).toHaveLength(7);
     const exported = simulation.generateExperimentExport({
       ...exportRequest('minimal'),
       outcomes: [
@@ -458,6 +695,7 @@ describe('SimulationService', () => {
       virtualTime: before.virtualTime,
       turns: before.turns,
       world: before.world,
+      agentGoals: before.agentGoals,
     });
   });
 

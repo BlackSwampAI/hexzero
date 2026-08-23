@@ -943,6 +943,10 @@ function twelveAgentSnapshot(readyCount = 12): SimulationSnapshot {
       available: index < readyCount,
       ...(index < readyCount ? {} : { issue: 'missing' }),
     })),
+    agentGoals: preview.world.agents.map(({ id }) => ({
+      agentId: id,
+      goal: null,
+    })),
     experiment: {
       ...initial.experiment,
       metrics: {
@@ -1590,8 +1594,9 @@ describe('WorldLab', () => {
   });
 
   it('returns to the latest resolved agent when following is re-enabled', async () => {
+    const base = afterInfection();
     const active = simulationSnapshotSchema.parse({
-      ...initial,
+      ...base,
       turns: [{ ...afterInfection().turns[0]!, agentId: world.agents[3]!.id }],
     });
     vi.stubGlobal(
@@ -1809,6 +1814,87 @@ describe('WorldLab', () => {
         name: /Rook/,
       }),
     ).toBeInTheDocument();
+  });
+
+  it('shows empty and active strategic goal state in the agent inspector', async () => {
+    const agent = initial.world.agents[0]!;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => jsonResponse(initial)),
+    );
+    const emptyUser = userEvent.setup();
+    const emptyRender = render(<WorldLab />);
+    await emptyUser.click(
+      await screen.findByRole('button', {
+        name: new RegExp(`Select agent ${agent.name}`),
+      }),
+    );
+    const emptyInspector = screen.getByLabelText('Agent inspector');
+    expect(
+      within(emptyInspector).getByText('No active strategic goal.'),
+    ).toBeVisible();
+    expect(
+      within(emptyInspector).getByText('No goal operation recorded.'),
+    ).toBeVisible();
+    emptyRender.unmount();
+
+    const base = afterInfection();
+    const active = simulationSnapshotSchema.parse({
+      ...base,
+      agentGoals: base.world.agents.map(({ id }) => ({
+        agentId: id,
+        goal:
+          id === agent.id
+            ? {
+                longTermGoal: 'Hold a durable corridor.',
+                shortTermGoal: 'Secure the frontier.',
+                planSummary: 'Expand methodically.',
+                establishedAtTick: 1,
+                revisedAtTick: 2,
+              }
+            : null,
+      })),
+      turns: base.turns.map((turn) =>
+        turn.agentId === agent.id && turn.outcome === 'accepted'
+          ? {
+              ...turn,
+              goalRevision: {
+                operation: 'establish',
+                longTermGoal: 'Hold a durable corridor.',
+                shortTermGoal: 'Secure the frontier.',
+                planSummary: 'Expand methodically.',
+                reason: 'Start continuity.',
+              },
+              goalRevisionResult: {
+                requested: true,
+                accepted: true,
+                operation: 'establish',
+              },
+            }
+          : turn,
+      ),
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => jsonResponse(active)),
+    );
+    const user = userEvent.setup();
+    render(<WorldLab />);
+    await user.click(
+      await screen.findByRole('button', {
+        name: new RegExp(`Select agent ${agent.name}`),
+      }),
+    );
+    const inspector = screen.getByLabelText('Agent inspector');
+    expect(
+      within(inspector).getByText('Hold a durable corridor.'),
+    ).toBeVisible();
+    expect(
+      within(inspector).getByText('Latest: establish · accepted'),
+    ).toBeVisible();
+    expect(
+      within(inspector).getByText('Agent reason: Start continuity.'),
+    ).toBeVisible();
   });
 
   it('clears visible communications after reset', async () => {
