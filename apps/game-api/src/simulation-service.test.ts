@@ -9,6 +9,7 @@ import {
 import {
   AGENT_DECISION_CONTRACT_VERSION,
   ALLIANCE_COLOR_PALETTE,
+  NEUTRAL_AGENT_COLOR,
   PERSONALITY_MAX_LENGTH,
   PATIENT_ZERO_DIPLOMACY_SUMMARY_LIMITS,
   assignBehavior,
@@ -1542,11 +1543,16 @@ describe('SimulationService', () => {
             },
             diplomacy:
               observation.agentId === emberId
-                ? { type: 'propose-alliance', recipientId: rookId! }
-                : {
-                    type: 'accept-alliance',
-                    proposalId: observation.inboundAllianceProposals[0]!.id,
-                  },
+                ? observation.actingAllianceId
+                  ? { type: 'leave-alliance' }
+                  : { type: 'propose-alliance', recipientId: rookId! }
+                : observation.agentId === rookId &&
+                    observation.inboundAllianceProposals[0]
+                  ? {
+                      type: 'accept-alliance',
+                      proposalId: observation.inboundAllianceProposals[0].id,
+                    }
+                  : undefined,
             summary: 'Exercise all independent components.',
           },
           metadata: {
@@ -1559,6 +1565,11 @@ describe('SimulationService', () => {
       },
     };
     const simulation = service(provider);
+    expect(
+      simulation
+        .generateExperimentExport(exportRequest('minimal'))
+        .currentTerritory?.map(({ effectiveColor }) => effectiveColor),
+    ).toEqual(DEVELOPMENT_AGENT_BLUEPRINTS.map(() => NEUTRAL_AGENT_COLOR));
     const proposed = await simulation.executeNextTurn();
     const formed = await simulation.executeNextTurn();
     expect(proposed).toMatchObject({
@@ -1584,12 +1595,36 @@ describe('SimulationService', () => {
         .slice(0, 2)
         .map(({ effectiveColor }) => effectiveColor),
     ).toEqual(['#0072B2', '#0072B2']);
+    expect(
+      simulation
+        .generateExperimentExport(exportRequest('minimal'))
+        .currentTerritory?.slice(0, 3)
+        .map(({ effectiveColor }) => effectiveColor),
+    ).toEqual(['#0072B2', '#0072B2', NEUTRAL_AGENT_COLOR]);
     expect(formed.observation.inboundAllianceProposals).toHaveLength(1);
     expect(snapshot.experiment.metrics.aggregate).toMatchObject({
       proposalsCreated: 1,
       alliancesFormed: 1,
       alliancesJoined: 2,
     });
+    for (let index = 0; index < 6; index += 1)
+      await simulation.executeNextTurn();
+    const left = await simulation.executeNextTurn();
+    expect(left).toMatchObject({
+      diplomacyResult: {
+        accepted: true,
+        events: expect.arrayContaining([
+          expect.objectContaining({ type: 'agent-left-alliance' }),
+          expect.objectContaining({ type: 'alliance-dissolved' }),
+        ]),
+      },
+    });
+    expect(
+      simulation
+        .generateExperimentExport(exportRequest('minimal'))
+        .currentTerritory?.slice(0, 2)
+        .map(({ effectiveColor }) => effectiveColor),
+    ).toEqual([NEUTRAL_AGENT_COLOR, NEUTRAL_AGENT_COLOR]);
   });
 
   it('keeps an exact eight-agent round robin through 200 completed turns', async () => {

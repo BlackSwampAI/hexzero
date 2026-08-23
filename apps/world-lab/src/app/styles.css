@@ -933,28 +933,11 @@ h2 {
   gap: 5px;
   margin-bottom: 5px;
 }
-.follow-turn-toggle {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 3px 6px;
-  color: #b9c8c3;
-  font-size: 0.72rem;
-}
 .agent-row-title {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 6px;
-}
-.turn-indicator {
-  padding: 1px 5px;
-  border: 1px solid #557168;
-  border-radius: 999px;
-  color: #bfe8d0;
-  font-size: 0.6rem;
-  font-weight: 700;
-  text-transform: uppercase;
 }
 .agent-roster button {
   width: 100%;

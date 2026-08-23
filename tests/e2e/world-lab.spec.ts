@@ -137,8 +137,9 @@ test('runs the complete deterministic World Lab browser flow', async ({
     'Mingle0',
   );
 
-  const followTurn = page.getByRole('checkbox', { name: 'Follow latest' });
-  await expect(followTurn).toBeChecked();
+  await expect(
+    page.getByRole('checkbox', { name: 'Follow latest' }),
+  ).toHaveCount(0);
 
   await page.getByRole('button', { name: 'Collapse activity' }).click();
   await expect(page.locator('.bottom-dock')).toHaveCSS('height', '54px');
@@ -155,7 +156,6 @@ test('runs the complete deterministic World Lab browser flow', async ({
     await expect(markers.nth(index)).toBeVisible();
   }
   await page.getByRole('button', { name: 'Select agent Ember' }).click();
-  await expect(followTurn).not.toBeChecked();
   await expect(page.getByRole('heading', { name: /Ember/ })).toBeVisible();
   const defaultPersonality =
     'You are a forceful expansionist who wants the largest personal territory. Infect open cells aggressively, capture exposed rival territory, and use public messages to pressure or warn competitors. Alliances are temporary strategic tools: propose or accept them when they help contain a stronger rival, honor them while useful, and leave openly when they block expansion. Respond to direct proposals instead of silently ignoring them.';
@@ -175,10 +175,8 @@ test('runs the complete deterministic World Lab browser flow', async ({
     page.getByText(customPersonality, { exact: true }),
   ).toBeVisible();
 
-  await followTurn.check();
   await page.getByRole('button', { name: 'Single tick' }).click();
-  await page.getByRole('button', { name: 'Select agent Ember' }).click();
-  await expect(followTurn).not.toBeChecked();
+  await expect(page.getByRole('heading', { name: /Ember/ })).toBeVisible();
   await page.getByRole('tab', { name: 'Event log' }).click();
   const tickActivity = page.getByText(/Infection .* direct message accepted/);
   await expect(tickActivity).toHaveCount(8);
@@ -363,7 +361,13 @@ test('runs the complete deterministic World Lab browser flow', async ({
   page.once('dialog', (dialog) => dialog.accept());
   await openActions();
   await page.getByRole('button', { name: 'Reset world' }).click();
-  await expect(page.getByText('Tick 0')).toBeVisible();
+  await expect(
+    page.getByRole('button', {
+      name: 'Experiment details. Tick 0, paused',
+    }),
+  ).toBeVisible();
+  await expect(page.getByRole('heading', { name: /Cipher/ })).toBeVisible();
+  await page.getByRole('button', { name: 'Select agent Ember' }).click();
   await expect(
     page.getByText(customPersonality, { exact: true }),
   ).toBeVisible();
@@ -389,14 +393,22 @@ test('runs the complete deterministic World Lab browser flow', async ({
   ).toBeVisible();
 
   await page.getByRole('button', { name: 'Single tick' }).click();
-  await expect(page.getByText('Tick 1', { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole('button', {
+      name: 'Experiment details. Tick 1, paused',
+    }),
+  ).toBeVisible();
   const resetTickActivity = page.getByText(
     /Infection .* direct message accepted/,
   );
   await expect(resetTickActivity).toHaveCount(8);
   await expect(resetTickActivity.first()).toBeVisible();
   await page.getByRole('button', { name: 'Single tick' }).click();
-  await expect(page.getByText('Tick 2', { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole('button', {
+      name: 'Experiment details. Tick 2, paused',
+    }),
+  ).toBeVisible();
   await expect(worldMap).toHaveAttribute(
     'data-rendered-infected-cell-count',
     '8',
@@ -413,7 +425,11 @@ test('runs the complete deterministic World Lab browser flow', async ({
   await expect(
     page.getByText(MINGLE_PERSONALITY, { exact: true }),
   ).toBeVisible();
-  await expect(page.getByText('Tick 2', { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole('button', {
+      name: 'Experiment details. Tick 2, paused',
+    }),
+  ).toBeVisible();
   await expect(worldMap).toHaveAttribute('data-rendered-h3-cell-count', '127');
   await expect(worldMap).toHaveAttribute(
     'data-rendered-infected-cell-count',

@@ -12,6 +12,7 @@ import {
 } from 'react';
 import {
   PERSONALITY_MAX_LENGTH,
+  NEUTRAL_AGENT_COLOR,
   PERSONALITY_PROFILES,
   STRATEGY_PROFILES,
   assignBehavior,
@@ -68,10 +69,8 @@ import { BEHAVIOR_TRACE_LIMIT, deriveBehaviorTrace } from './behavior-trace';
 
 const apiBase =
   process.env.NEXT_PUBLIC_GAME_API_BASE_URL ?? '/api/game/simulation';
-const followTurnStorageKey = 'hexzero.world-lab.follow-turn';
 const runTargetStorageKey = 'hexzero.world-lab.run-target';
 const activityDockStorageKey = 'hexzero.world-lab.activity-dock';
-const legacyFollowTurnStorageKey = 'agentborne.world-lab.follow-turn';
 const legacyRunTargetStorageKey = 'agentborne.world-lab.run-target';
 const legacyActivityDockStorageKey = 'agentborne.world-lab.activity-dock';
 export const runTargets = [5, 10, 25, 50, 100] as const;
@@ -151,8 +150,6 @@ export function WorldLab() {
   const [cancelling, setCancelling] = useState(false);
   const [chatCollapsed, setChatCollapsed] = useState(false);
   const [activityDockLoaded, setActivityDockLoaded] = useState(false);
-  const [followTurn, setFollowTurn] = useState(true);
-  const [followPreferenceLoaded, setFollowPreferenceLoaded] = useState(false);
   const inFlightRef = useRef(false);
   const boundedRunTargetRef = useRef<number | null>(null);
   const completedTurnsRef = useRef(0);
@@ -236,29 +233,6 @@ export function WorldLab() {
     window.sessionStorage.setItem(runTargetStorageKey, String(runTarget));
   }, [runTarget, runTargetLoaded]);
 
-  useEffect(() => {
-    const storedFollowTurn =
-      readStoredPreference(
-        window.localStorage,
-        followTurnStorageKey,
-        legacyFollowTurnStorageKey,
-        (value) => value === 'true' || value === 'false',
-      ) !== 'false';
-    const hydrationTask = window.setTimeout(() => {
-      setFollowTurn(storedFollowTurn);
-      setFollowPreferenceLoaded(true);
-    }, 0);
-    return () => window.clearTimeout(hydrationTask);
-  }, []);
-
-  useEffect(() => {
-    if (!followPreferenceLoaded) return;
-    window.localStorage.setItem(followTurnStorageKey, String(followTurn));
-  }, [followPreferenceLoaded, followTurn]);
-
-  const followedAgentId =
-    snapshot?.turns.at(-1)?.agentId ?? snapshot?.world.agents[0]?.id;
-
   const applySnapshot = useCallback((next: SimulationSnapshot) => {
     completedTurnsRef.current = next.tickNumber;
     setRunTarget((current) =>
@@ -279,7 +253,11 @@ export function WorldLab() {
       setBoundedRunTarget(null);
       boundedRunTargetRef.current = null;
     }
-    setSelectedAgentId((current) => current ?? next.world.agents[0]!.id);
+    setSelectedAgentId((current) =>
+      next.world.agents.some(({ id }) => id === current)
+        ? current
+        : next.world.agents[0]!.id,
+    );
   }, []);
 
   const reconcileAuthoritativeSnapshot = useCallback(async () => {
@@ -640,7 +618,11 @@ export function WorldLab() {
       completedTurnsRef.current = payload.snapshot.tickNumber;
       setSnapshot(payload.snapshot);
       setSelectedCell(null);
-      setSelectedAgentId(payload.snapshot.world.agents[0]!.id);
+      setSelectedAgentId((selected) =>
+        payload.snapshot.world.agents.some(({ id }) => id === selected)
+          ? selected
+          : payload.snapshot.world.agents[0]!.id,
+      );
     } catch {
       setUiError('Reset failed safely. The existing world was left intact.');
     } finally {
@@ -742,13 +724,11 @@ export function WorldLab() {
     );
   }
 
-  const inspectionAgentId =
-    followTurn && followedAgentId ? followedAgentId : selectedAgentId;
+  const inspectionAgentId = selectedAgentId;
   const selectedAgent = snapshot.world.agents.find(
     ({ id }) => id === inspectionAgentId,
   );
   const selectAgentForInspection = (agentId: AgentId) => {
-    setFollowTurn(false);
     setSelectedAgentId(agentId);
     setInspectorTab('agent');
   };
@@ -1188,6 +1168,7 @@ export function WorldLab() {
       </div>
 
       <ExperimentExportPanel
+        snapshot={snapshot}
         agents={snapshot.world.agents}
         disabled={exportMutationPending}
         open={exportOpen}
@@ -1209,7 +1190,7 @@ export function WorldLab() {
             setSelectedAgentId((selected) =>
               next.world.agents.some(({ id }) => id === selected)
                 ? selected
-                : null,
+                : next.world.agents[0]!.id,
             );
             setExportAgentIds((selected) =>
               selected.filter((id) =>
@@ -1227,8 +1208,6 @@ export function WorldLab() {
             <AgentRoster
               snapshot={snapshot}
               selectedAgentId={inspectionAgentId}
-              followTurn={followTurn}
-              onFollowTurnChange={setFollowTurn}
               onSelect={selectAgentForInspection}
             />
             <section className="map-panel" aria-label="Development world map">
@@ -1452,8 +1431,6 @@ export function WorldLab() {
         <AgentsWorkspace
           snapshot={snapshot}
           selectedAgentId={inspectionAgentId}
-          followTurn={followTurn}
-          onFollowTurnChange={setFollowTurn}
           onSelectAgent={selectAgentForInspection}
           onOpenWorldSetup={() => setSetupOpen(true)}
         >
@@ -1539,16 +1516,12 @@ export function WorldLab() {
 function AgentsWorkspace({
   snapshot,
   selectedAgentId,
-  followTurn,
-  onFollowTurnChange,
   onSelectAgent,
   onOpenWorldSetup,
   children,
 }: {
   snapshot: SimulationSnapshot;
   selectedAgentId: AgentId | null;
-  followTurn: boolean;
-  onFollowTurnChange: (follow: boolean) => void;
   onSelectAgent: (agentId: AgentId) => void;
   onOpenWorldSetup: () => void;
   children: ReactNode;
@@ -1561,8 +1534,6 @@ function AgentsWorkspace({
       <AgentRoster
         snapshot={snapshot}
         selectedAgentId={selectedAgentId}
-        followTurn={followTurn}
-        onFollowTurnChange={onFollowTurnChange}
         onSelect={onSelectAgent}
       />
       <div className="agents-configuration">
@@ -1752,8 +1723,8 @@ function RecoveryLog({
             return (
               <li key={turn.turnNumber}>
                 <strong>
-                  Tick {turn.tickNumber ?? 'legacy'} · record {turn.turnNumber}{' '}
-                  · {agent?.name ?? turn.agentId}
+                  {formatRecordSequence(turn)} · record {turn.turnNumber} ·{' '}
+                  {agent?.name ?? turn.agentId}
                 </strong>
                 <span>
                   {turn.failure.code} ·{' '}
@@ -2319,19 +2290,10 @@ function WorldSetupPanel({
                   )
                 }
               />
-              <input
-                aria-label={`${agent.name} color`}
-                type="color"
-                value={agent.color}
-                onChange={(event) =>
-                  replaceRoster(
-                    draft.roster.map((item) =>
-                      item.id === agent.id
-                        ? { ...item, color: event.target.value }
-                        : item,
-                    ),
-                  )
-                }
+              <span
+                aria-label={`${agent.name} starts unaffiliated with neutral color`}
+                className="agent-swatch"
+                style={{ background: NEUTRAL_AGENT_COLOR }}
               />
               <button
                 type="button"
@@ -2661,7 +2623,9 @@ function ModelConsole({
                 >
                   <span
                     className="agent-swatch"
-                    style={{ background: agent.color }}
+                    style={{
+                      background: resolveAgentColor(snapshot, agent.id),
+                    }}
                   />
                   <strong>{agent.name}</strong>
                   <span>
@@ -3172,40 +3136,16 @@ function ModelFacts({ model }: { model: CompatibleModel }) {
 function AgentRoster({
   snapshot,
   selectedAgentId,
-  followTurn,
-  onFollowTurnChange,
   onSelect,
 }: {
   snapshot: SimulationSnapshot;
   selectedAgentId: AgentId | null;
-  followTurn: boolean;
-  onFollowTurnChange: (follow: boolean) => void;
   onSelect: (agentId: AgentId) => void;
 }) {
-  const followedAgentId =
-    snapshot.turns.at(-1)?.agentId ?? snapshot.world.agents[0]!.id;
-  const followedLabel = 'Latest';
-  const rowRefs = useRef(new Map<AgentId, HTMLButtonElement>());
-
-  useEffect(() => {
-    if (!followTurn) return;
-    rowRefs.current
-      .get(followedAgentId)
-      ?.scrollIntoView?.({ block: 'nearest' });
-  }, [followTurn, followedAgentId]);
-
   return (
     <aside className="agent-roster" aria-label="Agent roster">
       <div className="agent-roster-heading">
         <p className="panel-kicker">Agents</p>
-        <label className="follow-turn-toggle">
-          <input
-            type="checkbox"
-            checked={followTurn}
-            onChange={(event) => onFollowTurnChange(event.target.checked)}
-          />
-          <span>Follow latest</span>
-        </label>
       </div>
       {snapshot.world.agents.map((agent) => {
         const territory = snapshot.experiment.currentTerritory.find(
@@ -3224,25 +3164,18 @@ function AgentRoster({
           <button
             type="button"
             aria-pressed={selectedAgentId === agent.id}
-            ref={(element) => {
-              if (element) rowRefs.current.set(agent.id, element);
-              else rowRefs.current.delete(agent.id);
-            }}
             key={agent.id}
             onClick={() => onSelect(agent.id)}
           >
             <span
               className="agent-swatch"
-              style={{ background: alliance?.color ?? agent.color }}
+              style={{ background: resolveAgentColor(snapshot, agent.id) }}
             />
             <span>
               <span className="agent-row-title">
                 <strong>{agent.name}</strong>
                 {agent.id === snapshot.scenario.patientZeroAgentId && (
                   <span className="patient-zero-badge">HEX-0</span>
-                )}
-                {agent.id === followedAgentId && (
-                  <span className="turn-indicator">{followedLabel}</span>
                 )}
               </span>
               <small>
@@ -3382,7 +3315,10 @@ function PrivateComms({
                   >
                     {sender?.name ?? event.agentId}
                   </button>
-                  <small>Turn {turn?.turnNumber ?? '—'} · Delivered</small>
+                  <small>
+                    {formatRecordSequence(turn)} · Delivered ·{' '}
+                    {formatTimestamp(event.occurredAt)}
+                  </small>
                 </div>
                 <p>{event.message}</p>
                 <small>
@@ -3448,8 +3384,11 @@ function PrivateComms({
                   </button>
                   <p>{turn.communicationResult.attempt.message}</p>
                   <small>
-                    Turn {turn.turnNumber} · Rejected:{' '}
-                    {turn.communicationResult.reason}
+                    {formatRecordSequence(turn)} · Rejected:{' '}
+                    {turn.communicationResult.reason} ·{' '}
+                    {formatTimestamp(
+                      turn.communicationResult.attempt.occurredAt,
+                    )}
                   </small>
                 </li>
               );
@@ -3567,7 +3506,7 @@ function PublicWorldChat({
             >
               {events.toReversed().map((event) => {
                 const sender = agents.find(({ id }) => id === event.agentId);
-                const turnNumber = turns.find(
+                const turn = turns.find(
                   (turn) =>
                     turn.outcome !== 'provider-error' &&
                     turn.outcome !== 'lost-tick' &&
@@ -3575,7 +3514,7 @@ function PublicWorldChat({
                     turn.communicationResult.requested &&
                     turn.communicationResult.accepted &&
                     turn.communicationResult.event.id === event.id,
-                )?.turnNumber;
+                );
                 return (
                   <li
                     key={event.id}
@@ -3595,7 +3534,7 @@ function PublicWorldChat({
                         {sender?.name ?? event.agentId}
                       </strong>
                       <small>
-                        Turn {turnNumber ?? '—'} ·{' '}
+                        {formatRecordSequence(turn)} ·{' '}
                         {formatTimestamp(event.occurredAt)}
                       </small>
                     </div>
@@ -3739,9 +3678,23 @@ function AllianceEventList({
   if (!events.length) return <p className="muted">No alliance changes yet.</p>;
   return (
     <ol className="compact-history">
-      {events.slice(-8).map((event) => (
-        <li key={event.id}>{formatAllianceEvent(event, snapshot)}</li>
-      ))}
+      {events.slice(-8).map((event) => {
+        const turn = snapshot.turns.find(
+          (candidate) =>
+            candidate.outcome !== 'provider-error' &&
+            candidate.outcome !== 'lost-tick' &&
+            candidate.outcome !== 'operator-skipped' &&
+            candidate.allianceEvents.some(({ id }) => id === event.id),
+        );
+        return (
+          <li key={event.id}>
+            <span>{formatAllianceEvent(event, snapshot)}</span>
+            <small>
+              {formatRecordSequence(turn)} · {formatTimestamp(event.occurredAt)}
+            </small>
+          </li>
+        );
+      })}
     </ol>
   );
 }
@@ -3782,7 +3735,7 @@ function AgentBehaviorTrace({
                 <details open={index === 0}>
                   <summary>
                     <span>
-                      Tick {entry.turn.tickNumber ?? 'legacy'} · turn{' '}
+                      {formatRecordSequence(entry.turn)} · record{' '}
                       {entry.turn.turnNumber}
                     </span>
                     <span className={`outcome ${entry.turn.outcome}`}>
@@ -3968,6 +3921,7 @@ function AgentInspector({
   const allianceSummary = snapshot.experiment.currentAlliances.find(
     ({ allianceId }) => allianceId === alliance?.id,
   );
+  const agentColor = resolveAgentColor(snapshot, agent.id);
   const pendingProposals = snapshot.world.pendingAllianceProposals.filter(
     ({ proposerAgentId, recipientAgentId }) =>
       proposerAgentId === agent.id || recipientAgentId === agent.id,
@@ -4011,7 +3965,7 @@ function AgentInspector({
     <section className="panel agent-inspector" aria-label="Agent inspector">
       <p className="panel-kicker">Agent inspector</p>
       <h2>
-        <span className="agent-swatch" style={{ background: agent.color }} />
+        <span className="agent-swatch" style={{ background: agentColor }} />
         {agent.name}
         {agent.id === snapshot.scenario.patientZeroAgentId && (
           <span className="patient-zero-badge">Patient Zero</span>
@@ -4044,12 +3998,8 @@ function AgentInspector({
           <dd>{agent.id}</dd>
         </div>
         <div>
-          <dt>Base color</dt>
-          <dd>{agent.color}</dd>
-        </div>
-        <div>
-          <dt>Effective color</dt>
-          <dd>{alliance?.color ?? agent.color}</dd>
+          <dt>Affiliation color</dt>
+          <dd>{agentColor}</dd>
         </div>
         <div>
           <dt>Alliance membership</dt>
@@ -4254,7 +4204,7 @@ function AgentInspector({
               communication.agentId === agent.id ? 'Sent' : 'Received';
             const other =
               communication.agentId === agent.id ? recipient : sender;
-            const turnNumber = turns.find(
+            const turn = turns.find(
               (turn) =>
                 turn.outcome !== 'provider-error' &&
                 turn.outcome !== 'lost-tick' &&
@@ -4262,7 +4212,7 @@ function AgentInspector({
                 turn.communicationResult.requested &&
                 turn.communicationResult.accepted &&
                 turn.communicationResult.event.id === communication.id,
-            )?.turnNumber;
+            );
             return (
               <li
                 key={communication.id}
@@ -4284,7 +4234,7 @@ function AgentInspector({
                 </div>
                 <p>{communication.message}</p>
                 <small>
-                  Turn {turnNumber ?? '—'} ·{' '}
+                  {formatRecordSequence(turn)} ·{' '}
                   {formatTimestamp(communication.occurredAt)}
                 </small>
               </li>
@@ -4504,9 +4454,9 @@ function AgentInspector({
           <details>
             <summary>Latest structured observation</summary>
             <p className="observation-note">
-              Immutable input supplied for tick{' '}
-              {latestTurn.tickNumber ?? 'legacy'} record {latestTurn.turnNumber}
-              . It is not rewritten when the active personality changes.
+              Immutable input supplied for {formatRecordSequence(latestTurn)} ·
+              record {latestTurn.turnNumber}. It is not rewritten when the
+              active personality changes.
             </p>
             {latestTurn.observation.personality !== agent.personality && (
               <p className="observation-difference">
@@ -4584,7 +4534,7 @@ function AgentInspector({
           .toReversed()
           .map((turn) => (
             <li key={turn.turnNumber}>
-              Turn {turn.turnNumber}: {turn.outcome}
+              {formatRecordSequence(turn)}: {turn.outcome}
             </li>
           ))}
       </ol>
@@ -4642,6 +4592,7 @@ const defaultCustomOptions: CustomExportOptions = {
 };
 
 function ExperimentExportPanel({
+  snapshot,
   agents,
   disabled,
   open,
@@ -4650,6 +4601,7 @@ function ExperimentExportPanel({
   onSelectionChange,
   returnFocusRef,
 }: {
+  snapshot: SimulationSnapshot;
   agents: SimulationSnapshot['world']['agents'];
   disabled: boolean;
   open: boolean;
@@ -4965,7 +4917,7 @@ function ExperimentExportPanel({
               />
               <span
                 className="agent-swatch"
-                style={{ background: agent.color }}
+                style={{ background: resolveAgentColor(snapshot, agent.id) }}
               />
               {agent.name}
             </label>
@@ -5349,7 +5301,7 @@ function EventLog({
                     paddingLeft: 8,
                   }}
                 >
-                  <time>#{turn.turnNumber}</time>
+                  <time>{formatRecordSequence(turn)}</time>
                   <span>{formatTurn(turn, agents)}</span>
                   <small>
                     {agents.find(({ id }) => id === turn.agentId)?.name ??
@@ -5462,4 +5414,13 @@ function formatTimestamp(timestamp: string): string {
     minute: '2-digit',
     second: '2-digit',
   });
+}
+
+function formatRecordSequence(
+  turn?: Pick<AgentTurnRecord, 'tickNumber' | 'turnNumber'>,
+): string {
+  if (!turn) return 'Record unavailable';
+  return turn.tickNumber === undefined
+    ? `Turn ${turn.turnNumber}`
+    : `Tick ${turn.tickNumber}`;
 }

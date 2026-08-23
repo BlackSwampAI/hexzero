@@ -5,6 +5,7 @@ import {
   experimentExportRequestSchema,
   experimentMetricsSchema,
   PERSONALITY_PROFILES,
+  NEUTRAL_AGENT_COLOR,
   STRATEGY_PROFILES,
   type Agent,
   type AgentId,
@@ -875,7 +876,7 @@ function currentTerritory(world: WorldSnapshot, agents: readonly Agent[]) {
       name,
       color,
       allianceId: alliance?.id ?? null,
-      effectiveColor: alliance?.color ?? color,
+      effectiveColor: alliance?.color ?? NEUTRAL_AGENT_COLOR,
       controlledCellCount: counts.get(id) ?? 0,
     };
   });
