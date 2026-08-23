@@ -90,3 +90,7 @@ The offline experiment archive adds local persistence only for complete schema-v
 ## Reporting
 
 This is a private repository. Report suspected vulnerabilities privately to the repository owners rather than opening a public issue.
+
+## Agent goal text
+
+Strategic goals and revision reasons are bounded, agent-authored, untrusted data. They are supplied only inside immutable user-observation data, never interpolated into system instructions. The contract requests concise visible summaries and prohibits private chain-of-thought. Goal operations grant no engine authority and cannot bypass world, communication, or diplomacy validation.

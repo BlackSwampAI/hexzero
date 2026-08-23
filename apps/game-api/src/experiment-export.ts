@@ -31,6 +31,7 @@ import {
   type BehaviorConfiguration,
   type AppliedScenario,
   type ExperimentTickSummary,
+  type AgentGoalState,
 } from '@hexzero/shared';
 
 export interface ExperimentSource {
@@ -49,6 +50,7 @@ export interface ExperimentSource {
   modelConfiguration: ExperimentModelConfiguration;
   behaviorConfiguration: BehaviorConfiguration;
   scenario: AppliedScenario;
+  agentGoals: readonly { agentId: AgentId; goal: AgentGoalState | null }[];
 }
 
 export class ExperimentExportValidationError extends Error {
@@ -777,6 +779,9 @@ export function createExperimentExport(
       lastMatchingTurn: filtered.at(-1)?.turnNumber,
     },
     agents: selectedAgents,
+    currentGoals: source.agentGoals
+      .filter(({ agentId }) => selectedSet.has(agentId))
+      .map((entry) => structuredClone(entry)),
     configurationEvents: source.configurationEvents
       .filter((event) =>
         'type' in event
@@ -1268,6 +1273,10 @@ function exportTurn(
           ...(turn.diplomacy
             ? { diplomacy: structuredClone(turn.diplomacy) }
             : {}),
+          ...(turn.goalRevision
+            ? { goalRevision: structuredClone(turn.goalRevision) }
+            : {}),
+          goalRevisionResult: structuredClone(turn.goalRevisionResult),
           summary: turn.summary,
           worldActionSummary: turn.worldActionResult.accepted
             ? summarizeEvent(turn.worldActionResult.event)

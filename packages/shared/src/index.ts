@@ -14,6 +14,8 @@ import {
 } from './behavior';
 
 export const MODEL_SUMMARY_MAX_LENGTH = 240;
+export const GOAL_TEXT_MAX_LENGTH = 160;
+export const GOAL_REVISION_REASON_MAX_LENGTH = 160;
 export const MESSAGE_MAX_LENGTH = 280;
 /** Legacy H3-ring range retained only for schema-v5-v9 import compatibility. */
 export const MESSAGE_RANGE = 3;
@@ -37,11 +39,13 @@ export const LEGACY_AGENT_DECISION_CONTRACT_VERSION = 'text-flat-json-v3';
 export const PREVIOUS_AGENT_DECISION_CONTRACT_VERSION = 'text-flat-json-v4';
 export const FLUID_ALLIANCE_AGENT_DECISION_CONTRACT_VERSION =
   'text-flat-json-v5';
-export const AGENT_DECISION_CONTRACT_VERSION = 'text-flat-json-v6';
+export const PATIENT_ZERO_AGENT_DECISION_CONTRACT_VERSION = 'text-flat-json-v6';
+export const AGENT_DECISION_CONTRACT_VERSION = 'text-flat-json-v7';
 export const agentDecisionContractVersionSchema = z.enum([
   LEGACY_AGENT_DECISION_CONTRACT_VERSION,
   PREVIOUS_AGENT_DECISION_CONTRACT_VERSION,
   FLUID_ALLIANCE_AGENT_DECISION_CONTRACT_VERSION,
+  PATIENT_ZERO_AGENT_DECISION_CONTRACT_VERSION,
   AGENT_DECISION_CONTRACT_VERSION,
 ]);
 export const OBJECTIVE_PROMPT_VERSION = 'durable-influence-v2';
@@ -113,6 +117,92 @@ export type AgentProfile = z.infer<typeof agentProfileSchema>;
 
 export const agentSchema = agentProfileSchema;
 export type Agent = z.infer<typeof agentSchema>;
+
+const goalTextSchema = z.string().trim().min(1).max(GOAL_TEXT_MAX_LENGTH);
+const goalRevisionReasonSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(GOAL_REVISION_REASON_MAX_LENGTH);
+export const agentGoalStateSchema = z
+  .object({
+    longTermGoal: goalTextSchema,
+    shortTermGoal: goalTextSchema,
+    planSummary: goalTextSchema,
+    establishedAtTick: z.number().int().positive(),
+    revisedAtTick: z.number().int().positive(),
+  })
+  .strict()
+  .refine((goal) => goal.revisedAtTick >= goal.establishedAtTick, {
+    message: 'Goal revision tick cannot precede establishment.',
+  });
+export type AgentGoalState = z.infer<typeof agentGoalStateSchema>;
+
+const suppliedGoalFields = {
+  longTermGoal: goalTextSchema,
+  shortTermGoal: goalTextSchema,
+  planSummary: goalTextSchema,
+};
+export const requestedGoalRevisionSchema = z.discriminatedUnion('operation', [
+  z
+    .object({
+      operation: z.literal('establish'),
+      ...suppliedGoalFields,
+      reason: goalRevisionReasonSchema,
+    })
+    .strict(),
+  z.object({ operation: z.literal('keep') }).strict(),
+  z
+    .object({
+      operation: z.literal('revise'),
+      ...suppliedGoalFields,
+      reason: goalRevisionReasonSchema,
+    })
+    .strict(),
+  z
+    .object({
+      operation: z.literal('complete'),
+      reason: goalRevisionReasonSchema,
+    })
+    .strict(),
+  z
+    .object({
+      operation: z.literal('abandon'),
+      reason: goalRevisionReasonSchema,
+    })
+    .strict(),
+]);
+export type RequestedGoalRevision = z.infer<typeof requestedGoalRevisionSchema>;
+export const goalRevisionOperationSchema = z.enum([
+  'establish',
+  'keep',
+  'revise',
+  'complete',
+  'abandon',
+]);
+export const goalRevisionRejectionCodeSchema = z.enum([
+  'goal-already-active',
+  'goal-not-active',
+]);
+export const goalRevisionResultSchema = z.union([
+  z.object({ requested: z.literal(false) }).strict(),
+  z
+    .object({
+      requested: z.literal(true),
+      accepted: z.literal(true),
+      operation: goalRevisionOperationSchema,
+    })
+    .strict(),
+  z
+    .object({
+      requested: z.literal(true),
+      accepted: z.literal(false),
+      operation: goalRevisionOperationSchema,
+      reason: goalRevisionRejectionCodeSchema,
+    })
+    .strict(),
+]);
+export type GoalRevisionResult = z.infer<typeof goalRevisionResultSchema>;
 
 export const moveActionSchema = z.object({
   type: z.literal('move'),
@@ -1095,6 +1185,14 @@ const agentObservationObjectSchema = z.object({
   agentName: z.string().trim().min(1).max(80),
   personality: z.string().trim().min(1).max(PERSONALITY_MAX_LENGTH),
   behavior: behaviorAssignmentSchema.optional(),
+  currentGoal: agentGoalStateSchema.nullable().default(null),
+  goalAvailability: z
+    .object({
+      active: z.boolean(),
+      availableOperations: z.array(goalRevisionOperationSchema).min(1).max(4),
+    })
+    .strict()
+    .default({ active: false, availableOperations: ['establish'] }),
   currentCell: cellObservationSchema,
   captureEligibility: captureEligibilitySchema,
   actionAvailability: z
@@ -1295,73 +1393,101 @@ const agentObservationObjectSchema = z.object({
 });
 
 export const agentObservationSchema = agentObservationObjectSchema.transform(
-  (observation) => ({
-    ...observation,
-    behavior: observation.behavior ?? {
-      agentId: observation.agentId,
-      personalityId: 'analytical',
-      strategyId: 'adaptive',
-      manual: false,
-    },
-    actionAvailability: observation.actionAvailability ?? {
-      moveTargetCellIds: observation.adjacentCells.map(({ cell }) => cell),
-      moveOptions: [],
-      infect:
-        observation.currentCell.state === 'open'
+  (observation, context) => {
+    const expectedGoalOperations = observation.currentGoal
+      ? ['keep', 'revise', 'complete', 'abandon']
+      : ['establish'];
+    if (
+      observation.goalAvailability.active !==
+        Boolean(observation.currentGoal) ||
+      new Set(observation.goalAvailability.availableOperations).size !==
+        observation.goalAvailability.availableOperations.length ||
+      observation.goalAvailability.availableOperations.length !==
+        expectedGoalOperations.length ||
+      observation.goalAvailability.availableOperations.some(
+        (operation, index) => operation !== expectedGoalOperations[index],
+      )
+    )
+      context.addIssue({
+        code: 'custom',
+        path: ['goalAvailability'],
+        message:
+          'Goal availability must exactly match the current goal state in canonical order.',
+      });
+    return {
+      ...observation,
+      behavior: observation.behavior ?? {
+        agentId: observation.agentId,
+        personalityId: 'analytical',
+        strategyId: 'adaptive',
+        manual: false,
+      },
+      actionAvailability: observation.actionAvailability ?? {
+        moveTargetCellIds: observation.adjacentCells.map(({ cell }) => cell),
+        moveOptions: [],
+        infect:
+          observation.currentCell.state === 'open'
+            ? { available: true as const }
+            : {
+                available: false as const,
+                reason: 'current-cell-already-infected' as const,
+              },
+        capture: observation.captureEligibility.eligible
           ? { available: true as const }
           : {
               available: false as const,
-              reason: 'current-cell-already-infected' as const,
+              reason: observation.captureEligibility.blockedReason,
             },
-      capture: observation.captureEligibility.eligible
-        ? { available: true as const }
-        : {
-            available: false as const,
-            reason: observation.captureEligibility.blockedReason,
-          },
-      wait: { available: true as const },
-    },
-    diplomacyAvailability: observation.diplomacyAvailability ?? {
-      neutral: { available: true as const },
-      propose: {
-        available: false as const,
-        eligibleRecipientAgentIds: [],
-        blockedRecipients: [],
-        reason: 'Authoritative recipient availability was not supplied.',
+        wait: { available: true as const },
       },
-      accept: observation.inboundAllianceProposals.length
-        ? {
-            available: true as const,
-            acceptableProposalIds: observation.inboundAllianceProposals.map(
-              ({ id }) => id,
-            ),
-          }
-        : {
-            available: false as const,
-            acceptableProposalIds: [],
-            reason: 'No acceptable inbound formal alliance proposal exists.',
-          },
-      leave: observation.actingAllianceId
-        ? { available: true as const, allianceId: observation.actingAllianceId }
-        : {
-            available: false as const,
-            allianceId: null,
-            reason: 'The agent is not currently in an alliance.',
-          },
-    },
-    communicationAvailability: observation.communicationAvailability ?? {
-      public: { available: true as const, playerVisible: true as const },
-      direct: {
-        eligibleRecipientAgentIds: observation.nearbyAgents
-          .filter(({ directMessageLegal }) => directMessageLegal)
-          .map(({ id }) => id),
+      diplomacyAvailability: observation.diplomacyAvailability ?? {
+        neutral: { available: true as const },
+        propose: {
+          available: false as const,
+          eligibleRecipientAgentIds: [],
+          blockedRecipients: [],
+          reason: 'Authoritative recipient availability was not supplied.',
+        },
+        accept: observation.inboundAllianceProposals.length
+          ? {
+              available: true as const,
+              acceptableProposalIds: observation.inboundAllianceProposals.map(
+                ({ id }) => id,
+              ),
+            }
+          : {
+              available: false as const,
+              acceptableProposalIds: [],
+              reason: 'No acceptable inbound formal alliance proposal exists.',
+            },
+        leave: observation.actingAllianceId
+          ? {
+              available: true as const,
+              allianceId: observation.actingAllianceId,
+            }
+          : {
+              available: false as const,
+              allianceId: null,
+              reason: 'The agent is not currently in an alliance.',
+            },
       },
-      alliance: observation.actingAllianceId
-        ? { available: true as const, allianceId: observation.actingAllianceId }
-        : { available: false as const, allianceId: null },
-      zero: { available: observation.patientZero.isPatientZero },
-    },
-  }),
+      communicationAvailability: observation.communicationAvailability ?? {
+        public: { available: true as const, playerVisible: true as const },
+        direct: {
+          eligibleRecipientAgentIds: observation.nearbyAgents
+            .filter(({ directMessageLegal }) => directMessageLegal)
+            .map(({ id }) => id),
+        },
+        alliance: observation.actingAllianceId
+          ? {
+              available: true as const,
+              allianceId: observation.actingAllianceId,
+            }
+          : { available: false as const, allianceId: null },
+        zero: { available: observation.patientZero.isPatientZero },
+      },
+    };
+  },
 );
 export type AgentObservation = z.infer<typeof agentObservationSchema>;
 
@@ -1370,6 +1496,7 @@ export const agentDecisionSchema = z
     worldAction: worldActionSchema,
     communication: communicationIntentSchema.nullish(),
     diplomacy: diplomacyIntentSchema.nullish(),
+    goalRevision: requestedGoalRevisionSchema.optional(),
     summary: z.string().trim().min(1).max(MODEL_SUMMARY_MAX_LENGTH),
   })
   .strict();
@@ -1380,6 +1507,7 @@ export const providerDecisionEnvelopeSchema = z
     worldAction: worldActionSchema,
     communication: z.unknown().optional(),
     diplomacy: z.unknown().optional(),
+    goalRevision: requestedGoalRevisionSchema.optional(),
     summary: z.string().trim().min(1).max(MODEL_SUMMARY_MAX_LENGTH),
   })
   .strict();
@@ -1722,6 +1850,8 @@ const completedTurnFields = {
   provider: providerMetadataSchema,
   communicationResult: communicationResultSchema,
   diplomacyResult: diplomacyResultSchema,
+  goalRevision: requestedGoalRevisionSchema.optional(),
+  goalRevisionResult: goalRevisionResultSchema.default({ requested: false }),
 };
 
 export const agentTurnRecordSchema = z
@@ -2091,6 +2221,16 @@ export const simulationSnapshotSchema = z
       .array(resolvedAgentModelSchema)
       .min(WORLD_SCENARIO_LIMITS.minimumAgents)
       .max(WORLD_SCENARIO_LIMITS.maximumAgents),
+    agentGoals: z
+      .array(
+        z
+          .object({
+            agentId: agentIdSchema,
+            goal: agentGoalStateSchema.nullable(),
+          })
+          .strict(),
+      )
+      .default([]),
     turns: z.array(agentTurnRecordSchema).max(120),
     experiment: z.object({
       id: z.uuid().brand<'ExperimentId'>(),
@@ -2152,6 +2292,18 @@ export const simulationSnapshotSchema = z
         code: 'custom',
         path: ['resolvedModels'],
         message: 'Resolved models must cover the current roster exactly.',
+      });
+    if (
+      snapshot.agentGoals.length > 0 &&
+      (snapshot.agentGoals.length !== rosterIds.size ||
+        new Set(snapshot.agentGoals.map(({ agentId }) => agentId)).size !==
+          rosterIds.size ||
+        snapshot.agentGoals.some(({ agentId }) => !rosterIds.has(agentId)))
+    )
+      context.addIssue({
+        code: 'custom',
+        path: ['agentGoals'],
+        message: 'Goal entries must cover the current roster exactly.',
       });
     if (
       snapshot.behaviorConfiguration &&
@@ -2262,6 +2414,10 @@ export const simulationSnapshotSchema = z
   })
   .transform((snapshot) => ({
     ...snapshot,
+    agentGoals:
+      snapshot.agentGoals.length > 0
+        ? snapshot.agentGoals
+        : snapshot.world.agents.map(({ id }) => ({ agentId: id, goal: null })),
     behaviorConfiguration: snapshot.behaviorConfiguration ?? {
       registryVersion: 1 as const,
       assignmentMode: 'balanced-random' as const,
@@ -2924,6 +3080,7 @@ export const experimentExportTurnSchema = z
     worldAction: worldActionSchema.optional(),
     communication: communicationIntentSchema.optional(),
     diplomacy: diplomacyIntentSchema.optional(),
+    goalRevision: requestedGoalRevisionSchema.optional(),
     summary: z.string().trim().min(1).max(MODEL_SUMMARY_MAX_LENGTH).optional(),
     worldActionSummary: z.string().trim().min(1).max(300).optional(),
     communicationSummary: z.string().trim().min(1).max(300).optional(),
@@ -2933,6 +3090,7 @@ export const experimentExportTurnSchema = z
     worldActionResult: worldActionResultSchema.optional(),
     communicationResult: communicationResultSchema.optional(),
     diplomacyResult: diplomacyResultSchema.optional(),
+    goalRevisionResult: goalRevisionResultSchema.optional(),
     failure: providerFailureSchema.optional(),
     provider: providerMetadataSchema.optional(),
     modelAttempts: z.array(modelAttemptSchema).max(1_000).default([]),
@@ -3073,6 +3231,17 @@ export const experimentExportDocumentSchema = z
       .array(allianceTerritorySummarySchema)
       .max(WORLD_SCENARIO_LIMITS.maximumAgents)
       .optional(),
+    currentGoals: z
+      .array(
+        z
+          .object({
+            agentId: agentIdSchema,
+            goal: agentGoalStateSchema.nullable(),
+          })
+          .strict(),
+      )
+      .max(WORLD_SCENARIO_LIMITS.maximumAgents)
+      .optional(),
     initialWorld: experimentExportWorldStateSchema.optional(),
     currentWorld: experimentExportWorldStateSchema.optional(),
     worldEvents: z.array(nonCommunicationWorldEventSchema).optional(),
@@ -3083,6 +3252,42 @@ export const experimentExportDocumentSchema = z
     turns: z.array(experimentExportTurnSchema),
   })
   .superRefine((document, context) => {
+    if (document.currentGoals) {
+      const selectedIds = new Set(document.selection.selectedAgentIds);
+      const agentIds = new Set(document.agents.map(({ id }) => id));
+      if (
+        new Set(document.currentGoals.map(({ agentId }) => agentId)).size !==
+        document.currentGoals.length
+      )
+        context.addIssue({
+          code: 'custom',
+          path: ['currentGoals'],
+          message: 'Current goal agent IDs must be unique.',
+        });
+      if (
+        document.currentGoals.some(
+          ({ agentId }) => !selectedIds.has(agentId) || !agentIds.has(agentId),
+        )
+      )
+        context.addIssue({
+          code: 'custom',
+          path: ['currentGoals'],
+          message: 'Current goals must belong to selected exported agents.',
+        });
+      if (
+        document.currentGoals.length !== document.agents.length ||
+        document.agents.some(
+          ({ id }) =>
+            !document.currentGoals?.some(({ agentId }) => agentId === id),
+        )
+      )
+        context.addIssue({
+          code: 'custom',
+          path: ['currentGoals'],
+          message:
+            'Current goals must cover every exported agent exactly once.',
+        });
+    }
     const hasTickMetadata = (turn: (typeof document.turns)[number]) =>
       turn.tickNumber !== undefined &&
       turn.tickPosition !== undefined &&

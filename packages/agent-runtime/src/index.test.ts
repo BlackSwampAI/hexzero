@@ -144,6 +144,11 @@ function toWireArguments(content: string): string {
     diplomacyType: decision.diplomacy?.type ?? 'none',
     diplomacyRecipientId: decision.diplomacy?.recipientId ?? '',
     diplomacyProposalId: decision.diplomacy?.proposalId ?? '',
+    goalOperation: 'establish',
+    goalLongTerm: 'Build durable influence.',
+    goalShortTerm: 'Secure the nearby cells.',
+    goalPlanSummary: 'Expand methodically from the current position.',
+    goalRevisionReason: 'No active strategic goal exists.',
     summary: decision.summary,
   });
 }
@@ -287,7 +292,8 @@ describe('OpenRouterAgentProvider', () => {
   it('makes selective communication the universal default without changing wire fields', () => {
     const guidance = buildOpenRouterRequest(observation, TEST_MODEL)
       .messages[0]!.content;
-    expect(guidance).toContain('DECISION CONTRACT (text-flat-json-v6)');
+    expect(guidance).toContain('DECISION CONTRACT (text-flat-json-v7)');
+    expect(guidance).toContain('GOAL CONTINUITY');
     expect(guidance).toContain(
       'communicationType "none" is the normal/default choice',
     );
@@ -371,6 +377,11 @@ describe('OpenRouterAgentProvider', () => {
             diplomacyType: 'accept-alliance',
             diplomacyRecipientId: observation.nearbyAgents[0]!.id,
             diplomacyProposalId: '',
+            goalOperation: 'establish',
+            goalLongTerm: 'Build durable influence.',
+            goalShortTerm: 'Secure this area.',
+            goalPlanSummary: 'Expand one cell at a time.',
+            goalRevisionReason: 'No goal is active.',
             summary: 'Accept the invitation.',
           }),
         ),
@@ -385,6 +396,41 @@ describe('OpenRouterAgentProvider', () => {
           'unexpected-alliance-recipient',
           'contradictory-diplomacy-fields',
         ],
+      },
+    });
+  });
+
+  it('returns safe repair feedback for contradictory v7 goal sentinels', async () => {
+    const provider = new OpenRouterAgentProvider({
+      apiKey: 'secret-test-key',
+      fetchImplementation: vi.fn(async () =>
+        textResponse(
+          JSON.stringify({
+            worldActionType: 'wait',
+            targetCell: '',
+            communicationType: 'none',
+            communicationRecipientId: '',
+            communicationMessage: '',
+            diplomacyType: 'none',
+            diplomacyRecipientId: '',
+            diplomacyProposalId: '',
+            goalOperation: 'keep',
+            goalLongTerm: 'Contradictory retained text.',
+            goalShortTerm: '',
+            goalPlanSummary: '',
+            goalRevisionReason: '',
+            summary: 'Keep the goal.',
+          }),
+        ),
+      ),
+    });
+    await expect(
+      provider.decide(observation, TEST_MODEL),
+    ).rejects.toMatchObject({
+      failure: {
+        code: 'invalid-decision',
+        retryable: true,
+        validationCodes: ['invalid-action-fields', 'contradictory-fields'],
       },
     });
   });
@@ -428,11 +474,11 @@ describe('OpenRouterAgentProvider', () => {
 
   it.each([
     [
-      '```json\n{"worldActionType":"wait","targetCell":"","communicationType":"none","communicationRecipientId":"","communicationMessage":"","diplomacyType":"none","diplomacyRecipientId":"","diplomacyProposalId":"","summary":"Wait."}\n```',
+      '```json\n{"worldActionType":"wait","targetCell":"","communicationType":"none","communicationRecipientId":"","communicationMessage":"","diplomacyType":"none","diplomacyRecipientId":"","diplomacyProposalId":"","goalOperation":"keep","goalLongTerm":"","goalShortTerm":"","goalPlanSummary":"","goalRevisionReason":"","summary":"Wait."}\n```',
       'Wait.',
     ],
     [
-      'Decision: {"worldActionType":"wait","targetCell":"","communicationType":"none","communicationRecipientId":"","communicationMessage":"","diplomacyType":"none","diplomacyRecipientId":"","diplomacyProposalId":"","summary":"Extracted.",}',
+      'Decision: {"worldActionType":"wait","targetCell":"","communicationType":"none","communicationRecipientId":"","communicationMessage":"","diplomacyType":"none","diplomacyRecipientId":"","diplomacyProposalId":"","goalOperation":"keep","goalLongTerm":"","goalShortTerm":"","goalPlanSummary":"","goalRevisionReason":"","summary":"Extracted.",}',
       'Extracted.',
     ],
   ])(
@@ -450,7 +496,7 @@ describe('OpenRouterAgentProvider', () => {
     },
   );
 
-  it('keeps the v5 prompt compatible with the prior flat JSON wire shape', () => {
+  it('requires and normalizes the flat v7 goal revision fields', () => {
     expect(
       normalizeFlatDecision({
         worldActionType: 'wait',
@@ -461,12 +507,39 @@ describe('OpenRouterAgentProvider', () => {
         diplomacyType: 'none',
         diplomacyRecipientId: '',
         diplomacyProposalId: '',
+        goalOperation: 'establish',
+        goalLongTerm: 'Build durable influence.',
+        goalShortTerm: 'Secure this area.',
+        goalPlanSummary: 'Expand one cell at a time.',
+        goalRevisionReason: 'No goal is active.',
         summary: 'Wait.',
       }),
     ).toMatchObject({
       success: true,
-      data: { worldAction: { type: 'wait' }, summary: 'Wait.' },
+      data: {
+        worldAction: { type: 'wait' },
+        goalRevision: { operation: 'establish' },
+        summary: 'Wait.',
+      },
     });
+    expect(
+      normalizeFlatDecision({
+        worldActionType: 'wait',
+        targetCell: '',
+        communicationType: 'none',
+        communicationRecipientId: '',
+        communicationMessage: '',
+        diplomacyType: 'none',
+        diplomacyRecipientId: '',
+        diplomacyProposalId: '',
+        goalOperation: 'keep',
+        goalLongTerm: 'contradiction',
+        goalShortTerm: '',
+        goalPlanSummary: '',
+        goalRevisionReason: '',
+        summary: 'Wait.',
+      }).success,
+    ).toBe(false);
   });
 
   it.each([

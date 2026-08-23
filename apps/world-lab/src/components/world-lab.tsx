@@ -3785,6 +3785,10 @@ function AgentInspector({
     >
   >;
 }) {
+  type CompletedAgentTurnRecord = Extract<
+    AgentTurnRecord,
+    { outcome: 'accepted' | 'rejected' }
+  >;
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(agent.personality);
   const [editError, setEditError] = useState<string | null>(null);
@@ -3803,6 +3807,15 @@ function AgentInspector({
   );
   const resolvedModel = snapshot.resolvedModels.find(
     ({ agentId }) => agentId === agent.id,
+  );
+  const currentGoal = snapshot.agentGoals.find(
+    ({ agentId }) => agentId === agent.id,
+  )?.goal;
+  const latestGoalTurn = turns.findLast(
+    (turn): turn is CompletedAgentTurnRecord =>
+      (turn.outcome === 'accepted' || turn.outcome === 'rejected') &&
+      turn.agentId === agent.id &&
+      turn.goalRevisionResult.requested,
   );
 
   const apply = async () => {
@@ -3881,6 +3894,47 @@ function AgentInspector({
           </dd>
         </div>
       </dl>
+      <h3>Goals</h3>
+      {currentGoal ? (
+        <dl aria-label="Current agent goal">
+          <div>
+            <dt>Long-term</dt>
+            <dd>{currentGoal.longTermGoal}</dd>
+          </div>
+          <div>
+            <dt>Short-term</dt>
+            <dd>{currentGoal.shortTermGoal}</dd>
+          </div>
+          <div>
+            <dt>Plan</dt>
+            <dd>{currentGoal.planSummary}</dd>
+          </div>
+          <div>
+            <dt>Attribution</dt>
+            <dd>
+              Established tick {currentGoal.establishedAtTick}; revised tick{' '}
+              {currentGoal.revisedAtTick}
+            </dd>
+          </div>
+        </dl>
+      ) : (
+        <p className="muted">No active strategic goal.</p>
+      )}
+      <p aria-label="Latest goal result">
+        {latestGoalTurn && latestGoalTurn.goalRevisionResult.requested
+          ? `Latest: ${latestGoalTurn.goalRevisionResult.operation} · ${
+              latestGoalTurn.goalRevisionResult.accepted
+                ? 'accepted'
+                : `rejected (${latestGoalTurn.goalRevisionResult.reason})`
+            }`
+          : 'No goal operation recorded.'}
+      </p>
+      {latestGoalTurn?.goalRevision &&
+        'reason' in latestGoalTurn.goalRevision && (
+          <p aria-label="Latest agent goal reason">
+            Agent reason: {latestGoalTurn.goalRevision.reason}
+          </p>
+        )}
       <h3>Relevant pending proposals</h3>
       {pendingProposals.length ? (
         <ol>

@@ -38,6 +38,9 @@ import {
   type Agent,
   type AgentId,
   type AgentObservation,
+  type AgentGoalState,
+  type GoalRevisionResult,
+  type RequestedGoalRevision,
   type AgentTurnRecord,
   type ExperimentExportDocument,
   type ExperimentExportPreview,
@@ -181,6 +184,7 @@ export class SimulationService {
   #scenario: AppliedScenario;
   #availableModelIds = new Set<ModelId>();
   #availableModels = new Map<ModelId, CompatibleModel>();
+  #agentGoals = new Map<AgentId, AgentGoalState>();
 
   constructor({
     provider,
@@ -277,6 +281,10 @@ export class SimulationService {
       modelConfiguration: this.#modelConfiguration,
       behaviorConfiguration: this.#behaviorConfiguration,
       resolvedModels: agents.map(({ id }) => this.#resolvedModel(id)),
+      agentGoals: agents.map(({ id }) => ({
+        agentId: id,
+        goal: structuredClone(this.#agentGoals.get(id) ?? null),
+      })),
       turns: this.#turns,
       experiment: {
         id: this.#experimentId,
@@ -315,6 +323,7 @@ export class SimulationService {
     this.#activeRequestController = null;
     this.#cancellationRequested = false;
     this.#pendingFailedTurn = null;
+    this.#agentGoals = new Map();
     this.#experimentId = experimentIdSchema.parse(this.#createExperimentId());
     this.#experimentStartedAt = this.#now();
     this.#experimentTurns = [];
@@ -452,6 +461,7 @@ export class SimulationService {
     this.#activeRequestController = null;
     this.#cancellationRequested = false;
     this.#pendingFailedTurn = null;
+    this.#agentGoals = new Map();
     this.#experimentId = experimentIdSchema.parse(this.#createExperimentId());
     this.#experimentStartedAt = this.#now();
     this.#experimentTurns = [];
@@ -1050,6 +1060,20 @@ export class SimulationService {
         ...state,
         events: state.events.slice(-MAX_WORLD_EVENT_HISTORY),
       };
+      const nextGoals = new Map(this.#agentGoals);
+      const goalResults = new Map<AgentId, GoalRevisionResult>();
+      for (const agentId of order) {
+        const result = byAgent.get(agentId)!;
+        if (result.outcome === 'lost-tick') continue;
+        const applied = applyGoalRevision(
+          this.#agentGoals.get(agentId),
+          result.decision.decision.goalRevision,
+          tickNumber,
+        );
+        goalResults.set(agentId, applied.result);
+        if (applied.goal) nextGoals.set(agentId, applied.goal);
+        else nextGoals.delete(agentId);
+      }
 
       const records = order.map((agentId, index) => {
         const result = byAgent.get(agentId)!;
@@ -1084,6 +1108,8 @@ export class SimulationService {
             decision.communication,
           ).data,
           diplomacy: diplomacyIntentSchema.safeParse(decision.diplomacy).data,
+          goalRevision: decision.goalRevision,
+          goalRevisionResult: goalResults.get(agentId),
           summary: decision.summary,
           worldActionResult: actionResult,
           communicationResult: communicationResults.get(agentId)!,
@@ -1099,6 +1125,7 @@ export class SimulationService {
         virtualTime,
         interval,
         order,
+        nextGoals,
       );
       this.#status = 'paused';
       return records;
@@ -1131,12 +1158,14 @@ export class SimulationService {
     virtualTime: string,
     interval: number,
     order: AgentId[],
+    goals: Map<AgentId, AgentGoalState>,
   ): void {
     this.#state = state;
     this.#completedTickCount = tickNumber;
     this.#virtualTime = virtualTime;
     this.#lastTickIntervalMinutes = interval;
     this.#resolutionOrder = [...order];
+    this.#agentGoals = goals;
     this.#completedTurnCount = records.at(-1)!.turnNumber;
     this.#turns = retainCompleteTickGroups(
       [...this.#turns, ...records],
@@ -1426,6 +1455,11 @@ export class SimulationService {
         ...stateAfterExpiration,
         events: stateAfterExpiration.events.slice(-MAX_WORLD_EVENT_HISTORY),
       };
+      const appliedGoal = applyGoalRevision(
+        this.#agentGoals.get(agent.id),
+        providerResult.decision.goalRevision,
+        turnNumber,
+      );
 
       const completed = {
         turnNumber,
@@ -1437,6 +1471,8 @@ export class SimulationService {
         worldAction: providerResult.decision.worldAction,
         communication,
         diplomacy,
+        goalRevision: providerResult.decision.goalRevision,
+        goalRevisionResult: appliedGoal.result,
         summary: providerResult.decision.summary,
         worldActionResult: appliedAction.result,
         communicationResult: appliedCommunication.result,
@@ -1474,7 +1510,10 @@ export class SimulationService {
       );
 
       this.#pendingFailedTurn = null;
-      this.#commitCompletedTurn(record, candidateState, agents.length);
+      this.#commitCompletedTurn(record, candidateState, agents.length, {
+        agentId: agent.id,
+        goal: appliedGoal.goal,
+      });
       this.#status = 'paused';
       return record;
     } catch (error) {
@@ -1544,11 +1583,15 @@ export class SimulationService {
     record: AgentTurnRecord,
     state: WorldState,
     agentCount: number,
+    goalCommit?: { agentId: AgentId; goal: AgentGoalState | undefined },
   ): void {
     const turns = [...this.#turns, record].slice(-MAX_TURN_HISTORY);
     const cursor = (this.#cursor + 1) % agentCount;
 
     this.#state = state;
+    if (goalCommit?.goal)
+      this.#agentGoals.set(goalCommit.agentId, goalCommit.goal);
+    else if (goalCommit) this.#agentGoals.delete(goalCommit.agentId);
     this.#behaviorConfiguration = {
       ...this.#behaviorConfiguration,
       locked: true,
@@ -1650,6 +1693,10 @@ export class SimulationService {
       scenario: this.#scenario,
       schemaVersion:
         this.#completedTickCount > 0 || this.#completedTurnCount === 0 ? 10 : 9,
+      agentGoals: [...this.#state.agents.keys()].map((agentId) => ({
+        agentId,
+        goal: structuredClone(this.#agentGoals.get(agentId) ?? null),
+      })),
     };
   }
 
@@ -1700,6 +1747,7 @@ export class SimulationService {
   #buildObservation(agentId: AgentId): AgentObservation {
     const agent = this.#state.agents.get(agentId);
     if (!agent) throw new Error('The active agent does not exist.');
+    const currentGoal = this.#agentGoals.get(agentId) ?? null;
     const stateFor = (cell: H3Cell) => {
       const state = this.#state.hexes.get(cell);
       if (!state) throw new Error('Observation cell is outside the world.');
@@ -1931,6 +1979,13 @@ export class SimulationService {
       agentName: agent.name,
       personality: agent.personality,
       behavior: this.#behaviorFor(agent.id),
+      currentGoal: structuredClone(currentGoal),
+      goalAvailability: currentGoal
+        ? {
+            active: true,
+            availableOperations: ['keep', 'revise', 'complete', 'abandon'],
+          }
+        : { active: false, availableOperations: ['establish'] },
       currentCell: stateFor(agent.currentCell),
       captureEligibility,
       actionAvailability: {
@@ -2520,4 +2575,76 @@ function retainCompleteTickGroups(
     retained.unshift(...group);
   }
   return retained;
+}
+
+export function applyGoalRevision(
+  current: AgentGoalState | undefined,
+  requested: RequestedGoalRevision | undefined,
+  tick: number,
+): { goal: AgentGoalState | undefined; result: GoalRevisionResult } {
+  if (!requested) return { goal: current, result: { requested: false } };
+  if (requested.operation === 'establish') {
+    if (current)
+      return {
+        goal: current,
+        result: {
+          requested: true,
+          accepted: false,
+          operation: requested.operation,
+          reason: 'goal-already-active',
+        },
+      };
+    return {
+      goal: {
+        longTermGoal: requested.longTermGoal,
+        shortTermGoal: requested.shortTermGoal,
+        planSummary: requested.planSummary,
+        establishedAtTick: tick,
+        revisedAtTick: tick,
+      },
+      result: {
+        requested: true,
+        accepted: true,
+        operation: requested.operation,
+      },
+    };
+  }
+  if (!current)
+    return {
+      goal: undefined,
+      result: {
+        requested: true,
+        accepted: false,
+        operation: requested.operation,
+        reason: 'goal-not-active',
+      },
+    };
+  if (requested.operation === 'keep')
+    return {
+      goal: current,
+      result: {
+        requested: true,
+        accepted: true,
+        operation: requested.operation,
+      },
+    };
+  if (requested.operation === 'revise')
+    return {
+      goal: {
+        longTermGoal: requested.longTermGoal,
+        shortTermGoal: requested.shortTermGoal,
+        planSummary: requested.planSummary,
+        establishedAtTick: current.establishedAtTick,
+        revisedAtTick: tick,
+      },
+      result: {
+        requested: true,
+        accepted: true,
+        operation: requested.operation,
+      },
+    };
+  return {
+    goal: undefined,
+    result: { requested: true, accepted: true, operation: requested.operation },
+  };
 }

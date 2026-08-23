@@ -94,6 +94,8 @@ restart persistence, simulated players, threats, and Player Mode remain deferred
 
 ## PR 5 — Goals and memory
 
+Slice A delivers bounded per-agent strategic goals with deterministic revision semantics, safe attribution, and World Lab inspection. Compact or semantic memory, embeddings, relationship scores, shared alliance goals, and extra inference calls remain deferred.
+
 Pre-PR-5 observability slice: add a local append-only SQLite experiment archive, transactional schema-v9 export import, bounded human/Codex queries, normalized comparisons, and FTS-searchable curated notes. The in-memory engine remains authoritative. Crash recovery, restartable simulation state, MCP, embeddings, vector search, and a database browser remain deferred.
 
 Persistent short- and long-term objectives, compact memories, plan revision, summaries, and longer simulation runs.

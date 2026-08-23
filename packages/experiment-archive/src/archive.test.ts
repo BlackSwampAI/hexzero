@@ -66,6 +66,15 @@ async function currentExport(tick = false): Promise<ExperimentExportDocument> {
         decision: {
           worldAction,
           communication,
+          goalRevision: observation.currentGoal
+            ? { operation: 'keep' }
+            : {
+                operation: 'establish',
+                longTermGoal: 'Preserve durable influence.',
+                shortTermGoal: 'Secure the current frontier.',
+                planSummary: 'Expand methodically.',
+                reason: 'Create archive-safe continuity.',
+              },
           summary: 'Deterministic archive fixture.',
         },
         metadata: {
