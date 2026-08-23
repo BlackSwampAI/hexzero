@@ -128,9 +128,7 @@ describe('SimulationService', () => {
       createdAtTick: 1,
       revisedAtTick: 2,
     });
-    expect(remembered.entries[0]!.text).toBe(
-      'The northern route was blocked.',
-    );
+    expect(remembered.entries[0]!.text).toBe('The northern route was blocked.');
     expect(
       applyMemoryOperation(
         revised.entries,
