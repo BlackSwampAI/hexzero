@@ -85,7 +85,7 @@ Export previews report exact serialized UTF-8 bytes and a model-agnostic `ceil(b
 The smoke command performs exactly one bounded real decision request and validates it. It is never part of default tests or CI:
 
 ```bash
-pnpm smoke:openrouter -- <compatible-model-slug>
+pnpm smoke:openrouter -- <compatible-model-slug> [initial|stateful]
 ```
 
 The command reads only `OPENROUTER_API_KEY` from the repository-root `.env`; its model slug is an explicit command argument. Values in that file override stale exported values for the smoke process.

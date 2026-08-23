@@ -2001,6 +2001,13 @@ export const providerFailureSchema = z.object({
         'ineligible-alliance-recipient',
         'missing-alliance-recipient',
         'unexpected-alliance-recipient',
+        'invalid-goal-fields',
+        'goal-text-too-long',
+        'goal-reason-too-long',
+        'invalid-memory-fields',
+        'invalid-memory-id',
+        'memory-text-too-long',
+        'summary-too-long',
       ]),
     )
     .max(8)

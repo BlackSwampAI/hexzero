@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  GOAL_REVISION_REASON_MAX_LENGTH,
+  GOAL_TEXT_MAX_LENGTH,
+  MEMORY_TEXT_MAX_LENGTH,
   MESSAGE_MAX_LENGTH,
+  MODEL_SUMMARY_MAX_LENGTH,
   OPENROUTER_MAX_OUTPUT_TOKENS,
   OPENROUTER_PROVIDER_TIMEOUT_MS,
   agentObservationSchema,
@@ -299,6 +303,39 @@ describe('OpenRouterAgentProvider', () => {
     expect(guidance).toContain('COMPACT MEMORY');
     expect(guidance).toContain('GOAL CONTINUITY');
     expect(guidance).toContain(
+      'establish and revise require non-empty goalLongTerm, goalShortTerm, goalPlanSummary, and goalRevisionReason',
+    );
+    expect(guidance).toContain(
+      'keep requires all four goal text/reason fields to be empty strings',
+    );
+    expect(guidance).toContain(
+      'complete and abandon require goalLongTerm, goalShortTerm, and goalPlanSummary to be empty strings and goalRevisionReason to be non-empty',
+    );
+    expect(guidance).toContain(
+      `Each goal text field is at most ${GOAL_TEXT_MAX_LENGTH} characters`,
+    );
+    expect(guidance).toContain(
+      `goalRevisionReason is at most ${GOAL_REVISION_REASON_MAX_LENGTH} characters`,
+    );
+    expect(guidance).toContain(
+      'remember requires an empty memoryId and non-empty memoryText',
+    );
+    expect(guidance).toContain(
+      'memoryId copied exactly from observation.memoryAvailability.revisableMemoryIds',
+    );
+    expect(guidance).toContain(
+      'memoryId copied exactly from observation.memoryAvailability.forgettableMemoryIds',
+    );
+    expect(guidance).toContain(
+      `memoryText is at most ${MEMORY_TEXT_MAX_LENGTH} characters`,
+    );
+    expect(guidance).toContain(
+      `communicationMessage (string; empty for none; at most ${MESSAGE_MAX_LENGTH} characters)`,
+    );
+    expect(guidance).toContain(
+      `summary (concise visible decision summary; at most ${MODEL_SUMMARY_MAX_LENGTH} characters)`,
+    );
+    expect(guidance).toContain(
       'communicationType "none" is the normal/default choice',
     );
     expect(guidance).toContain('concrete request or reply');
@@ -407,7 +444,7 @@ describe('OpenRouterAgentProvider', () => {
     });
   });
 
-  it('returns safe repair feedback for contradictory v7 goal sentinels', async () => {
+  it('returns safe component-specific repair feedback for contradictory goal sentinels', async () => {
     const provider = new OpenRouterAgentProvider({
       apiKey: 'secret-test-key',
       fetchImplementation: vi.fn(async () =>
@@ -440,7 +477,7 @@ describe('OpenRouterAgentProvider', () => {
       failure: {
         code: 'invalid-decision',
         retryable: true,
-        validationCodes: ['invalid-action-fields', 'contradictory-fields'],
+        validationCodes: ['invalid-goal-fields', 'contradictory-fields'],
       },
     });
   });
@@ -478,12 +515,12 @@ describe('OpenRouterAgentProvider', () => {
       failure: {
         code: 'invalid-decision',
         retryable: true,
-        validationCodes: ['invalid-action-fields', 'contradictory-fields'],
+        validationCodes: ['invalid-memory-fields', 'contradictory-fields'],
       },
     });
   });
 
-  it('keeps an invalid memory ID repair code generic and safe', async () => {
+  it('returns safe component-specific repair feedback for an invalid memory ID', async () => {
     const provider = new OpenRouterAgentProvider({
       apiKey: 'secret-test-key',
       fetchImplementation: vi.fn(async () =>
@@ -514,10 +551,69 @@ describe('OpenRouterAgentProvider', () => {
       provider.decide(observation, TEST_MODEL),
     ).rejects.toMatchObject({
       failure: {
-        validationCodes: ['invalid-action-fields'],
+        validationCodes: ['invalid-memory-fields', 'invalid-memory-id'],
       },
     });
   });
+
+  it.each([
+    [
+      'goal text',
+      { goalLongTerm: 'x'.repeat(GOAL_TEXT_MAX_LENGTH + 1) },
+      ['invalid-goal-fields', 'goal-text-too-long'],
+    ],
+    [
+      'goal reason',
+      {
+        goalRevisionReason: 'x'.repeat(GOAL_REVISION_REASON_MAX_LENGTH + 1),
+      },
+      ['invalid-goal-fields', 'goal-reason-too-long'],
+    ],
+    [
+      'memory text',
+      {
+        memoryOperation: 'remember',
+        memoryText: 'x'.repeat(MEMORY_TEXT_MAX_LENGTH + 1),
+      },
+      ['invalid-memory-fields', 'memory-text-too-long'],
+    ],
+  ])(
+    'classifies overlong %s in a raw flat provider response',
+    async (_label, override, validationCodes) => {
+      const provider = new OpenRouterAgentProvider({
+        apiKey: 'secret-test-key',
+        fetchImplementation: vi.fn(async () =>
+          textResponse(
+            JSON.stringify({
+              worldActionType: 'wait',
+              targetCell: '',
+              communicationType: 'none',
+              communicationRecipientId: '',
+              communicationMessage: '',
+              diplomacyType: 'none',
+              diplomacyRecipientId: '',
+              diplomacyProposalId: '',
+              goalOperation: 'establish',
+              goalLongTerm: 'Build durable influence.',
+              goalShortTerm: 'Secure this area.',
+              goalPlanSummary: 'Expand one cell at a time.',
+              goalRevisionReason: 'No goal is active.',
+              memoryOperation: 'keep',
+              memoryId: '',
+              memoryText: '',
+              summary: 'Wait.',
+              ...override,
+            }),
+          ),
+        ),
+      });
+      await expect(
+        provider.decide(observation, TEST_MODEL),
+      ).rejects.toMatchObject({
+        failure: { code: 'invalid-decision', validationCodes },
+      });
+    },
+  );
 
   it.each([
     [
@@ -639,7 +735,7 @@ describe('OpenRouterAgentProvider', () => {
     },
   );
 
-  it('requires and normalizes the flat v7 goal revision fields', () => {
+  it('requires and normalizes the flat v8 goal revision fields', () => {
     expect(
       normalizeFlatDecision({
         worldActionType: 'wait',
@@ -690,6 +786,70 @@ describe('OpenRouterAgentProvider', () => {
       }).success,
     ).toBe(false);
   });
+
+  it.each([
+    [
+      'keep',
+      {
+        goalLongTerm: '',
+        goalShortTerm: '',
+        goalPlanSummary: '',
+        goalRevisionReason: '',
+      },
+    ],
+    [
+      'revise',
+      {
+        goalLongTerm: 'Build durable influence.',
+        goalShortTerm: 'Secure this area.',
+        goalPlanSummary: 'Expand one cell at a time.',
+        goalRevisionReason: 'Nearby conditions changed.',
+      },
+    ],
+    [
+      'complete',
+      {
+        goalLongTerm: '',
+        goalShortTerm: '',
+        goalPlanSummary: '',
+        goalRevisionReason: 'The objective is complete.',
+      },
+    ],
+    [
+      'abandon',
+      {
+        goalLongTerm: '',
+        goalShortTerm: '',
+        goalPlanSummary: '',
+        goalRevisionReason: 'The objective is no longer useful.',
+      },
+    ],
+  ])(
+    'normalizes the legal raw flat %s goal sentinel combination',
+    (goalOperation, goalFields) => {
+      expect(
+        normalizeFlatDecision({
+          worldActionType: 'wait',
+          targetCell: '',
+          communicationType: 'none',
+          communicationRecipientId: '',
+          communicationMessage: '',
+          diplomacyType: 'none',
+          diplomacyRecipientId: '',
+          diplomacyProposalId: '',
+          goalOperation,
+          ...goalFields,
+          memoryOperation: 'keep',
+          memoryId: '',
+          memoryText: '',
+          summary: 'Wait.',
+        }),
+      ).toMatchObject({
+        success: true,
+        data: { goalRevision: { operation: goalOperation } },
+      });
+    },
+  );
 
   it.each([
     ['1.5', 1_500],
