@@ -34,6 +34,7 @@ import {
   type ExperimentTickSummary,
   type AgentGoalState,
   type MemoryEntry,
+  type SimulatedPlayerEvent,
 } from '@hexzero/shared';
 
 export interface ExperimentSource {
@@ -54,6 +55,7 @@ export interface ExperimentSource {
   scenario: AppliedScenario;
   agentGoals: readonly { agentId: AgentId; goal: AgentGoalState | null }[];
   agentMemories: readonly { agentId: AgentId; entries: MemoryEntry[] }[];
+  simulatedPlayerEvents: readonly SimulatedPlayerEvent[];
 }
 
 export class ExperimentExportValidationError extends Error {
@@ -778,6 +780,12 @@ export function createExperimentExport(
       matchingCommunicationCount: communications.length,
       matchingControlChangeCount: controlChanges.length,
       matchingDiplomacyEventCount: allianceEvents.length,
+      matchingSimulatedPlayerEventCount: source.simulatedPlayerEvents.filter(
+        (event) =>
+          new Set(
+            filtered.map(({ tickNumber }) => tickNumber).filter(Boolean),
+          ).has(event.originatingTick),
+      ).length,
       firstMatchingTurn: filtered[0]?.turnNumber,
       lastMatchingTurn: filtered.at(-1)?.turnNumber,
     },
@@ -813,6 +821,12 @@ export function createExperimentExport(
             source.currentWorld,
             source.currentAgents,
           ),
+          simulatedPlayerMetrics: source.currentWorld.simulatedPlayer
+            ?.metrics ?? {
+            movements: 0,
+            cellsDisinfected: 0,
+            blockedDisinfections: 0,
+          },
         }
       : {}),
     ...(include.initialWorld
@@ -823,14 +837,22 @@ export function createExperimentExport(
       : {}),
     ...(request.level === 'full-safe'
       ? {
-          worldEvents: filtered.flatMap((turn) => {
-            if (
-              turn.outcome !== 'accepted' ||
-              turn.worldActionResult.event.type === 'hex-captured'
-            )
-              return [];
-            return [structuredClone(turn.worldActionResult.event)];
-          }),
+          worldEvents: [
+            ...filtered.flatMap((turn) => {
+              if (
+                turn.outcome !== 'accepted' ||
+                turn.worldActionResult.event.type === 'hex-captured'
+              )
+                return [];
+              return [structuredClone(turn.worldActionResult.event)];
+            }),
+            ...source.simulatedPlayerEvents.filter((event) => {
+              const selectedTicks = new Set(
+                filtered.map(({ tickNumber }) => tickNumber).filter(Boolean),
+              );
+              return selectedTicks.has(event.originatingTick);
+            }),
+          ],
         }
       : {}),
     ...(include.communications
@@ -855,6 +877,7 @@ function exportWorldState(world: WorldSnapshot): ExperimentExportWorldState {
     agents: structuredClone(world.agents),
     alliances: structuredClone(world.alliances),
     pendingAllianceProposals: structuredClone(world.pendingAllianceProposals),
+    simulatedPlayer: structuredClone(world.simulatedPlayer),
   };
 }
 
@@ -1329,6 +1352,11 @@ function exportTurn(
       delete observation.recentDirectMessages;
     if (custom && !custom.recentControlChanges)
       delete observation.recentControlChanges;
+    if (custom && !custom.recentControlChanges && observation.playerPressure)
+      observation.playerPressure = {
+        ...observation.playerPressure,
+        recentThreats: [],
+      };
     base.observation = observation;
   }
   if (

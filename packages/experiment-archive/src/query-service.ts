@@ -590,6 +590,38 @@ export class ExperimentQueryService {
       `,
       )
       .all(experimentId);
+    const simulatedPlayerActivity = this.#db
+      .prepare(
+        `
+        SELECT
+          SUM(type = 'simulated-player-moved') AS movements,
+          SUM(type = 'hex-disinfected') AS cellsDisinfected,
+          SUM(type = 'simulated-player-clean-blocked') AS blockedDisinfections
+        FROM simulated_player_activity WHERE experiment_id = ?
+      `,
+      )
+      .get(experimentId) as Record<string, unknown>;
+    const sourceSimulatedPlayer = parseJson<Record<string, number>>(
+      experiment.simulated_player_metrics_json,
+      {},
+    );
+    const simulatedPlayer = {
+      movements: Number(
+        simulatedPlayerActivity.movements ??
+          sourceSimulatedPlayer.movements ??
+          0,
+      ),
+      cellsDisinfected: Number(
+        simulatedPlayerActivity.cellsDisinfected ??
+          sourceSimulatedPlayer.cellsDisinfected ??
+          0,
+      ),
+      blockedDisinfections: Number(
+        simulatedPlayerActivity.blockedDisinfections ??
+          sourceSimulatedPlayer.blockedDisinfections ??
+          0,
+      ),
+    };
     const sourceTerritory = parseJson(experiment.source_territory_json, []);
     const directions = canonicalDirectionChanges(this.#db, experimentId);
     const patientZero = this.patientZero(experimentId, {
@@ -635,6 +667,7 @@ export class ExperimentQueryService {
         current: territoryRows.length > 0 ? territoryRows : sourceTerritory,
         changes: territoryChanges,
       },
+      simulatedPlayer,
       communications,
       alliances: {
         lifecycle: allianceLifecycle,
@@ -868,6 +901,7 @@ function comparisonMetrics(db: DatabaseSync, experimentId: string) {
     .prepare(
       `
       SELECT COUNT(*) AS turns,
+             COUNT(DISTINCT tick_number) AS ticks,
              COUNT(DISTINCT agent_id) AS activeAgents,
              SUM(outcome = 'accepted') AS accepted,
              SUM(outcome = 'provider-error') AS failed,
@@ -899,6 +933,30 @@ function comparisonMetrics(db: DatabaseSync, experimentId: string) {
     `,
     )
     .get(experimentId) as { count: number };
+  const simulatedPlayer = db
+    .prepare(
+      `
+      SELECT
+        SUM(type = 'simulated-player-moved') AS movements,
+        SUM(type = 'hex-disinfected') AS cellsDisinfected,
+        SUM(type = 'simulated-player-clean-blocked') AS blockedDisinfections,
+        COUNT(DISTINCT tick_number) AS activeTicks
+      FROM simulated_player_activity WHERE experiment_id = ?
+    `,
+    )
+    .get(experimentId) as Record<string, unknown>;
+  const sourceSimulatedPlayer = parseJson<Record<string, number>>(
+    (
+      db
+        .prepare(
+          'SELECT simulated_player_metrics_json AS metrics FROM experiments WHERE id = ?',
+        )
+        .get(experimentId) as { metrics?: string | null }
+    ).metrics,
+    {},
+  );
+  const playerMetric = (key: string) =>
+    Number(simulatedPlayer[key] ?? sourceSimulatedPlayer[key] ?? 0);
   const turns = Number(base.turns);
   const activeAgents = Number(base.activeAgents);
   const messages = Number(communicationCount.count);
@@ -910,6 +968,9 @@ function comparisonMetrics(db: DatabaseSync, experimentId: string) {
       communications: messages,
       patientZeroMessages: patientZeroMessages.count,
       patientZeroTurns: zeroTurns,
+      simulatedPlayerMovements: playerMetric('movements'),
+      cellsDisinfected: playerMetric('cellsDisinfected'),
+      blockedDisinfections: playerMetric('blockedDisinfections'),
     },
     normalized: {
       communicationsPerTurn: rate(messages, turns),
@@ -921,6 +982,10 @@ function comparisonMetrics(db: DatabaseSync, experimentId: string) {
       ),
       acceptedPerTurn: rate(Number(base.accepted), turns),
       failedOrLostPerTurn: rate(Number(base.failed) + Number(base.lost), turns),
+      cellsDisinfectedPerTick: rate(
+        playerMetric('cellsDisinfected'),
+        Number(simulatedPlayer.activeTicks ?? 0) || Number(base.ticks ?? 0),
+      ),
     },
   };
 }

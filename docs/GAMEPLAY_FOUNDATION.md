@@ -1,10 +1,10 @@
 # Gameplay Foundation
 
-> **Delivery status (2026-08-20):** the pre-PR5 simultaneous agent tick,
+> **Delivery status (2026-08-23):** the pre-PR5 simultaneous agent tick,
 > deterministic virtual clock, shared-deadline dispatcher, phased resolution,
-> and schema-v10 experiment attribution are delivered as an operator-driven
-> foundation. Simulated players, threat observations, and Player Mode timing
-> remain future work and are not activated by this milestone.
+> schema-v10 experiment attribution, and the optional seeded D1 casual cleaner
+> are delivered as an operator-driven foundation. Real Player Mode, capture,
+> respawn, GPS authority, and background timing remain future work.
 
 ## Current experimental Patient Zero slice
 
@@ -249,6 +249,11 @@ Initial profiles:
 - **Casual cleaner** travels toward nearby visible infection and cleans opportunistically.
 - **Trail hunter** follows the freshest connected infection trail and searches for its source.
 - **Area defender** patrols a configured region and removes infection appearing inside it.
+
+Slice D1 implements only zero-or-one **Casual cleaner**. It moves at most one
+adjacent H3 cell per explicit interval toward visible infection, uses its seed
+for stable tie-breaking, and attempts at most one disinfection. An occupied
+infected cell blocks cleaning. Other profiles and capture remain deferred.
 
 Scenario configuration should include simulated-player count, profile mix, travel characteristics, cleaning aggressiveness, search persistence, and seed.
 

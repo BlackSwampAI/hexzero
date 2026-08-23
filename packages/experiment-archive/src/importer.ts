@@ -218,6 +218,7 @@ export function importExperimentExport(
           source_metrics_json = COALESCE(?, source_metrics_json),
           source_territory_json = COALESCE(?, source_territory_json),
           source_alliances_json = COALESCE(?, source_alliances_json),
+          simulated_player_metrics_json = COALESCE(?, simulated_player_metrics_json),
           retention_limit = MAX(retention_limit, ?),
           total_completed_turns = MAX(total_completed_turns, ?),
           retained_turns = MAX(retained_turns, ?),
@@ -237,6 +238,7 @@ export function importExperimentExport(
         json(document.metrics),
         json(document.currentTerritory),
         json(document.currentAlliances),
+        json(document.simulatedPlayerMetrics),
         document.retention.limit,
         document.retention.totalCompletedTurns,
         document.retention.retainedTurns,
@@ -274,6 +276,7 @@ export function importExperimentExport(
       importCommunications(archive, document, report);
       importAllianceEvents(archive, document, report);
       importWorldEvents(archive, document, report);
+      importSimulatedPlayerActivity(archive, document, report);
       importConfigurationEvents(archive, document, report);
       return report;
     });
@@ -728,11 +731,15 @@ function importWorldEvents(
   const events = new Map<
     string,
     {
-      event: NonNullable<ExperimentExportDocument['worldEvents']>[number];
+      event: Extract<
+        NonNullable<ExperimentExportDocument['worldEvents']>[number],
+        { agentId: unknown }
+      >;
       turn: number;
     }
   >();
   for (const event of document.worldEvents ?? []) {
+    if (!('agentId' in event)) continue;
     const originatingTurn = document.turns.find(
       (candidate) =>
         candidate.worldActionResult?.accepted &&
@@ -768,6 +775,43 @@ function importWorldEvents(
       ],
       report,
     );
+}
+
+function importSimulatedPlayerActivity(
+  archive: ArchiveDatabase,
+  document: ExperimentExportDocument,
+  report: ImportReport,
+): void {
+  const statement = archive.database.prepare(`
+    INSERT OR IGNORE INTO simulated_player_activity(
+      id, experiment_id, tick_number, occurred_at, profile, type,
+      from_cell_id, to_cell_id, cell_id, previous_controller_agent_id,
+      blocking_agent_id, source_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  for (const event of document.worldEvents ?? []) {
+    if (!('profile' in event) || !('originatingTick' in event)) continue;
+    runInsert(
+      statement,
+      [
+        event.id,
+        document.experiment.id,
+        event.originatingTick,
+        event.occurredAt,
+        event.profile,
+        event.type,
+        'fromCell' in event ? event.fromCell : null,
+        'toCell' in event ? event.toCell : null,
+        'cell' in event ? event.cell : null,
+        'previousControllerAgentId' in event
+          ? event.previousControllerAgentId
+          : null,
+        'blockingAgentId' in event ? event.blockingAgentId : null,
+        json(event)!,
+      ],
+      report,
+    );
+  }
 }
 
 function importConfigurationEvents(

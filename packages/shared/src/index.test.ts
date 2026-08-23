@@ -496,7 +496,7 @@ describe('agent observation and decision schemas', () => {
     expect(FLUID_ALLIANCE_AGENT_DECISION_CONTRACT_VERSION).toBe(
       'text-flat-json-v5',
     );
-    expect(OBJECTIVE_PROMPT_VERSION).toBe('durable-influence-v2');
+    expect(OBJECTIVE_PROMPT_VERSION).toBe('durable-influence-v3');
     expect(
       modelVerificationSchema.parse({
         modelId: 'author/model',

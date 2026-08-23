@@ -276,4 +276,27 @@ export const migrations: readonly Migration[] = [
       CREATE INDEX turns_experiment_tick_idx ON turns(experiment_id, tick_number, tick_position);
     `,
   },
+  {
+    version: 3,
+    description: 'deterministic simulated-player pressure activity',
+    sql: `
+      ALTER TABLE experiments ADD COLUMN simulated_player_metrics_json TEXT;
+      CREATE TABLE simulated_player_activity (
+        id TEXT PRIMARY KEY,
+        experiment_id TEXT NOT NULL REFERENCES experiments(id) ON DELETE CASCADE,
+        tick_number INTEGER NOT NULL,
+        occurred_at TEXT NOT NULL,
+        profile TEXT NOT NULL,
+        type TEXT NOT NULL,
+        from_cell_id TEXT,
+        to_cell_id TEXT,
+        cell_id TEXT,
+        previous_controller_agent_id TEXT,
+        blocking_agent_id TEXT,
+        source_json TEXT NOT NULL
+      ) STRICT;
+      CREATE INDEX simulated_player_activity_experiment_idx
+        ON simulated_player_activity(experiment_id, tick_number, type, id);
+    `,
+  },
 ] as const;

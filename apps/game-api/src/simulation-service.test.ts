@@ -98,6 +98,100 @@ function exportRequest(level: 'minimal' | 'standard' | 'full-safe' | 'custom') {
 }
 
 describe('SimulationService', () => {
+  it('commits cleaner pressure before frozen observations without exposing live GPS', async () => {
+    const seen: AgentObservation[] = [];
+    const simulation = service({
+      mode: 'scripted-test',
+      model: 'deterministic-script',
+      configured: true,
+      async decide(observation): Promise<ProviderDecision> {
+        seen.push(structuredClone(observation));
+        return {
+          decision: {
+            worldAction:
+              observation.currentCell.state === 'open'
+                ? { type: 'infect' }
+                : {
+                    type: 'move',
+                    targetCell:
+                      observation.actionAvailability.moveTargetCellIds[0]!,
+                  },
+            goalRevision: observation.currentGoal
+              ? { operation: 'keep' }
+              : {
+                  operation: 'establish',
+                  longTermGoal: 'Preserve territory under cleaner pressure.',
+                  shortTermGoal: 'Respond to authoritative local evidence.',
+                  planSummary: 'Expand and adapt to observed losses.',
+                  reason: 'Player pressure is enabled.',
+                },
+            memoryOperation: { operation: 'keep' },
+            summary: 'Take a deterministic legal action.',
+          },
+          metadata: {
+            provider: 'scripted-test',
+            model: 'deterministic-script',
+            latencyMs: 0,
+          },
+        };
+      },
+    });
+    const setup = defaultWorldSetupRequest();
+    simulation.applyWorldSetup({
+      ...setup,
+      objectiveVersion: 'durable-influence-v3',
+      modelConfiguration: {
+        ...setup.modelConfiguration,
+        globalModelId: 'deterministic-script',
+      },
+      capabilities: { ...setup.capabilities, simulatedPlayerPressure: true },
+      simulatedPlayer: {
+        enabled: true,
+        profile: 'casual-cleaner',
+        seed: 'pressure-test',
+      },
+    });
+    for (let tick = 0; tick < 12; tick += 1) await simulation.executeNextTick();
+    const snapshot = simulation.getSnapshot();
+    expect(
+      snapshot.experiment.simulatedPlayerMetrics.cellsDisinfected,
+    ).toBeGreaterThan(0);
+    const pressured = seen.filter(
+      ({ playerPressure }) => playerPressure.recentThreats.length > 0,
+    );
+    expect(pressured.length).toBeGreaterThan(0);
+    expect(pressured[0]!.playerPressure).not.toHaveProperty('currentCell');
+    expect(snapshot.world.simulatedPlayer?.currentCell).toBeTruthy();
+    const redacted = simulation.generateExperimentExport({
+      ...exportRequest('custom'),
+      custom: {
+        turnObservations: true,
+        personalityTextHistory: false,
+        nearbyAgents: false,
+        recentEvents: false,
+        recentPublicMessages: false,
+        recentDirectMessages: false,
+        recentControlChanges: false,
+        validationDetails: false,
+        resultingEvents: false,
+        providerUsageMetadata: false,
+        initialWorldState: false,
+        currentWorldState: false,
+        computedMetrics: false,
+        communications: false,
+        controlChanges: false,
+      },
+    });
+    expect(
+      redacted.turns.every(
+        ({ observation }) =>
+          observation?.playerPressure?.enabled === true &&
+          observation.playerPressure.recentThreats?.length === 0,
+      ),
+    ).toBe(true);
+    expect(redacted).not.toHaveProperty('simulatedPlayerMetrics');
+  });
+
   it('keeps compact memory canonical and rejects full or missing operations independently', () => {
     const agent = agentIdSchema.parse('128f3f38-6b7d-4db7-9e95-751b4ce2681e');
     const remembered = applyMemoryOperation(
@@ -496,6 +590,40 @@ describe('SimulationService', () => {
     ).toThrow(SimulationValidationError);
     expect(simulation.getSnapshot().scenario.patientZeroAgentId).toBe(
       setup.patientZeroAgentId,
+    );
+  });
+
+  it('requires objective attribution to match simulated-player pressure', () => {
+    const simulation = service(
+      new ScriptedAgentProvider([
+        { worldAction: { type: 'wait' }, summary: 'Wait.' },
+      ]),
+    );
+    const setup = defaultWorldSetupRequest();
+
+    expect(() =>
+      simulation.applyWorldSetup({
+        ...setup,
+        objectiveVersion: 'durable-influence-v3',
+      }),
+    ).toThrow(SimulationValidationError);
+    expect(() =>
+      simulation.applyWorldSetup({
+        ...setup,
+        capabilities: {
+          ...setup.capabilities,
+          simulatedPlayerPressure: true,
+        },
+        simulatedPlayer: {
+          enabled: true,
+          profile: 'casual-cleaner',
+          seed: 'mismatched-pressure',
+        },
+      }),
+    ).toThrow(SimulationValidationError);
+
+    expect(simulation.getSnapshot().scenario.objectiveVersion).toBe(
+      'durable-influence-v2',
     );
   });
 
@@ -919,6 +1047,21 @@ describe('SimulationService', () => {
         });
       },
     });
+    const setup = defaultWorldSetupRequest();
+    simulation.applyWorldSetup({
+      ...setup,
+      objectiveVersion: 'durable-influence-v3',
+      modelConfiguration: {
+        ...setup.modelConfiguration,
+        globalModelId: 'deterministic-script',
+      },
+      capabilities: { ...setup.capabilities, simulatedPlayerPressure: true },
+      simulatedPlayer: {
+        enabled: true,
+        profile: 'casual-cleaner',
+        seed: 'cancel-pressure',
+      },
+    });
     const before = simulation.getSnapshot();
     const pending = simulation.executeNextTick();
     await requestStarted;
@@ -1067,12 +1210,39 @@ describe('SimulationService', () => {
       ],
     });
     expect(retained.turns).toHaveLength(8);
+    expect(retained.schemaVersion).toBe(10);
     expect(new Set(retained.turns.map(({ tickNumber }) => tickNumber))).toEqual(
       new Set([2]),
     );
     expect(experimentExportDocumentSchema.safeParse(retained).success).toBe(
       true,
     );
+    const legacyV10 = structuredClone(retained);
+    delete legacyV10.simulatedPlayerMetrics;
+    expect(
+      experimentExportDocumentSchema.parse(legacyV10).simulatedPlayerMetrics,
+    ).toEqual({
+      movements: 0,
+      cellsDisinfected: 0,
+      blockedDisinfections: 0,
+    });
+    const enabledWithoutMetrics = structuredClone(legacyV10);
+    enabledWithoutMetrics.experiment.scenario = {
+      ...enabledWithoutMetrics.experiment.scenario!,
+      objectiveVersion: 'durable-influence-v3',
+      capabilities: {
+        ...enabledWithoutMetrics.experiment.scenario!.capabilities,
+        simulatedPlayerPressure: true,
+      },
+      simulatedPlayer: {
+        enabled: true,
+        profile: 'casual-cleaner',
+        seed: 'missing-metrics',
+      },
+    };
+    expect(
+      experimentExportDocumentSchema.safeParse(enabledWithoutMetrics).success,
+    ).toBe(false);
     expect(
       experimentExportDocumentSchema.safeParse({
         ...retained,
@@ -2316,7 +2486,7 @@ describe('SimulationService', () => {
     expect(oneAgent.worldEvents).toHaveLength(1);
     expect(
       oneAgent.worldEvents?.every(
-        ({ agentId }) => agentId === selectedAgent.id,
+        (event) => 'agentId' in event && event.agentId === selectedAgent.id,
       ),
     ).toBe(true);
     expect(oneAgent.turns.map(({ turnNumber }) => turnNumber)).toEqual([1]);
@@ -2583,6 +2753,18 @@ describe('SimulationService', () => {
     expect(custom).not.toHaveProperty('communications');
     expect(custom).not.toHaveProperty('controlChanges');
     expect(custom).not.toHaveProperty('metrics');
+    expect(custom).not.toHaveProperty('simulatedPlayerMetrics');
+    expect(minimal).toHaveProperty('simulatedPlayerMetrics');
+    expect(
+      experimentExportDocumentSchema.safeParse({
+        ...custom,
+        simulatedPlayerMetrics: {
+          movements: 0,
+          cellsDisinfected: 0,
+          blockedDisinfections: 0,
+        },
+      }).success,
+    ).toBe(false);
     expect(custom.turns[0]).not.toHaveProperty('provider');
     minimal.turns[0]!.outcome = 'rejected';
     expect(
