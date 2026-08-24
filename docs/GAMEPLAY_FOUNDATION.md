@@ -265,6 +265,15 @@ cells identify the historical disinfection or blocked-clean location; live
 player position, movement, route, target, identity, future timing, regional
 coordinators, and extra model calls remain excluded.
 
+Patient Zero treats blocked cleans as successful historical defenses, not a
+reason to vacate, and successful disinfections as confirmed historical losses,
+not live cleaner sightings. Because directives arrive on a later tick, Zero
+must not issue event-cell chase or evacuation tactics. It communicates only
+when pressure materially changes a named recommendation, avoids repeated
+unchanged warnings, prefers named alliance reinforcement after sustained member
+pressure, and may remember a bounded meaningful pattern rather than every
+event.
+
 Scenario configuration should include simulated-player count, profile mix, travel characteristics, cleaning aggressiveness, search persistence, and seed.
 
 Simulated players follow the same information and interaction rules intended for real players:

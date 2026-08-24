@@ -21,9 +21,14 @@ live/current position, route, target, identity, and future timing. Tick cancella
 still discards the entire candidate player interval and every derived
 observation.
 
-The runtime may advise Patient Zero to coordinate materially affected named
-agents or alliances, but does not require communication and preserves the
-no-filler rule. Behavior Trace shows local and global cleaner evidence while
+The runtime treats an occupied-cell block as successful historical defense and
+a disinfection as historical loss, never a live cleaner sighting. Later-tick
+directives must not chase or evacuate from an event cell alone. Patient Zero
+communicates only for materially changed named recommendations, avoids repeated
+unchanged warnings, prefers named alliance reinforcement after sustained
+pressure, and may retain one bounded pattern rather than logging every event.
+Communication remains optional and preserves the no-filler rule. Behavior
+Trace shows local and global cleaner evidence while
 deduplicating an event visible through both paths. Safe observation exports and
 SQLite `observation_json` retain the feed; custom exports that exclude recent
 control changes clear its event array.

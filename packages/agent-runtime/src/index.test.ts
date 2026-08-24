@@ -247,13 +247,31 @@ describe('OpenRouterAgentProvider', () => {
       TEST_MODEL,
     );
     expect(patientZeroRequest.messages[0]!.content).toContain(
-      "only this virtual interval's authoritative successful disinfections",
+      'blocked clean is a successful historical defense caused by agent occupancy',
     );
     expect(patientZeroRequest.messages[0]!.content).toContain(
-      'coordinate only materially affected agents or alliances',
+      'never tell the blocker to vacate solely because of it',
     );
     expect(patientZeroRequest.messages[0]!.content).toContain(
-      'otherwise choose communicationType "none"',
+      "not the cleaner's current position",
+    );
+    expect(patientZeroRequest.messages[0]!.content).toContain(
+      'never recommend tactical chasing or evacuation from only an event cell',
+    );
+    expect(patientZeroRequest.messages[0]!.content).toContain(
+      'One threat alone does not require a message',
+    );
+    expect(patientZeroRequest.messages[0]!.content).toContain(
+      'Never repeat near-identical warnings or consecutive unchanged advice',
+    );
+    expect(patientZeroRequest.messages[0]!.content).toContain(
+      'prefer alliance-level coordination naming actual agents or allies',
+    );
+    expect(patientZeroRequest.messages[0]!.content).toContain(
+      'one bounded meaningful pressure pattern, not a log of every event',
+    );
+    expect(patientZeroRequest.messages[0]!.content).toContain(
+      'choose communicationType "none" when no new action is available',
     );
     expect(patientZeroRequest.messages[1]!.content).toContain('Rook');
   });
