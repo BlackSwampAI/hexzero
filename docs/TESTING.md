@@ -58,6 +58,10 @@ exclusion while retaining historical event cells, deduplication when Patient
 Zero also sees an event locally, the 128-entry cap,
 truthful truncation, cell highlighting, prompt guidance, custom-export
 redaction, and observation JSON archive compatibility.
+Runtime prompt tests also lock blocked-clean hold/reinforcement semantics,
+historical-cell and delayed-directive cautions, selective non-repeating
+communication, alliance-level sustained-pressure coordination, and bounded
+pattern memory.
 
 Configurable-scenario coverage is deterministic and offline: `world-scenario-v1`, temporary roster/world limits, actual H3 count and area, radius presets, seeded identities and separated spawns, default compatibility, infeasibility, pure preview, atomic apply/current-scenario reset, dynamic assignment reconciliation, density warnings, and schema-v9 attribution. Geocoding uses injected fakes; browser coverage retains the default flow and adds a 469-cell/12-agent scenario flow.
 
