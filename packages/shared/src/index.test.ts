@@ -493,6 +493,16 @@ describe('agent observation and decision schemas', () => {
   });
 
   it('caps Patient Zero cleaner evidence with truthful overflow metadata', () => {
+    const pressureContext = {
+      window: { tickCount: 6, startTick: 3, endTick: 8 },
+      subject: {
+        totalEvents: 3,
+        disinfections: 2,
+        blockedCleans: 1,
+        consecutiveAffectedTicks: 2,
+      },
+      currentAlliance: null,
+    };
     const events = Array.from(
       { length: PATIENT_ZERO_PLAYER_THREAT_FEED_LIMIT },
       (_, index) => ({
@@ -504,6 +514,7 @@ describe('agent observation and decision schemas', () => {
         affectedAgentName: 'Ember',
         affectedAllianceId: null,
         affectedAllianceColor: null,
+        pressureContext,
       }),
     );
     expect(
@@ -523,6 +534,123 @@ describe('agent observation and decision schemas', () => {
           },
         ],
         totalEventCount: events.length + 1,
+        truncated: false,
+      }).success,
+    ).toBe(false);
+    expect(
+      patientZeroPlayerThreatFeedSchema.safeParse({
+        events: [
+          {
+            ...events[0]!,
+            pressureContext: {
+              ...pressureContext,
+              window: { tickCount: 2, startTick: 7, endTick: 8 },
+              subject: {
+                ...pressureContext.subject,
+                consecutiveAffectedTicks: 3,
+              },
+            },
+          },
+        ],
+        totalEventCount: 1,
+        truncated: false,
+      }).success,
+    ).toBe(false);
+    const blockedBase = {
+      eventId: events[0]!.eventId,
+      cell: events[0]!.cell,
+      occurredAt: events[0]!.occurredAt,
+    };
+    expect(
+      patientZeroPlayerThreatFeedSchema.safeParse({
+        events: [
+          {
+            ...blockedBase,
+            kind: 'territory-disinfected',
+            affectedAgentId: agentId,
+            affectedAgentName: 'Ember',
+            affectedAllianceId: null,
+            affectedAllianceColor: null,
+          },
+        ],
+        totalEventCount: 1,
+        truncated: false,
+      }).success,
+    ).toBe(true);
+    expect(
+      patientZeroPlayerThreatFeedSchema.safeParse({
+        events: [
+          {
+            ...events[0]!,
+            pressureContext: {
+              ...pressureContext,
+              subject: {
+                ...pressureContext.subject,
+                totalEvents: 4,
+              },
+            },
+          },
+        ],
+        totalEventCount: 1,
+        truncated: false,
+      }).success,
+    ).toBe(false);
+    expect(
+      patientZeroPlayerThreatFeedSchema.safeParse({
+        events: [
+          {
+            ...events[0]!,
+            pressureContext: {
+              ...pressureContext,
+              window: { tickCount: 5, startTick: 3, endTick: 8 },
+            },
+          },
+        ],
+        totalEventCount: 1,
+        truncated: false,
+      }).success,
+    ).toBe(false);
+    expect(
+      patientZeroPlayerThreatFeedSchema.safeParse({
+        events: [
+          {
+            ...events[0]!,
+            pressureContext: {
+              ...pressureContext,
+              currentAlliance: {
+                totalEvents: 3,
+                disinfections: 2,
+                blockedCleans: 1,
+              },
+            },
+          },
+        ],
+        totalEventCount: 1,
+        truncated: false,
+      }).success,
+    ).toBe(false);
+    expect(
+      patientZeroPlayerThreatFeedSchema.safeParse({
+        events: [
+          {
+            ...blockedBase,
+            kind: 'occupied-clean-blocked',
+            blockingAgentId: agentId,
+            blockingAgentName: 'Ember',
+            blockingAllianceId: null,
+            blockingAllianceColor: null,
+            pressureContext: {
+              ...pressureContext,
+              subject: {
+                totalEvents: 1,
+                disinfections: 1,
+                blockedCleans: 0,
+                consecutiveAffectedTicks: 1,
+              },
+            },
+          },
+        ],
+        totalEventCount: 1,
         truncated: false,
       }).success,
     ).toBe(false);

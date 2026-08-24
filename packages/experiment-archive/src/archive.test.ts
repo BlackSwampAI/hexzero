@@ -183,6 +183,16 @@ describe('experiment archive', () => {
           blockingAgentName: raw.agents[0]!.name,
           blockingAllianceId: null,
           blockingAllianceColor: null,
+          pressureContext: {
+            window: { tickCount: 1, startTick: 1, endTick: 1 },
+            subject: {
+              totalEvents: 1,
+              disinfections: 0,
+              blockedCleans: 1,
+              consecutiveAffectedTicks: 1,
+            },
+            currentAlliance: null,
+          },
         },
       ],
       totalEventCount: 1,
@@ -232,6 +242,13 @@ describe('experiment archive', () => {
             {
               kind: 'occupied-clean-blocked',
               blockingAgentName: raw.agents[0]!.name,
+              pressureContext: {
+                window: { tickCount: 1, startTick: 1, endTick: 1 },
+                subject: {
+                  totalEvents: 1,
+                  blockedCleans: 1,
+                },
+              },
             },
           ],
         },

@@ -18,6 +18,7 @@ import {
   agentTurnRecordSchema,
   experimentExportDocumentSchema,
   h3CellSchema,
+  worldEventSchema,
   memoryIdSchema,
   type Alliance,
   type AgentId,
@@ -42,6 +43,7 @@ import {
   SimulationValidationError,
   selectDiplomacyBlockerExamples,
   selectMostRecentPatientZeroThreats,
+  calculatePatientZeroPressureContext,
   applyGoalRevision,
   applyMemoryOperation,
 } from './simulation-service';
@@ -112,6 +114,76 @@ describe('SimulationService', () => {
     expect(selected.map(({ ordinal }) => ordinal)).toEqual(
       Array.from({ length: 128 }, (_, index) => index + 2),
     );
+  });
+
+  it('calculates a truthful six-tick pressure window despite unrelated event churn', () => {
+    const subject = agentIdSchema.parse('128f3f38-6b7d-4db7-9e95-751b4ce2681e');
+    const ally = agentIdSchema.parse('2507bb46-7ae4-45ca-8dda-644c4f85ca14');
+    const makeEvent = (
+      tick: number,
+      type: 'hex-disinfected' | 'simulated-player-clean-blocked',
+      agentId: AgentId,
+      ordinal: number,
+    ): WorldEvent =>
+      worldEventSchema.parse({
+        id: `30000000-0000-4000-8000-${String(ordinal).padStart(12, '0')}`,
+        type,
+        occurredAt: new Date(
+          new Date('2026-08-23T12:00:00.000Z').getTime() + ordinal,
+        ).toISOString(),
+        profile: 'casual-cleaner',
+        originatingTick: tick,
+        cell: '892a1072893ffff',
+        ...(type === 'hex-disinfected'
+          ? { previousControllerAgentId: agentId }
+          : { blockingAgentId: agentId }),
+      });
+    const events: WorldEvent[] = [
+      makeEvent(2, 'hex-disinfected', subject, 1),
+      makeEvent(3, 'simulated-player-clean-blocked', ally, 2),
+      makeEvent(4, 'hex-disinfected', subject, 3),
+      makeEvent(6, 'simulated-player-clean-blocked', subject, 4),
+      makeEvent(7, 'hex-disinfected', subject, 5),
+      makeEvent(8, 'simulated-player-clean-blocked', subject, 6),
+      makeEvent(8, 'hex-disinfected', ally, 7),
+      makeEvent(9, 'hex-disinfected', subject, 9),
+      worldEventSchema.parse({
+        id: '30000000-0000-4000-8000-000000000008',
+        type: 'simulated-player-moved',
+        occurredAt: '2026-08-23T12:00:00.008Z',
+        profile: 'casual-cleaner',
+        originatingTick: 8,
+        fromCell: '892a1072893ffff',
+        toCell: '892a1072883ffff',
+      }),
+      ...Array.from({ length: 160 }, (_, index) =>
+        worldEventSchema.parse({
+          id: `40000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
+          type: 'agent-waited',
+          occurredAt: new Date(
+            new Date('2026-08-23T12:01:00.000Z').getTime() + index,
+          ).toISOString(),
+          agentId: subject,
+        }),
+      ),
+    ];
+
+    expect(
+      calculatePatientZeroPressureContext(events, subject, [subject, ally], 8),
+    ).toEqual({
+      window: { tickCount: 6, startTick: 3, endTick: 8 },
+      subject: {
+        totalEvents: 4,
+        disinfections: 2,
+        blockedCleans: 2,
+        consecutiveAffectedTicks: 3,
+      },
+      currentAlliance: {
+        totalEvents: 6,
+        disinfections: 3,
+        blockedCleans: 3,
+      },
+    });
   });
 
   it('commits cleaner pressure before frozen observations without exposing live GPS', async () => {
@@ -226,6 +298,14 @@ describe('SimulationService', () => {
       ]),
     );
     expect(
+      patientZeroObservations
+        .flatMap(
+          ({ patientZeroGlobalView }) =>
+            patientZeroGlobalView!.playerThreatFeed!.events,
+        )
+        .every(({ pressureContext }) => pressureContext !== undefined),
+    ).toBe(true);
+    expect(
       JSON.stringify(
         patientZeroObservations.map(
           ({ patientZeroGlobalView }) =>
@@ -275,6 +355,9 @@ describe('SimulationService', () => {
           feed.truncated === feed.totalEventCount > 0,
       ),
     ).toBe(true);
+    expect(JSON.stringify(redactedGlobalFeeds)).not.toContain(
+      'pressureContext',
+    );
   });
 
   it('keeps compact memory canonical and rejects full or missing operations independently', () => {

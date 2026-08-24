@@ -15,6 +15,16 @@ truthful total/truncation metadata; overflow retains the most recent entries in
 chronological order. Event cells are intentional historical clean/block
 locations. The feed excludes movement and the cleaner's live/current position,
 route, target, identity, and future-timing data.
+Each displayed event carries a fixed six-tick, engine-derived pressure context
+for its subject: subject totals/category counts/consecutive affected ticks and,
+when currently allied, aggregate counts across the alliance's current members.
+The event list remains current-interval-only; no historical event array or
+historical membership inference is added.
+The rollup reads committed prior intervals from the dedicated simulated-player
+event history and combines them with only the current tick's uncommitted
+candidate cleaner events. It does not depend on the smaller general world-event
+display buffer, and candidate events enter dedicated history only when the whole
+tick commits.
 
 The Game API owns an operator-triggered tick transaction. It freezes the world
 and builds every observation before dispatching any model request. A

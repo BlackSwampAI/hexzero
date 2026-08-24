@@ -26,6 +26,11 @@ The cleaner-threat portion contains the most recent 128 current-interval events
 in chronological order plus an authoritative total and explicit truncation.
 Custom exports that omit recent
 control-change evidence clear both local and Patient Zero global threat arrays.
+Per-event pressure context is engine-derived from only the current and prior
+five ticks. Alliance totals use current membership only. The context contains
+counts and tick bounds, not historical event arrays, cleaner movement, live
+position, or inferred historical membership; removing feed events also removes
+their nested rollups.
 
 ## Secrets and deployment
 
