@@ -236,6 +236,16 @@ describe('OpenRouterAgentProvider', () => {
                 blockingAgentName: 'Rook',
                 blockingAllianceId: null,
                 blockingAllianceColor: null,
+                pressureContext: {
+                  window: { tickCount: 6, startTick: 3, endTick: 8 },
+                  subject: {
+                    totalEvents: 3,
+                    disinfections: 1,
+                    blockedCleans: 2,
+                    consecutiveAffectedTicks: 2,
+                  },
+                  currentAlliance: null,
+                },
               },
             ],
             totalEventCount: 1,
@@ -259,10 +269,22 @@ describe('OpenRouterAgentProvider', () => {
       'never recommend tactical chasing or evacuation from only an event cell',
     );
     expect(patientZeroRequest.messages[0]!.content).toContain(
-      'One threat alone does not require a message',
+      'An isolated event normally does not justify routine broadcasting, but a strategically meaningful first loss may',
+    );
+    expect(patientZeroRequest.messages[0]!.content).toContain(
+      'Repeated or consecutive subject pressure, or repeated current-alliance pressure, should strongly motivate one new concrete',
+    );
+    expect(patientZeroRequest.messages[0]!.content).toContain(
+      'Compare that recommendation with observation.recentZeroMessages',
+    );
+    expect(patientZeroRequest.messages[0]!.content).toContain(
+      'choose communicationType "none" for equivalent unchanged advice',
     );
     expect(patientZeroRequest.messages[0]!.content).toContain(
       'Never repeat near-identical warnings or consecutive unchanged advice',
+    );
+    expect(patientZeroRequest.messages[0]!.content).toContain(
+      'when no new action is available',
     );
     expect(patientZeroRequest.messages[0]!.content).toContain(
       'prefer alliance-level coordination naming actual agents or allies',
@@ -270,8 +292,8 @@ describe('OpenRouterAgentProvider', () => {
     expect(patientZeroRequest.messages[0]!.content).toContain(
       'one bounded meaningful pressure pattern, not a log of every event',
     );
-    expect(patientZeroRequest.messages[0]!.content).toContain(
-      'choose communicationType "none" when no new action is available',
+    expect(patientZeroRequest.messages[1]!.content).toContain(
+      'consecutiveAffectedTicks',
     );
     expect(patientZeroRequest.messages[1]!.content).toContain('Rook');
   });

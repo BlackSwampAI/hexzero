@@ -191,6 +191,16 @@ function collectEvidence(
   );
   const globalFeed = observation.patientZeroGlobalView?.playerThreatFeed;
   const priorGlobalFeed = prior?.patientZeroGlobalView?.playerThreatFeed;
+  const pressureSuffix = (
+    event: NonNullable<typeof globalFeed>['events'][number] | undefined,
+  ): string => {
+    const pressure = event?.pressureContext;
+    if (!pressure) return '';
+    const alliance = pressure.currentAlliance
+      ? `; current alliance ${pressure.currentAlliance.totalEvents} total (${pressure.currentAlliance.disinfections} disinfected, ${pressure.currentAlliance.blockedCleans} blocked)`
+      : '; current alliance unaffiliated';
+    return ` · ticks ${pressure.window.startTick}–${pressure.window.endTick}: subject ${pressure.subject.totalEvents} total (${pressure.subject.disinfections} disinfected, ${pressure.subject.blockedCleans} blocked), ${pressure.subject.consecutiveAffectedTicks} consecutive${alliance}`;
+  };
   const globalPlayerThreats = globalFeed
     ? unseenBy(
         globalFeed.events,
@@ -206,12 +216,12 @@ function collectEvidence(
                   event.affectedAllianceId
                     ? ` (${event.affectedAllianceId})`
                     : ''
-                } lost ${event.cell}`
+                } lost ${event.cell}${pressureSuffix(event)}`
               : `Patient Zero global cleaner feed: ${event.blockingAgentName}${
                   event.blockingAllianceId
                     ? ` (${event.blockingAllianceId})`
                     : ''
-                } blocked a clean at ${event.cell}`,
+                } blocked a clean at ${event.cell}${pressureSuffix(event)}`,
           cell: event.cell,
         }))
     : [];
@@ -226,9 +236,11 @@ function collectEvidence(
       : [];
   return [
     ...globalFeedSummary,
-    ...localPlayerThreats.map(({ kind, label, cell }) => ({
+    ...localPlayerThreats.map(({ eventId, kind, label, cell }) => ({
       kind,
-      label,
+      label: `${label}${pressureSuffix(
+        globalFeed?.events.find((event) => event.eventId === eventId),
+      )}`,
       cell,
     })),
     ...globalPlayerThreats,

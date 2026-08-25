@@ -152,6 +152,16 @@ function acceptedTurn(
                     affectedAgentName: 'Ember',
                     affectedAllianceId: null,
                     affectedAllianceColor: null,
+                    pressureContext: {
+                      window: { tickCount: 6, startTick: 3, endTick: 8 },
+                      subject: {
+                        totalEvents: 3,
+                        disinfections: 2,
+                        blockedCleans: 1,
+                        consecutiveAffectedTicks: 2,
+                      },
+                      currentAlliance: null,
+                    },
                   },
                   {
                     eventId: 'a7aa21b9-fc78-4b04-9f92-9862bf346f96',
@@ -162,6 +172,16 @@ function acceptedTurn(
                     blockingAgentName: 'Rook',
                     blockingAllianceId: null,
                     blockingAllianceColor: null,
+                    pressureContext: {
+                      window: { tickCount: 6, startTick: 3, endTick: 8 },
+                      subject: {
+                        totalEvents: 2,
+                        disinfections: 0,
+                        blockedCleans: 2,
+                        consecutiveAffectedTicks: 2,
+                      },
+                      currentAlliance: null,
+                    },
                   },
                 ],
                 totalEventCount: 3,
@@ -349,5 +369,9 @@ describe('deriveBehaviorTrace', () => {
     expect(
       evidence.filter(({ label }) => label.includes('Ember lost')),
     ).toHaveLength(0);
+    expect(evidence[1]!.label).toContain(
+      'subject 3 total (2 disinfected, 1 blocked), 2 consecutive',
+    );
+    expect(evidence[1]!.label).toContain('current alliance unaffiliated');
   });
 });

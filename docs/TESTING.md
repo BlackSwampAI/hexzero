@@ -62,6 +62,11 @@ Runtime prompt tests also lock blocked-clean hold/reinforcement semantics,
 historical-cell and delayed-directive cautions, selective non-repeating
 communication, alliance-level sustained-pressure coordination, and bounded
 pattern memory.
+D1.2 tests cover six-tick exclusion/inclusion, consecutive subject ticks,
+current-member alliance aggregation, dishonest schema arithmetic/window/null
+pairing, isolated-versus-sustained prompt selection, recent-Zero deduplication,
+Behavior Trace count evidence, custom redaction, observation JSON archival, and
+independence from unrelated general world-event history churn.
 
 Configurable-scenario coverage is deterministic and offline: `world-scenario-v1`, temporary roster/world limits, actual H3 count and area, radius presets, seeded identities and separated spawns, default compatibility, infeasibility, pure preview, atomic apply/current-scenario reset, dynamic assignment reconciliation, density warnings, and schema-v9 attribution. Geocoding uses injected fakes; browser coverage retains the default flow and adds a 469-cell/12-agent scenario flow.
 

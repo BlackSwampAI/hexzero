@@ -274,6 +274,16 @@ unchanged warnings, prefers named alliance reinforcement after sustained member
 pressure, and may remember a bounded meaningful pattern rather than every
 event.
 
+D1.2 adds a compact six-tick rollup to each displayed current event so Patient
+Zero can distinguish isolated from repeated subject pressure. It includes
+subject event/category totals and consecutive affected ticks plus current-member
+alliance totals when the subject is currently allied. The rollup includes the
+current event, excludes movement and older events, and does not infer historical
+alliance membership. An isolated event normally remains silent, although a
+strategically meaningful first loss may justify one directive. Repeated subject
+or current-alliance pressure strongly favors one new actionable directive after
+checking recent Zero messages for equivalent unchanged advice.
+
 Scenario configuration should include simulated-player count, profile mix, travel characteristics, cleaning aggressiveness, search persistence, and seed.
 
 Simulated players follow the same information and interaction rules intended for real players:

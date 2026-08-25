@@ -2142,6 +2142,16 @@ describe('WorldLab', () => {
                         affectedAgentName: agent.name,
                         affectedAllianceId: null,
                         affectedAllianceColor: null,
+                        pressureContext: {
+                          window: { tickCount: 2, startTick: 1, endTick: 2 },
+                          subject: {
+                            totalEvents: 2,
+                            disinfections: 1,
+                            blockedCleans: 1,
+                            consecutiveAffectedTicks: 2,
+                          },
+                          currentAlliance: null,
+                        },
                       },
                     ],
                     totalEventCount: 2,
@@ -2194,6 +2204,9 @@ describe('WorldLab', () => {
       'Patient Zero global cleaner feed: 1/2 displayed · truncated',
     );
     expect(trace).not.toHaveTextContent(`${agent.name} lost`);
+    expect(trace).toHaveTextContent(
+      'subject 2 total (1 disinfected, 1 blocked), 2 consecutive',
+    );
     expect(trace).toHaveTextContent(
       'Model summary (self-reported, not proof): Infecting this open cell.',
     );

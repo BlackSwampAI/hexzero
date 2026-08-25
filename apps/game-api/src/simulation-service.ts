@@ -35,6 +35,7 @@ import {
   WORLD_SCENARIO_LIMITS,
   PATIENT_ZERO_DIPLOMACY_SUMMARY_LIMITS,
   PATIENT_ZERO_PLAYER_THREAT_FEED_LIMIT,
+  PATIENT_ZERO_PRESSURE_WINDOW_TICKS,
   MEMORY_ENTRY_LIMIT,
   personalitySchema,
   simulationSnapshotSchema,
@@ -67,6 +68,7 @@ import {
   type AllianceEvent,
   type AllianceProposalId,
   type SimulatedPlayerEvent,
+  type PatientZeroPressureContext,
   worldSetupRequestSchema,
   type AppliedScenario,
   type WorldSetupPreviewResponse,
@@ -116,6 +118,78 @@ export function selectMostRecentPatientZeroThreats<
         left.eventId.localeCompare(right.eventId),
     )
     .slice(-PATIENT_ZERO_PLAYER_THREAT_FEED_LIMIT);
+}
+
+export function calculatePatientZeroPressureContext(
+  events: readonly WorldEvent[],
+  subjectAgentId: AgentId,
+  currentAllianceMemberIds: readonly AgentId[] | null,
+  currentTick: number,
+): PatientZeroPressureContext {
+  const startTick = Math.max(
+    1,
+    currentTick - PATIENT_ZERO_PRESSURE_WINDOW_TICKS + 1,
+  );
+  const relevant = events.filter(
+    (
+      event,
+    ): event is Extract<
+      WorldEvent,
+      { type: 'hex-disinfected' | 'simulated-player-clean-blocked' }
+    > =>
+      (event.type === 'hex-disinfected' ||
+        event.type === 'simulated-player-clean-blocked') &&
+      event.originatingTick >= startTick &&
+      event.originatingTick <= currentTick,
+  );
+  const eventSubject = (event: (typeof relevant)[number]): AgentId =>
+    event.type === 'hex-disinfected'
+      ? event.previousControllerAgentId
+      : event.blockingAgentId;
+  const countsFor = (selected: readonly (typeof relevant)[number][]) => ({
+    totalEvents: selected.length,
+    disinfections: selected.filter(({ type }) => type === 'hex-disinfected')
+      .length,
+    blockedCleans: selected.filter(
+      ({ type }) => type === 'simulated-player-clean-blocked',
+    ).length,
+  });
+  const subjectEvents = relevant.filter(
+    (event) => eventSubject(event) === subjectAgentId,
+  );
+  const subjectTicks = new Set(
+    subjectEvents.map(({ originatingTick }) => originatingTick),
+  );
+  if (!subjectTicks.has(currentTick))
+    throw new Error(
+      'Patient Zero pressure context requires a current subject event.',
+    );
+  let consecutiveAffectedTicks = 0;
+  for (
+    let tick = currentTick;
+    tick >= startTick && subjectTicks.has(tick);
+    tick -= 1
+  )
+    consecutiveAffectedTicks += 1;
+  const memberIds = currentAllianceMemberIds
+    ? new Set(currentAllianceMemberIds)
+    : null;
+  return {
+    window: {
+      tickCount: currentTick - startTick + 1,
+      startTick,
+      endTick: currentTick,
+    },
+    subject: {
+      ...countsFor(subjectEvents),
+      consecutiveAffectedTicks,
+    },
+    currentAlliance: memberIds
+      ? countsFor(
+          relevant.filter((event) => memberIds.has(eventSubject(event))),
+        )
+      : null,
+  };
 }
 
 interface PendingFailedTurn {
@@ -992,7 +1066,7 @@ export class SimulationService {
       observations = new Map(
         agents.map(({ id }) => [
           id,
-          structuredClone(this.#buildObservation(id)),
+          structuredClone(this.#buildObservation(id, playerAdvance.events)),
         ]),
       );
     } finally {
@@ -1842,7 +1916,10 @@ export class SimulationService {
     };
   }
 
-  #buildObservation(agentId: AgentId): AgentObservation {
+  #buildObservation(
+    agentId: AgentId,
+    currentCandidatePlayerEvents: readonly SimulatedPlayerEvent[] = [],
+  ): AgentObservation {
     const agent = this.#state.agents.get(agentId);
     if (!agent) throw new Error('The active agent does not exist.');
     const currentGoal = this.#agentGoals.get(agentId) ?? null;
@@ -2103,9 +2180,13 @@ export class SimulationService {
             affectedOwnTerritory,
           }))
       : [];
+    const completePlayerPressureEvents = [
+      ...this.#simulatedPlayerEvents,
+      ...currentCandidatePlayerEvents,
+    ];
     const patientZeroPlayerThreats = this.#scenario.capabilities
       .simulatedPlayerPressure
-      ? this.#state.events
+      ? currentCandidatePlayerEvents
           .filter(
             (
               event,
@@ -2133,6 +2214,12 @@ export class SimulationService {
                 'A simulated-player threat references an unknown agent.',
               );
             const alliance = getAgentAlliance(this.#state, referencedAgentId);
+            const pressureContext = calculatePatientZeroPressureContext(
+              completePlayerPressureEvents,
+              referencedAgentId,
+              alliance?.memberAgentIds ?? null,
+              this.#completedTickCount + 1,
+            );
             return event.type === 'hex-disinfected'
               ? {
                   eventId: event.id,
@@ -2143,6 +2230,7 @@ export class SimulationService {
                   affectedAgentName: referencedAgent.name,
                   affectedAllianceId: alliance?.id ?? null,
                   affectedAllianceColor: alliance?.color ?? null,
+                  pressureContext,
                 }
               : {
                   eventId: event.id,
@@ -2153,6 +2241,7 @@ export class SimulationService {
                   blockingAgentName: referencedAgent.name,
                   blockingAllianceId: alliance?.id ?? null,
                   blockingAllianceColor: alliance?.color ?? null,
+                  pressureContext,
                 };
           })
       : [];

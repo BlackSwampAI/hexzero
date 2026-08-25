@@ -1148,6 +1148,84 @@ export const observedPlayerThreatSchema = z
 export type ObservedPlayerThreat = z.infer<typeof observedPlayerThreatSchema>;
 
 export const PATIENT_ZERO_PLAYER_THREAT_FEED_LIMIT = 128;
+export const PATIENT_ZERO_PRESSURE_WINDOW_TICKS = 6;
+const PATIENT_ZERO_PRESSURE_EVENT_COUNT_LIMIT = 1_000_000;
+const patientZeroPressureCountsSchema = z
+  .object({
+    totalEvents: z
+      .number()
+      .int()
+      .nonnegative()
+      .max(PATIENT_ZERO_PRESSURE_EVENT_COUNT_LIMIT),
+    disinfections: z
+      .number()
+      .int()
+      .nonnegative()
+      .max(PATIENT_ZERO_PRESSURE_EVENT_COUNT_LIMIT),
+    blockedCleans: z
+      .number()
+      .int()
+      .nonnegative()
+      .max(PATIENT_ZERO_PRESSURE_EVENT_COUNT_LIMIT),
+  })
+  .strict()
+  .superRefine((counts, context) => {
+    if (counts.totalEvents !== counts.disinfections + counts.blockedCleans)
+      context.addIssue({
+        code: 'custom',
+        message: 'Player-pressure totals must equal their event categories.',
+      });
+  });
+export const patientZeroPressureContextSchema = z
+  .object({
+    window: z
+      .object({
+        tickCount: z
+          .number()
+          .int()
+          .min(1)
+          .max(PATIENT_ZERO_PRESSURE_WINDOW_TICKS),
+        startTick: z.number().int().positive(),
+        endTick: z.number().int().positive(),
+      })
+      .strict(),
+    subject: patientZeroPressureCountsSchema.safeExtend({
+      consecutiveAffectedTicks: z
+        .number()
+        .int()
+        .min(1)
+        .max(PATIENT_ZERO_PRESSURE_WINDOW_TICKS),
+    }),
+    currentAlliance: patientZeroPressureCountsSchema.nullable(),
+  })
+  .strict()
+  .superRefine((pressure, context) => {
+    if (
+      pressure.window.endTick - pressure.window.startTick + 1 !==
+        pressure.window.tickCount ||
+      pressure.subject.totalEvents < 1 ||
+      pressure.subject.consecutiveAffectedTicks > pressure.window.tickCount ||
+      pressure.subject.consecutiveAffectedTicks > pressure.subject.totalEvents
+    )
+      context.addIssue({
+        code: 'custom',
+        message: 'Player-pressure window and subject counts must be truthful.',
+      });
+    if (
+      pressure.currentAlliance &&
+      (pressure.currentAlliance.totalEvents < pressure.subject.totalEvents ||
+        pressure.currentAlliance.disinfections <
+          pressure.subject.disinfections ||
+        pressure.currentAlliance.blockedCleans < pressure.subject.blockedCleans)
+    )
+      context.addIssue({
+        code: 'custom',
+        message: 'Current-alliance pressure cannot be below subject pressure.',
+      });
+  });
+export type PatientZeroPressureContext = z.infer<
+  typeof patientZeroPressureContextSchema
+>;
 const patientZeroDisinfectionThreatSchema = z
   .object({
     eventId: eventIdSchema,
@@ -1158,6 +1236,7 @@ const patientZeroDisinfectionThreatSchema = z
     affectedAgentName: z.string().trim().min(1).max(80),
     affectedAllianceId: allianceIdSchema.nullable(),
     affectedAllianceColor: z.enum(ALLIANCE_COLOR_PALETTE).nullable(),
+    pressureContext: patientZeroPressureContextSchema.optional(),
   })
   .strict();
 const patientZeroBlockedCleanThreatSchema = z
@@ -1170,12 +1249,16 @@ const patientZeroBlockedCleanThreatSchema = z
     blockingAgentName: z.string().trim().min(1).max(80),
     blockingAllianceId: allianceIdSchema.nullable(),
     blockingAllianceColor: z.enum(ALLIANCE_COLOR_PALETTE).nullable(),
+    pressureContext: patientZeroPressureContextSchema.optional(),
   })
   .strict();
 export const patientZeroPlayerThreatEventSchema = z.discriminatedUnion('kind', [
   patientZeroDisinfectionThreatSchema,
   patientZeroBlockedCleanThreatSchema,
 ]);
+export type PatientZeroPlayerThreatEvent = z.infer<
+  typeof patientZeroPlayerThreatEventSchema
+>;
 export const patientZeroPlayerThreatFeedSchema = z
   .object({
     events: z
@@ -1210,6 +1293,19 @@ export const patientZeroPlayerThreatFeedSchema = z
           code: 'custom',
           message:
             'Patient Zero player-threat alliance attribution must be complete.',
+        });
+      if (
+        event.pressureContext &&
+        ((allianceId === null) !==
+          (event.pressureContext.currentAlliance === null) ||
+          (event.kind === 'territory-disinfected'
+            ? event.pressureContext.subject.disinfections < 1
+            : event.pressureContext.subject.blockedCleans < 1))
+      )
+        context.addIssue({
+          code: 'custom',
+          message:
+            'Patient Zero event pressure must include the current event and current alliance state.',
         });
     }
   });
