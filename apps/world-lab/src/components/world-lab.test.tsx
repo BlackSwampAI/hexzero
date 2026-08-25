@@ -1137,7 +1137,216 @@ describe('WorldLab', () => {
     expect(
       screen.getByLabelText('Maximum virtual minutes per tick'),
     ).toHaveValue(10);
+    for (const label of [
+      'World simulation seed',
+      'Spawn assignment seed',
+      'Roster generation seed',
+      'Behavior assignment seed',
+      'Casual cleaner simulation seed',
+    ]) {
+      expect(screen.getByLabelText(label)).toHaveAttribute('maxlength', '80');
+    }
+    const objective = screen.getByLabelText(
+      'Active objective version (engine-owned)',
+    );
+    expect(objective).toHaveValue('durable-influence-v2');
+    expect(objective).toHaveAttribute('readonly');
+    expect(objective).toHaveAccessibleDescription(
+      /Engine-owned version provenance.*not a seed and cannot be edited/i,
+    );
     expect(overflowTrigger.closest('details')).not.toHaveAttribute('open');
+  });
+
+  it.each(['balanced-random', 'fully-random'] as const)(
+    'previews and applies reproducible seed edits with regenerated %s assignments',
+    async (behaviorMode) => {
+      let previewBody: ReturnType<typeof defaultWorldSetupRequest> | undefined;
+      let applyBody: ReturnType<typeof defaultWorldSetupRequest> | undefined;
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+          const url = String(input);
+          if (url.endsWith('/setup/preview')) {
+            previewBody = JSON.parse(String(init?.body));
+            return jsonResponse(previewWorldSetup(previewBody!));
+          }
+          if (url.endsWith('/experiment/setup')) {
+            applyBody = JSON.parse(String(init?.body));
+            return jsonResponse({ snapshot: initial });
+          }
+          return jsonResponse(initial);
+        }),
+      );
+      const user = userEvent.setup();
+      render(<WorldLab />);
+      await openOverflow(user);
+      await user.click(screen.getByRole('button', { name: 'World setup' }));
+
+      if (behaviorMode === 'fully-random')
+        await user.selectOptions(
+          screen.getByLabelText('Behavior mode'),
+          behaviorMode,
+        );
+      const seedEdits = [
+        ['World simulation seed', 'ui-world-seed'],
+        ['Spawn assignment seed', 'ui-spawn-seed'],
+        ['Roster generation seed', 'ui-roster-seed'],
+        ['Behavior assignment seed', 'ui-behavior-seed'],
+      ] as const;
+      for (const [label, value] of seedEdits) {
+        const input = screen.getByLabelText(label);
+        await user.clear(input);
+        await user.type(input, value);
+      }
+      await user.click(
+        screen.getByRole('checkbox', { name: 'Enable casual cleaner' }),
+      );
+      const cleanerSeed = screen.getByLabelText(
+        'Casual cleaner simulation seed',
+      );
+      await user.clear(cleanerSeed);
+      await user.type(cleanerSeed, 'ui-cleaner-seed');
+
+      const expectedAssignments = assignBehavior(
+        initial.scenario.roster.map(({ id }) => id),
+        'ui-behavior-seed',
+        behaviorMode,
+      );
+      await user.click(screen.getByRole('button', { name: 'Preview' }));
+      expect(previewBody).toMatchObject({
+        worldSeed: 'ui-world-seed',
+        spawnSeed: 'ui-spawn-seed',
+        rosterSeed: 'ui-roster-seed',
+        behaviorConfiguration: {
+          assignmentMode: behaviorMode,
+          seed: 'ui-behavior-seed',
+          assignments: expectedAssignments,
+        },
+        simulatedPlayer: { enabled: true, seed: 'ui-cleaner-seed' },
+        objectiveVersion: 'durable-influence-v3',
+      });
+      await user.click(
+        screen.getByRole('button', { name: 'Apply / Create Experiment' }),
+      );
+      expect(applyBody).toEqual(previewBody);
+    },
+  );
+
+  it('preserves explicit manual assignments when its generation seed changes', async () => {
+    let previewBody: ReturnType<typeof defaultWorldSetupRequest> | undefined;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input).endsWith('/setup/preview')) {
+          previewBody = JSON.parse(String(init?.body));
+          return jsonResponse(previewWorldSetup(previewBody!));
+        }
+        return jsonResponse(initial);
+      }),
+    );
+    const user = userEvent.setup();
+    render(<WorldLab />);
+    await openOverflow(user);
+    await user.click(screen.getByRole('button', { name: 'World setup' }));
+    await user.selectOptions(screen.getByLabelText('Behavior mode'), 'manual');
+    const expectedAssignments =
+      initial.scenario.behaviorConfiguration.assignments.map((assignment) => ({
+        ...assignment,
+        manual: true,
+      }));
+    const seed = screen.getByLabelText('Behavior assignment seed');
+    await user.clear(seed);
+    await user.type(seed, 'manual-provenance-seed');
+    await user.click(screen.getByRole('button', { name: 'Preview' }));
+
+    expect(previewBody?.behaviorConfiguration).toEqual({
+      ...initial.scenario.behaviorConfiguration,
+      assignmentMode: 'manual',
+      seed: 'manual-provenance-seed',
+      assignments: expectedAssignments,
+    });
+    expect(
+      screen.getByText(/Manual choices override it and remain unchanged/),
+    ).toBeVisible();
+  });
+
+  it('hydrates every seed and objective provenance from an authoritative reset snapshot', async () => {
+    const behaviorConfiguration = {
+      ...initial.scenario.behaviorConfiguration,
+      seed: 'reset-behavior-seed',
+      assignments: assignBehavior(
+        initial.scenario.roster.map(({ id }) => id),
+        'reset-behavior-seed',
+        'balanced-random',
+      ),
+    };
+    const resetSnapshot = simulationSnapshotSchema.parse({
+      ...initial,
+      scenario: {
+        ...initial.scenario,
+        worldSeed: 'reset-world-seed',
+        spawnSeed: 'reset-spawn-seed',
+        rosterSeed: 'reset-roster-seed',
+        behaviorConfiguration,
+        objectiveVersion: 'durable-influence-v3',
+        capabilities: {
+          ...initial.scenario.capabilities,
+          simulatedPlayerPressure: true,
+        },
+        simulatedPlayer: {
+          enabled: true,
+          profile: 'casual-cleaner',
+          seed: 'reset-cleaner-seed',
+        },
+      },
+      behaviorConfiguration,
+      world: {
+        ...initial.world,
+        simulatedPlayer: {
+          profile: 'casual-cleaner',
+          currentCell: initial.world.hexes[0]!.cell,
+          metrics: {
+            movements: 0,
+            cellsDisinfected: 0,
+            blockedDisinfections: 0,
+          },
+        },
+      },
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) =>
+        String(input).endsWith('/reset')
+          ? jsonResponse({ snapshot: resetSnapshot })
+          : jsonResponse(initial),
+      ),
+    );
+    const user = userEvent.setup();
+    render(<WorldLab />);
+    await openOverflow(user);
+    await user.click(screen.getByRole('button', { name: 'Reset world' }));
+    await screen.findByTestId('simulated-player-activity');
+    await openOverflow(user);
+    await user.click(screen.getByRole('button', { name: 'World setup' }));
+
+    expect(screen.getByLabelText('World simulation seed')).toHaveValue(
+      'reset-world-seed',
+    );
+    expect(screen.getByLabelText('Spawn assignment seed')).toHaveValue(
+      'reset-spawn-seed',
+    );
+    expect(screen.getByLabelText('Roster generation seed')).toHaveValue(
+      'reset-roster-seed',
+    );
+    expect(screen.getByLabelText('Behavior assignment seed')).toHaveValue(
+      'reset-behavior-seed',
+    );
+    expect(screen.getByLabelText('Casual cleaner simulation seed')).toHaveValue(
+      'reset-cleaner-seed',
+    );
+    expect(
+      screen.getByLabelText('Active objective version (engine-owned)'),
+    ).toHaveValue('durable-influence-v3');
   });
 
   it('previews an explicitly seeded casual cleaner without enabling it by default', async () => {
@@ -1161,10 +1370,15 @@ describe('WorldLab', () => {
       name: 'Enable casual cleaner',
     });
     expect(enabled).not.toBeChecked();
+    const objective = screen.getByLabelText(
+      'Active objective version (engine-owned)',
+    );
+    expect(objective).toHaveValue('durable-influence-v2');
     await user.click(enabled);
-    const seed = screen.getByLabelText('Casual cleaner seed');
+    const seed = screen.getByLabelText('Casual cleaner simulation seed');
     await user.clear(seed);
     await user.type(seed, 'ui-pressure-a');
+    expect(objective).toHaveValue('durable-influence-v3');
     await user.click(screen.getByRole('button', { name: 'Preview' }));
     expect(previewBody).toMatchObject({
       objectiveVersion: 'durable-influence-v3',
@@ -1183,6 +1397,7 @@ describe('WorldLab', () => {
       capabilities: { simulatedPlayerPressure: false },
       simulatedPlayer: { enabled: false },
     });
+    expect(objective).toHaveValue('durable-influence-v2');
     expect(await screen.findByText(/player pressure disabled/)).toBeVisible();
   });
 

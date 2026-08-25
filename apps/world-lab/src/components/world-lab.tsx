@@ -2159,9 +2159,20 @@ function WorldSetupPanel({
             />
           </label>
           <label>
-            Spawn seed
+            World simulation seed
+            <input
+              value={draft.worldSeed}
+              maxLength={80}
+              onChange={(event) =>
+                setDraft({ ...draft, worldSeed: event.target.value })
+              }
+            />
+          </label>
+          <label>
+            Spawn assignment seed
             <input
               value={draft.spawnSeed}
+              maxLength={80}
               onChange={(event) =>
                 setDraft({ ...draft, spawnSeed: event.target.value })
               }
@@ -2251,9 +2262,10 @@ function WorldSetupPanel({
             Enable casual cleaner
           </label>
           <label>
-            Casual cleaner seed
+            Casual cleaner simulation seed
             <input
               value={draft.simulatedPlayer.seed}
+              maxLength={80}
               disabled={!draft.simulatedPlayer.enabled}
               onChange={(event) =>
                 setDraft({
@@ -2266,7 +2278,20 @@ function WorldSetupPanel({
               }
             />
           </label>
+          <label>
+            Active objective version (engine-owned)
+            <input
+              value={draft.objectiveVersion}
+              readOnly
+              aria-describedby="objective-version-provenance"
+            />
+          </label>
         </div>
+        <p id="objective-version-provenance">
+          Engine-owned version provenance. Enabling the casual cleaner selects
+          durable-influence-v3; disabling it selects durable-influence-v2. This
+          is not a seed and cannot be edited.
+        </p>
       </section>
       <section className="setup-section">
         <h3>Roster · {draft.roster.length}</h3>
@@ -2284,9 +2309,10 @@ function WorldSetupPanel({
           />
         </label>
         <label>
-          Roster seed
+          Roster generation seed
           <input
             value={draft.rosterSeed}
+            maxLength={80}
             onChange={(event) =>
               setDraft({ ...draft, rosterSeed: event.target.value })
             }
@@ -2372,6 +2398,37 @@ function WorldSetupPanel({
             ))}
           </select>
         </label>
+        <label>
+          Behavior assignment seed
+          <input
+            value={draft.behaviorConfiguration.seed}
+            maxLength={80}
+            aria-describedby="behavior-assignment-seed-help"
+            onChange={(event) => {
+              const seed = event.target.value;
+              setDraft((current) => ({
+                ...current,
+                behaviorConfiguration: {
+                  ...current.behaviorConfiguration,
+                  seed,
+                  assignments:
+                    current.behaviorConfiguration.assignmentMode === 'manual'
+                      ? current.behaviorConfiguration.assignments
+                      : assignBehavior(
+                          current.roster.map(({ id }) => id),
+                          seed,
+                          current.behaviorConfiguration.assignmentMode,
+                        ),
+                },
+              }));
+            }}
+          />
+        </label>
+        <p id="behavior-assignment-seed-help">
+          The seed deterministically generates balanced-random and fully-random
+          assignments. Manual choices override it and remain unchanged when the
+          seed changes.
+        </p>
         <label>
           Behavior mode
           <select
