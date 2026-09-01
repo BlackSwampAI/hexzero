@@ -16,10 +16,10 @@
   "dependencies": {
     "@hexzero/shared": "workspace:*",
     "h3-js": "4.5.0",
-    "zod": "4.4.3"
+    "zod": "4.5.2"
   },
   "devDependencies": {
     "tsx": "4.23.12",
-    "vitest": "4.1.10"
+    "vitest": "4.1.11"
   }
 }
