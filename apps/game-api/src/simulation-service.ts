@@ -102,6 +102,7 @@ import {
   type ExperimentSource,
   ExperimentMetricAccumulator,
 } from './experiment-export';
+import { geographicDirectionBetweenCells } from './geographic-direction';
 
 const RESET_GENERATED_AT = '2026-08-13T12:00:00.000Z';
 const MAX_TURN_HISTORY = 120;
@@ -2279,13 +2280,12 @@ export class SimulationService {
                 : actingAlliance && controllerAlliance?.id === actingAlliance.id
                   ? ('allied' as const)
                   : ('other' as const);
-          const directions = ['N', 'NE', 'SE', 'S', 'SW', 'NW'] as const;
-          const canonicalIndex = gridDisk(agent.currentCell, 1)
-            .filter((cell) => cell !== agent.currentCell)
-            .indexOf(destination.cell);
           return {
             targetCell: destination.cell,
-            direction: directions[Math.max(0, canonicalIndex)]!,
+            direction: geographicDirectionBetweenCells(
+              agent.currentCell,
+              destination.cell,
+            ),
             destinationState: destination.state,
             controllerRelationship: relationship,
             recentlyOccupied: recentMovements.some(
