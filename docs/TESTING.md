@@ -20,8 +20,9 @@ cost warnings, cancellation reconciliation, and lost-tick status.
 
 Focused deterministic coverage includes physical-distance messaging across H3
 resolutions, the eight-agent observation cap, alliance long-range visibility and
-delivery, channel privacy, seeded move-affordance ordering, effective
-neutral/alliance colors, and operator-only private-feed filters. Provider tests
+delivery, channel privacy, seeded move-affordance ordering, H3-center-bearing
+direction labels across locations and resolutions independent of traversal
+order, effective neutral/alliance colors, and operator-only private-feed filters. Provider tests
 remain offline and verify the flat `text-flat-json-v8` contract, its
 selective-communication, bounded goal and memory, and diplomacy-affordance policy
 text, unchanged wire parsing, and legacy v3-v7 attribution compatibility.

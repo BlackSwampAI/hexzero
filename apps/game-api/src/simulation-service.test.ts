@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { gridDistance } from 'h3-js';
+import { gridDisk, gridDistance } from 'h3-js';
 import {
   AgentProviderError,
   ScriptedAgentProvider,
@@ -51,6 +51,7 @@ import {
   calculateExperimentMetrics,
   serializeExperimentExport,
 } from './experiment-export';
+import { geographicDirectionBetweenCells } from './geographic-direction';
 
 const now = () => '2026-08-13T12:00:01.000Z';
 const createEventId = () => '67aa21b9-fc78-4b04-9f92-9862bf346f96';
@@ -1689,6 +1690,9 @@ describe('SimulationService', () => {
         { worldAction: { type: 'infect' }, summary: 'Infect.' },
       ]),
     );
+    const worldCells = new Set(
+      simulation.getSnapshot().world.hexes.map(({ cell }) => cell),
+    );
     const turn = await simulation.executeNextTurn();
     expect(turn.observation.actionAvailability).toMatchObject({
       moveTargetCellIds: turn.observation.adjacentCells.map(({ cell }) => cell),
@@ -1699,6 +1703,21 @@ describe('SimulationService', () => {
     expect(turn.observation.actionAvailability.moveOptions).toHaveLength(
       turn.observation.adjacentCells.length,
     );
+    const legalTargets = gridDisk(turn.observation.currentCell.cell, 1)
+      .filter((cell) => cell !== turn.observation.currentCell.cell)
+      .map((cell) => h3CellSchema.parse(cell))
+      .filter((cell) => worldCells.has(cell));
+    expect(
+      new Set(turn.observation.actionAvailability.moveTargetCellIds),
+    ).toEqual(new Set(legalTargets));
+    for (const option of turn.observation.actionAvailability.moveOptions) {
+      expect(option.direction).toBe(
+        geographicDirectionBetweenCells(
+          turn.observation.currentCell.cell,
+          option.targetCell,
+        ),
+      );
+    }
     expect(turn.outcome).toBe('accepted');
     if (
       turn.outcome === 'provider-error' ||
