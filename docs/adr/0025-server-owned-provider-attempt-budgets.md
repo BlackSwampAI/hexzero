@@ -28,7 +28,6 @@ do not.
 ## Consequences
 
 The browser cannot silently run beyond the configured attempt allowance, and
-the operator can distinguish provider work from committed-turn metrics. This
-is an attempt ceiling, not a monetary ceiling: pricing, a true credit budget,
-durable attempt records, and safe-export/SQLite ledger changes are deferred to
-O2b so those external formats can change under an explicit versioned contract.
+the operator can distinguish provider work from committed-turn metrics. ADR
+0026 complements this with conservative credit admission reservations. Durable
+attempt records and safe-export/SQLite ledger changes remain deferred to O2b-2.

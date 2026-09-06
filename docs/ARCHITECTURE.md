@@ -1,9 +1,13 @@
 # Architecture
 
-Provider-attempt admission is owned by `SimulationService`. Its ledger is
+Provider-attempt and credit-exposure admission are owned by `SimulationService`. Its ledger is
 deliberately separate from deterministic world state and committed-turn
 metrics: tick rollback cannot erase provider work that may already be billed.
-See ADR 0025.
+Whole ticks reserve both capacities atomically. Started calls retain their
+operator-configured credit reservation until known cost safely reconciles it;
+unknown or cancelled calls retain exposure, and a reported reservation overage
+stops future admission when a credit ceiling is enabled. These decimal-string totals are server authority, but
+they do not enforce the upstream account balance. See ADRs 0025 and 0026.
 
 ## Simultaneous tick authority
 

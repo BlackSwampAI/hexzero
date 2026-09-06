@@ -853,7 +853,7 @@ export function WorldLab() {
             </strong>
             <span className="navbar-cost">
               {formatCost(
-                snapshot.experiment.attemptAccounting.knownCostCredits,
+                snapshot.experiment.attemptAccounting.committedCreditExposure,
               )}
             </span>
           </button>
@@ -904,10 +904,35 @@ export function WorldLab() {
                 </dd>
               </div>
               <div>
-                <dt>Known credits</dt>
+                <dt>Committed exposure</dt>
                 <dd>
                   {formatCost(
-                    snapshot.experiment.attemptAccounting.knownCostCredits,
+                    snapshot.experiment.attemptAccounting
+                      .committedCreditExposure,
+                  )}{' '}
+                  /{' '}
+                  {snapshot.experiment.attemptAccounting.creditLimit === null
+                    ? 'Unlimited'
+                    : formatCost(
+                        snapshot.experiment.attemptAccounting.creditLimit,
+                      )}
+                </dd>
+              </div>
+              <div>
+                <dt>Unstarted reserved credits</dt>
+                <dd>
+                  {formatCost(
+                    snapshot.experiment.attemptAccounting
+                      .unstartedReservedCredits,
+                  )}
+                </dd>
+              </div>
+              <div>
+                <dt>Known finalized cost</dt>
+                <dd>
+                  {formatCost(
+                    snapshot.experiment.attemptAccounting
+                      .knownFinalizedCostCredits,
                   )}
                 </dd>
               </div>
@@ -920,10 +945,26 @@ export function WorldLab() {
                   }
                 </dd>
               </div>
+              {snapshot.experiment.attemptAccounting
+                .reservationOverageCredits !== '0' && (
+                <div>
+                  <dt>Reservation overage</dt>
+                  <dd>
+                    {formatCost(
+                      snapshot.experiment.attemptAccounting
+                        .reservationOverageCredits,
+                    )}
+                  </dd>
+                </div>
+              )}
               {snapshot.experiment.attemptAccounting.exhaustionReason && (
                 <div>
                   <dt>Execution limit</dt>
-                  <dd>Provider-attempt limit exhausted</dd>
+                  <dd>
+                    {attemptExhaustionLabel(
+                      snapshot.experiment.attemptAccounting.exhaustionReason,
+                    )}
+                  </dd>
                 </div>
               )}
               <div>
@@ -1704,9 +1745,11 @@ function RunHealthSummary({
           <dd>{elapsedMinutes} min</dd>
         </div>
         <div>
-          <dt>Known cost</dt>
+          <dt>Committed credit exposure</dt>
           <dd>
-            {formatCost(snapshot.experiment.attemptAccounting.knownCostCredits)}
+            {formatCost(
+              snapshot.experiment.attemptAccounting.committedCreditExposure,
+            )}
           </dd>
         </div>
         <div>
@@ -2302,7 +2345,8 @@ function WorldSetupPanel({
                 setDraft({
                   ...draft,
                   executionLimits: {
-                    version: 'execution-limits-v1',
+                    ...draft.executionLimits,
+                    version: 'execution-limits-v2',
                     providerAttemptLimit: event.target.checked ? null : 1000,
                   },
                 })
@@ -2322,13 +2366,69 @@ function WorldSetupPanel({
                 setDraft({
                   ...draft,
                   executionLimits: {
-                    version: 'execution-limits-v1',
+                    ...draft.executionLimits,
+                    version: 'execution-limits-v2',
                     providerAttemptLimit: Number(event.target.value),
                   },
                 })
               }
             />
           </label>
+          <label>
+            <input
+              type="checkbox"
+              checked={draft.executionLimits.creditLimit === null}
+              onChange={(event) =>
+                setDraft({
+                  ...draft,
+                  executionLimits: {
+                    ...draft.executionLimits,
+                    creditLimit: event.target.checked ? null : '1',
+                  },
+                })
+              }
+            />
+            Unlimited experiment credit admission
+          </label>
+          <label>
+            Experiment credit admission limit
+            <input
+              type="text"
+              inputMode="decimal"
+              disabled={draft.executionLimits.creditLimit === null}
+              value={draft.executionLimits.creditLimit ?? ''}
+              onChange={(event) =>
+                setDraft({
+                  ...draft,
+                  executionLimits: {
+                    ...draft.executionLimits,
+                    creditLimit: event.target.value,
+                  },
+                })
+              }
+            />
+          </label>
+          <label>
+            Reserved credits per provider attempt
+            <input
+              type="text"
+              inputMode="decimal"
+              value={draft.executionLimits.reservationCreditsPerAttempt}
+              onChange={(event) =>
+                setDraft({
+                  ...draft,
+                  executionLimits: {
+                    ...draft.executionLimits,
+                    reservationCreditsPerAttempt: event.target.value,
+                  },
+                })
+              }
+            />
+          </label>
+          <p className="field-help">
+            This limits server admission and reserved exposure; it does not
+            guarantee the upstream provider bill.
+          </p>
           <label>
             <input
               type="checkbox"
@@ -5434,8 +5534,20 @@ function customOptionLabel(key: keyof CustomExportOptions): string {
   }[key];
 }
 
-function formatCost(cost: number): string {
-  return `${cost.toFixed(8).replace(/0+$/, '').replace(/\.$/, '.0')} credits`;
+function attemptExhaustionLabel(
+  reason: SimulationSnapshot['experiment']['attemptAccounting']['exhaustionReason'],
+): string {
+  if (reason === 'provider-attempt-limit')
+    return 'Provider-attempt limit exhausted';
+  if (reason === 'credit-reservation-overrun')
+    return 'Reported cost exceeded its reservation; enabled credit admission is stopped';
+  return 'Credit admission limit exhausted';
+}
+
+function formatCost(cost: number | string): string {
+  if (typeof cost === 'string')
+    return `${cost.includes('.') ? cost : `${cost}.0`} credits`;
+  return `${Number(cost).toFixed(8).replace(/0+$/, '').replace(/\.$/, '.0')} credits`;
 }
 
 function formatPerMillion(pricePerToken: string): string {

@@ -1313,7 +1313,7 @@ describe('SimulationService', () => {
           attemptsStarted: 1,
           attemptsFinalized: 1,
           attemptsInFlight: 0,
-          knownCostCredits: 0.125,
+          knownFinalizedCostCredits: '0.125',
           attemptsWithUnknownCost: 0,
         },
       },
@@ -1844,6 +1844,53 @@ describe('SimulationService', () => {
       outcome: 'accepted',
       modelAttempts: [{ kind: 'initial' }, { kind: 'automatic-repair' }],
     });
+  });
+
+  it('denies an automatic retry when the first unknown-cost call consumed credit exposure', async () => {
+    let calls = 0;
+    const simulation = service({
+      mode: 'scripted-test',
+      model: 'deterministic-script',
+      configured: true,
+      async decide(_observation, model) {
+        calls += 1;
+        throw new AgentProviderError({
+          code: 'invalid-json',
+          message: 'Invalid decision JSON.',
+          retryable: true,
+          model,
+          validationCodes: ['invalid-json'],
+        });
+      },
+    });
+    const setup = defaultWorldSetupRequest();
+    simulation.applyWorldSetup({
+      ...setup,
+      modelConfiguration: {
+        ...setup.modelConfiguration,
+        globalModelId: 'deterministic-script',
+      },
+      executionLimits: {
+        version: 'execution-limits-v2',
+        providerAttemptLimit: null,
+        creditLimit: '0.01',
+        reservationCreditsPerAttempt: '0.01',
+      },
+    });
+
+    await expect(simulation.executeNextTurn()).rejects.toMatchObject({
+      code: 'experiment_budget_exhausted',
+      message:
+        'The experiment does not have enough provider-attempt or credit-admission capacity.',
+    });
+    expect(calls).toBe(1);
+    expect(simulation.getSnapshot().experiment.attemptAccounting).toMatchObject(
+      {
+        committedCreditExposure: '0.01',
+        attemptsWithUnknownCost: 1,
+        exhaustionReason: 'credit-admission-limit',
+      },
+    );
   });
 
   it.each([
@@ -4136,7 +4183,7 @@ describe('SimulationService', () => {
       attemptsStarted: 4,
       attemptsFinalized: 4,
       attemptsInFlight: 0,
-      knownCostCredits: 0.04,
+      knownFinalizedCostCredits: '0.04',
       attemptsWithUnknownCost: 0,
     });
     const skipped = simulation.skipFailedTurn();
@@ -4325,7 +4372,7 @@ describe('SimulationService', () => {
         attemptAccounting: {
           attemptsStarted: 1,
           attemptsFinalized: 1,
-          knownCostCredits: 0.125,
+          knownFinalizedCostCredits: '0.125',
           attemptsWithUnknownCost: 0,
         },
       },
@@ -4703,8 +4750,10 @@ describe('SimulationService', () => {
         globalModelId: 'deterministic-script',
       },
       executionLimits: {
-        version: 'execution-limits-v1',
+        version: 'execution-limits-v2',
         providerAttemptLimit: setup.roster.length,
+        creditLimit: '0.08',
+        reservationCreditsPerAttempt: '0.01',
       },
     });
     await simulation.executeNextTick();
@@ -4713,10 +4762,12 @@ describe('SimulationService', () => {
       attemptsStarted: setup.roster.length,
       attemptsFinalized: setup.roster.length,
       attemptsInFlight: 0,
-      knownCostCredits: 0,
+      knownFinalizedCostCredits: '0',
       attemptsWithUnknownCost: 0,
       remainingAttempts: 0,
       exhausted: true,
+      creditLimit: '0.08',
+      committedCreditExposure: '0',
     });
     simulation.updateAgentPersonality(
       afterFirst.world.agents[0]!.id,
@@ -4734,9 +4785,11 @@ describe('SimulationService', () => {
     expect(simulation.reset().experiment.attemptAccounting).toMatchObject({
       attemptsStarted: 0,
       attemptsFinalized: 0,
-      knownCostCredits: 0,
+      knownFinalizedCostCredits: '0',
       attemptsWithUnknownCost: 0,
       exhausted: false,
+      creditLimit: '0.08',
+      committedCreditExposure: '0',
     });
     await simulation.executeNextTick();
     expect(
@@ -4752,9 +4805,57 @@ describe('SimulationService', () => {
     expect(applied.experiment.attemptAccounting).toMatchObject({
       attemptsStarted: 0,
       attemptsFinalized: 0,
-      knownCostCredits: 0,
+      knownFinalizedCostCredits: '0',
       attemptsWithUnknownCost: 0,
       exhausted: false,
+      creditLimit: null,
+      committedCreditExposure: '0',
+    });
+  });
+
+  it('rejects a whole simultaneous tick before dispatch when credit cannot cover the roster', async () => {
+    let calls = 0;
+    const simulation = service({
+      mode: 'scripted-test',
+      model: 'deterministic-script',
+      configured: true,
+      async decide() {
+        calls += 1;
+        throw new Error('Credit admission must prevent this call.');
+      },
+    });
+    const setup = defaultWorldSetupRequest();
+    simulation.applyWorldSetup({
+      ...setup,
+      modelConfiguration: {
+        ...setup.modelConfiguration,
+        globalModelId: 'deterministic-script',
+      },
+      executionLimits: {
+        version: 'execution-limits-v2',
+        providerAttemptLimit: null,
+        creditLimit: '0.07999999',
+        reservationCreditsPerAttempt: '0.01',
+      },
+    });
+
+    await expect(simulation.executeNextTick()).rejects.toMatchObject({
+      code: 'experiment_budget_exhausted',
+    });
+    expect(calls).toBe(0);
+    expect(simulation.getSnapshot()).toMatchObject({
+      tickNumber: 0,
+      turnNumber: 0,
+      status: 'budget-exhausted',
+      experiment: {
+        attemptAccounting: {
+          attemptsStarted: 0,
+          unstartedReservedCredits: '0',
+          committedCreditExposure: '0',
+          remainingAdmissionCredits: '0.07999999',
+          exhaustionReason: 'credit-admission-limit',
+        },
+      },
     });
   });
 });

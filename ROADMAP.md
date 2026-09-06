@@ -107,6 +107,10 @@ Persistent short- and long-term objectives, compact memories, plan revision, sum
 
 ## PR 6 — Persistent autonomous world
 
-Scheduled turns, snapshots, replay, retries, idempotency, budgets, failure recovery, and operation without the World Lab browser being open.
+Scheduled turns, snapshots, replay, retries, idempotency, durable budget/attempt
+ledgers, failure recovery, and operation without the World Lab browser being
+open. The current process-local attempt and credit-admission ceilings are an
+operator safety boundary, not runtime persistence or provider-account balance
+enforcement.
 
 Player development begins only after these agent milestones demonstrate compelling behavior.

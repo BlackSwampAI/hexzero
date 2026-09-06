@@ -129,18 +129,22 @@ describe('scenario contracts', () => {
     });
   });
 
-  it('defaults and bounds the versioned provider-attempt limit', () => {
+  it('defaults and bounds versioned attempt and credit admission limits', () => {
     const parsed = worldSetupRequestSchema.parse(request);
     expect(parsed.executionLimits).toEqual({
-      version: 'execution-limits-v1',
+      version: 'execution-limits-v2',
       providerAttemptLimit: 1_000,
+      creditLimit: null,
+      reservationCreditsPerAttempt: '0.01',
     });
     expect(
       worldSetupRequestSchema.parse({
         ...parsed,
         executionLimits: {
-          version: 'execution-limits-v1',
+          version: 'execution-limits-v2',
           providerAttemptLimit: null,
+          creditLimit: null,
+          reservationCreditsPerAttempt: '0.01',
         },
       }).executionLimits.providerAttemptLimit,
     ).toBeNull();
@@ -149,8 +153,10 @@ describe('scenario contracts', () => {
         worldSetupRequestSchema.safeParse({
           ...parsed,
           executionLimits: {
-            version: 'execution-limits-v1',
+            version: 'execution-limits-v2',
             providerAttemptLimit,
+            creditLimit: null,
+            reservationCreditsPerAttempt: '0.01',
           },
         }).success,
       ).toBe(false);
@@ -158,11 +164,34 @@ describe('scenario contracts', () => {
       worldSetupRequestSchema.safeParse({
         ...parsed,
         executionLimits: {
-          version: 'execution-limits-v1',
+          version: 'execution-limits-v2',
           providerAttemptLimit: 100_000,
+          creditLimit: '0.00000001',
+          reservationCreditsPerAttempt: '0.00000001',
         },
       }).success,
     ).toBe(true);
+    expect(
+      worldSetupRequestSchema.safeParse({
+        ...parsed,
+        executionLimits: {
+          version: 'execution-limits-v1',
+          providerAttemptLimit: 1000,
+        },
+      }).success,
+    ).toBe(false);
+    for (const value of ['0', '-1', '01', '1e-3', ''])
+      expect(
+        worldSetupRequestSchema.safeParse({
+          ...parsed,
+          executionLimits: {
+            version: 'execution-limits-v2',
+            providerAttemptLimit: 1000,
+            creditLimit: value,
+            reservationCreditsPerAttempt: '0.01',
+          },
+        }).success,
+      ).toBe(false);
   });
 
   it('runtime-validates request, preview and applied contracts', () => {
@@ -193,6 +222,18 @@ describe('scenario contracts', () => {
       expect(
         appliedScenarioSchema.parse(preview.scenario).objectiveVersion,
       ).toBe('durable-influence-v2');
+    expect(
+      archivedAppliedScenarioSchema.parse({
+        ...scenario,
+        executionLimits: {
+          version: 'execution-limits-v1',
+          providerAttemptLimit: 1000,
+        },
+      }).executionLimits,
+    ).toEqual({
+      version: 'execution-limits-v1',
+      providerAttemptLimit: 1000,
+    });
   });
 
   it('rejects dynamic roster overflow and behavior under-coverage', () => {

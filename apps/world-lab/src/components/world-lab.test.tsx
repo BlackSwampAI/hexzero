@@ -1121,7 +1121,13 @@ describe('WorldLab', () => {
           attemptsFinalized: 8,
           attemptsInFlight: 0,
           remainingAttempts: 0,
-          knownCostCredits: 0.25,
+          creditLimit: '1',
+          reservationCreditsPerAttempt: '0.01',
+          unstartedReservedCredits: '0',
+          committedCreditExposure: '0.25',
+          remainingAdmissionCredits: '0.75',
+          knownFinalizedCostCredits: '0.000000004',
+          reservationOverageCredits: '0',
           attemptsWithUnknownCost: 1,
           exhausted: true,
           exhaustionReason: 'provider-attempt-limit',
@@ -1141,6 +1147,7 @@ describe('WorldLab', () => {
         screen.getByLabelText(/Experiment details\. Tick 0, budget exhausted/),
       );
     expect(screen.getByText('Provider-attempt limit exhausted')).toBeVisible();
+    expect(screen.getByText('0.000000004 credits')).toBeVisible();
     expect(screen.getByText('8 / 8')).toBeVisible();
     expect(screen.getByText('1', { selector: 'dd' })).toBeVisible();
   });
@@ -1154,14 +1161,20 @@ describe('WorldLab', () => {
         attemptAccounting: {
           providerAttemptLimit: 1,
           reservedPermits: 0,
-          attemptsStarted: 0,
-          attemptsFinalized: 0,
+          attemptsStarted: 1,
+          attemptsFinalized: 1,
           attemptsInFlight: 0,
-          remainingAttempts: 1,
-          knownCostCredits: 0,
-          attemptsWithUnknownCost: 0,
+          remainingAttempts: 0,
+          creditLimit: '0.01',
+          reservationCreditsPerAttempt: '0.01',
+          unstartedReservedCredits: '0',
+          committedCreditExposure: '0.01',
+          remainingAdmissionCredits: '0',
+          knownFinalizedCostCredits: '0',
+          reservationOverageCredits: '0',
+          attemptsWithUnknownCost: 1,
           exhausted: true,
-          exhaustionReason: 'provider-attempt-limit',
+          exhaustionReason: 'credit-admission-limit',
         },
       },
     });
@@ -1194,6 +1207,12 @@ describe('WorldLab', () => {
     expect(
       screen.getByLabelText(/Experiment details\. Tick 0, budget exhausted/),
     ).toBeInTheDocument();
+    await userEvent
+      .setup()
+      .click(
+        screen.getByLabelText(/Experiment details\. Tick 0, budget exhausted/),
+      );
+    expect(screen.getByText('Credit admission limit exhausted')).toBeVisible();
     expect(snapshotReads).toBe(2);
   });
 
@@ -1230,6 +1249,18 @@ describe('WorldLab', () => {
     expect(
       screen.getByLabelText('Unlimited provider attempts'),
     ).not.toBeChecked();
+    expect(
+      screen.getByLabelText('Unlimited experiment credit admission'),
+    ).toBeChecked();
+    expect(
+      screen.getByLabelText('Experiment credit admission limit'),
+    ).toBeDisabled();
+    expect(
+      screen.getByLabelText('Reserved credits per provider attempt'),
+    ).toHaveValue('0.01');
+    expect(
+      screen.getByText(/does not guarantee the upstream provider bill/i),
+    ).toBeVisible();
     for (const label of [
       'World simulation seed',
       'Spawn assignment seed',
