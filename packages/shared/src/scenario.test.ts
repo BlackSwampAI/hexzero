@@ -129,6 +129,42 @@ describe('scenario contracts', () => {
     });
   });
 
+  it('defaults and bounds the versioned provider-attempt limit', () => {
+    const parsed = worldSetupRequestSchema.parse(request);
+    expect(parsed.executionLimits).toEqual({
+      version: 'execution-limits-v1',
+      providerAttemptLimit: 1_000,
+    });
+    expect(
+      worldSetupRequestSchema.parse({
+        ...parsed,
+        executionLimits: {
+          version: 'execution-limits-v1',
+          providerAttemptLimit: null,
+        },
+      }).executionLimits.providerAttemptLimit,
+    ).toBeNull();
+    for (const providerAttemptLimit of [0, -1, 1.5, 100_001])
+      expect(
+        worldSetupRequestSchema.safeParse({
+          ...parsed,
+          executionLimits: {
+            version: 'execution-limits-v1',
+            providerAttemptLimit,
+          },
+        }).success,
+      ).toBe(false);
+    expect(
+      worldSetupRequestSchema.safeParse({
+        ...parsed,
+        executionLimits: {
+          version: 'execution-limits-v1',
+          providerAttemptLimit: 100_000,
+        },
+      }).success,
+    ).toBe(true);
+  });
+
   it('runtime-validates request, preview and applied contracts', () => {
     const parsed = worldSetupRequestSchema.parse(request);
     const scenario = {

@@ -116,6 +116,7 @@ describe('dispatchTickDecisions', () => {
   it('does not start an exhausted queued job and sanitizes unexpected errors', async () => {
     let nowMs = 0;
     let calls = 0;
+    let starts = 0;
     const provider: AgentProvider = {
       mode: 'scripted-test',
       configured: true,
@@ -129,8 +130,13 @@ describe('dispatchTickDecisions', () => {
       concurrency: 1,
       deadlineAtMs: 100,
       nowMs: () => nowMs,
+      beginAttempt: () => {
+        starts += 1;
+        return () => {};
+      },
     });
     expect(calls).toBe(1);
+    expect(starts).toBe(1);
     expect(results).toHaveLength(2);
     expect(results[0]).toMatchObject({
       outcome: 'lost-tick',
@@ -267,5 +273,65 @@ describe('dispatchTickDecisions', () => {
       failure: { code: 'cancelled' },
     });
     expect(settled).toBe(4);
+  });
+
+  it('accounts only started calls and refuses a retry without a permit', async () => {
+    let calls = 0;
+    let permits = 1;
+    const finalized: Array<number | undefined> = [];
+    const [result] = await dispatchTickDecisions(
+      {
+        mode: 'scripted-test',
+        configured: true,
+        async decide() {
+          calls += 1;
+          throw new AgentProviderError({
+            code: 'network',
+            message: 'retryable',
+            retryable: true,
+          });
+        },
+      },
+      jobs.slice(0, 1),
+      {
+        deadlineAtMs: 100,
+        nowMs: () => 0,
+        beginAttempt: () => {
+          if (permits-- < 1) return null;
+          return (metadata) => finalized.push(metadata?.costCredits);
+        },
+      },
+    );
+    expect(calls).toBe(1);
+    expect(finalized).toEqual([undefined]);
+    expect(result).toMatchObject({
+      outcome: 'lost-tick',
+      failure: { code: 'budget-exhausted' },
+      attempts: [{ failure: { code: 'network' } }],
+    });
+  });
+
+  it('finalizes a started cancelled attempt with unknown metadata', async () => {
+    const controller = new AbortController();
+    const finalized: unknown[] = [];
+    const pending = dispatchTickDecisions(
+      {
+        mode: 'scripted-test',
+        configured: true,
+        decide: async () => new Promise<never>(() => {}),
+      },
+      jobs.slice(0, 1),
+      {
+        deadlineAtMs: Date.now() + 1_000,
+        signal: controller.signal,
+        beginAttempt: () => (metadata) => finalized.push(metadata),
+      },
+    );
+    await Promise.resolve();
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({
+      failure: { code: 'cancelled' },
+    });
+    expect(finalized).toEqual([undefined]);
   });
 });

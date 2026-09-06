@@ -1108,6 +1108,95 @@ describe('WorldLab', () => {
     expect(screen.getByText('Deterministic test model')).toBeInTheDocument();
   });
 
+  it('stops execution controls and explains exhausted provider attempts', async () => {
+    const exhausted = simulationSnapshotSchema.parse({
+      ...initial,
+      status: 'budget-exhausted',
+      experiment: {
+        ...initial.experiment,
+        attemptAccounting: {
+          providerAttemptLimit: 8,
+          reservedPermits: 0,
+          attemptsStarted: 8,
+          attemptsFinalized: 8,
+          attemptsInFlight: 0,
+          remainingAttempts: 0,
+          knownCostCredits: 0.25,
+          attemptsWithUnknownCost: 1,
+          exhausted: true,
+          exhaustionReason: 'provider-attempt-limit',
+        },
+      },
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => jsonResponse(exhausted)),
+    );
+    render(<WorldLab />);
+    expect(await screen.findByRole('button', { name: 'Start' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Single tick' })).toBeDisabled();
+    await userEvent
+      .setup()
+      .click(
+        screen.getByLabelText(/Experiment details\. Tick 0, budget exhausted/),
+      );
+    expect(screen.getByText('Provider-attempt limit exhausted')).toBeVisible();
+    expect(screen.getByText('8 / 8')).toBeVisible();
+    expect(screen.getByText('1', { selector: 'dd' })).toBeVisible();
+  });
+
+  it('reconciles the authoritative exhausted snapshot after a budget 409', async () => {
+    const exhausted = simulationSnapshotSchema.parse({
+      ...initial,
+      status: 'budget-exhausted',
+      experiment: {
+        ...initial.experiment,
+        attemptAccounting: {
+          providerAttemptLimit: 1,
+          reservedPermits: 0,
+          attemptsStarted: 0,
+          attemptsFinalized: 0,
+          attemptsInFlight: 0,
+          remainingAttempts: 1,
+          knownCostCredits: 0,
+          attemptsWithUnknownCost: 0,
+          exhausted: true,
+          exhaustionReason: 'provider-attempt-limit',
+        },
+      },
+    });
+    let snapshotReads = 0;
+    const fetchMock = vi.fn<typeof fetch>((input, init) => {
+      if (String(input).includes('/tick') && init?.method === 'POST')
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              error: {
+                code: 'experiment_budget_exhausted',
+                message: 'The complete tick cannot be reserved.',
+              },
+            }),
+            { status: 409, headers: { 'content-type': 'application/json' } },
+          ),
+        );
+      snapshotReads += 1;
+      return jsonResponse(snapshotReads === 1 ? initial : exhausted);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    render(<WorldLab />);
+    const singleTick = await screen.findByRole('button', {
+      name: 'Single tick',
+    });
+    expect(singleTick).toBeEnabled();
+    await userEvent.setup().click(singleTick);
+    await waitFor(() => expect(singleTick).toBeDisabled());
+    expect(screen.getByRole('button', { name: 'Start' })).toBeDisabled();
+    expect(
+      screen.getByLabelText(/Experiment details\. Tick 0, budget exhausted/),
+    ).toBeInTheDocument();
+    expect(snapshotReads).toBe(2);
+  });
+
   it('opens World setup only from the top-right overflow menu with map semantics', async () => {
     const user = userEvent.setup();
     render(<WorldLab />);
@@ -1137,6 +1226,10 @@ describe('WorldLab', () => {
     expect(
       screen.getByLabelText('Maximum virtual minutes per tick'),
     ).toHaveValue(10);
+    expect(screen.getByLabelText('Provider attempt limit')).toHaveValue(1000);
+    expect(
+      screen.getByLabelText('Unlimited provider attempts'),
+    ).not.toBeChecked();
     for (const label of [
       'World simulation seed',
       'Spawn assignment seed',

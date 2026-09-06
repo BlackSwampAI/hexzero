@@ -1872,7 +1872,8 @@ dd {
   animation: pulse 1s ease-in-out infinite alternate;
 }
 .status-dot.provider-error,
-.status-dot.configuration-error {
+.status-dot.configuration-error,
+.status-dot.budget-exhausted {
   background: var(--danger);
 }
 .command-popover {

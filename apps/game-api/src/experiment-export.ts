@@ -2134,7 +2134,7 @@ export function serializeExperimentExport(
     : JSON.stringify(document);
 }
 
-function addDecimalValue(left: string, right: number): string {
+export function addDecimalValue(left: string, right: number): string {
   const leftParts = decimalParts(left);
   const rightParts = decimalParts(right);
   const scale = Math.max(leftParts.scale, rightParts.scale);

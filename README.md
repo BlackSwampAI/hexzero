@@ -64,7 +64,7 @@ repair or transient-retry charge per agent. All agents observe the
 same frozen pre-tick world; valid decisions resolve together while an individual
 provider failure is retained as that agent's final lost tick. Start is
 deliberately disabled when the server has no key. This development API has no
-authentication or cost controls and is not suitable for an unauthenticated
+authentication or monetary cost controls and is not suitable for an unauthenticated
 public deployment.
 
 State is held only in the Game API process. The API captures one active safe

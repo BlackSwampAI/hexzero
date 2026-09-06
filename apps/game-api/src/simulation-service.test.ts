@@ -1225,14 +1225,26 @@ describe('SimulationService', () => {
       },
     });
     const setup = defaultWorldSetupRequest();
+    const roster = generateDeterministicRoster(12, 'cancel-roster');
     simulation.applyWorldSetup({
       ...setup,
+      roster,
+      patientZeroAgentId: roster[0]!.id,
       objectiveVersion: 'durable-influence-v3',
       modelConfiguration: {
         ...setup.modelConfiguration,
         globalModelId: 'deterministic-script',
       },
       capabilities: { ...setup.capabilities, simulatedPlayerPressure: true },
+      behaviorConfiguration: {
+        ...setup.behaviorConfiguration,
+        seed: 'cancel-behavior',
+        assignments: assignBehavior(
+          roster.map(({ id }) => id),
+          'cancel-behavior',
+          'balanced-random',
+        ),
+      },
       simulatedPlayer: {
         enabled: true,
         profile: 'casual-cleaner',
@@ -1252,6 +1264,59 @@ describe('SimulationService', () => {
       world: before.world,
       agentGoals: before.agentGoals,
       agentMemories: before.agentMemories,
+      experiment: {
+        attemptAccounting: {
+          reservedPermits: 0,
+          attemptsInFlight: 0,
+          attemptsStarted: expect.any(Number),
+          attemptsWithUnknownCost: expect.any(Number),
+        },
+      },
+    });
+    const accounting = simulation.getSnapshot().experiment.attemptAccounting;
+    expect(accounting.attemptsStarted).toBeGreaterThan(0);
+    expect(accounting.attemptsFinalized).toBe(accounting.attemptsStarted);
+    expect(accounting.attemptsWithUnknownCost).toBe(accounting.attemptsStarted);
+    expect(accounting.attemptsStarted).toBe(8);
+  });
+
+  it('retains safe provider cost when legacy cancellation is observed after the response', async () => {
+    const simulation = service({
+      mode: 'scripted-test',
+      model: 'deterministic-script',
+      configured: true,
+      async decide(): Promise<ProviderDecision> {
+        simulation.cancelCurrentRequest();
+        return {
+          decision: {
+            worldAction: { type: 'wait' },
+            goalRevision: { operation: 'keep' },
+            memoryOperation: { operation: 'keep' },
+            summary: 'The response completed as cancellation arrived.',
+          },
+          metadata: {
+            provider: 'scripted-test',
+            model: 'deterministic-script',
+            latencyMs: 2,
+            costCredits: 0.125,
+          },
+        };
+      },
+    });
+    await expect(simulation.executeNextTurn()).rejects.toBeInstanceOf(
+      SimulationTurnCancelledError,
+    );
+    expect(simulation.getSnapshot()).toMatchObject({
+      turnNumber: 0,
+      experiment: {
+        attemptAccounting: {
+          attemptsStarted: 1,
+          attemptsFinalized: 1,
+          attemptsInFlight: 0,
+          knownCostCredits: 0.125,
+          attemptsWithUnknownCost: 0,
+        },
+      },
     });
   });
 
@@ -4065,6 +4130,15 @@ describe('SimulationService', () => {
     await simulation.executeNextTurn();
     await simulation.retryFailedTurn();
     await simulation.retryFailedTurn();
+    const beforeSkipAccounting =
+      simulation.getSnapshot().experiment.attemptAccounting;
+    expect(beforeSkipAccounting).toMatchObject({
+      attemptsStarted: 4,
+      attemptsFinalized: 4,
+      attemptsInFlight: 0,
+      knownCostCredits: 0.04,
+      attemptsWithUnknownCost: 0,
+    });
     const skipped = simulation.skipFailedTurn();
     expect(skipped).toMatchObject({
       turnNumber: 1,
@@ -4084,6 +4158,9 @@ describe('SimulationService', () => {
       status: 'paused',
       pendingFailedTurn: null,
     });
+    expect(simulation.getSnapshot().experiment.attemptAccounting).toEqual(
+      beforeSkipAccounting,
+    );
     const exported = simulation.generateExperimentExport({
       ...exportRequest('minimal'),
       outcomes: ['operator-skipped'],
@@ -4195,7 +4272,11 @@ describe('SimulationService', () => {
             metadata: {
               provider: 'scripted-test',
               model: '',
-              latencyMs: 0,
+              latencyMs: 4,
+              promptTokens: 3,
+              completionTokens: 2,
+              totalTokens: 5,
+              costCredits: 0.125,
             },
           } as ProviderDecision;
         }
@@ -4225,7 +4306,29 @@ describe('SimulationService', () => {
     expect(afterFailure).toMatchObject({
       activeAgentId: null,
       status: 'provider-error',
-      pendingFailedTurn: { turnNumber: 1 },
+      pendingFailedTurn: {
+        turnNumber: 1,
+        attempts: [
+          {
+            provider: {
+              model: 'invalid-metadata-test',
+              latencyMs: 4,
+              promptTokens: 3,
+              completionTokens: 2,
+              totalTokens: 5,
+              costCredits: 0.125,
+            },
+          },
+        ],
+      },
+      experiment: {
+        attemptAccounting: {
+          attemptsStarted: 1,
+          attemptsFinalized: 1,
+          knownCostCredits: 0.125,
+          attemptsWithUnknownCost: 0,
+        },
+      },
     });
 
     const recovered = await simulation.retryFailedTurn();
@@ -4565,5 +4668,93 @@ describe('SimulationService', () => {
     const legacy = simulation.importModelConfiguration({ schemaVersion: 5 });
     expect(legacy.legacy).toBe(true);
     expect(legacy.snapshot.modelConfiguration.globalModelId).toBeNull();
+  });
+
+  it('admits a complete roster atomically and stops at the provider-attempt cap', async () => {
+    let calls = 0;
+    const provider: AgentProvider = {
+      mode: 'scripted-test',
+      model: 'deterministic-script',
+      configured: true,
+      async decide() {
+        calls += 1;
+        return {
+          decision: {
+            worldAction: { type: 'wait' },
+            goalRevision: { operation: 'keep' },
+            memoryOperation: { operation: 'keep' },
+            summary: 'Wait within the bounded experiment.',
+          },
+          metadata: {
+            provider: 'scripted-test',
+            model: 'deterministic-script',
+            latencyMs: 0,
+            costCredits: 0,
+          },
+        };
+      },
+    };
+    const simulation = service(provider);
+    const setup = defaultWorldSetupRequest();
+    simulation.applyWorldSetup({
+      ...setup,
+      modelConfiguration: {
+        ...setup.modelConfiguration,
+        globalModelId: 'deterministic-script',
+      },
+      executionLimits: {
+        version: 'execution-limits-v1',
+        providerAttemptLimit: setup.roster.length,
+      },
+    });
+    await simulation.executeNextTick();
+    const afterFirst = simulation.getSnapshot();
+    expect(afterFirst.experiment.attemptAccounting).toMatchObject({
+      attemptsStarted: setup.roster.length,
+      attemptsFinalized: setup.roster.length,
+      attemptsInFlight: 0,
+      knownCostCredits: 0,
+      attemptsWithUnknownCost: 0,
+      remainingAttempts: 0,
+      exhausted: true,
+    });
+    simulation.updateAgentPersonality(
+      afterFirst.world.agents[0]!.id,
+      'Preserve the attempt ledger while changing this personality.',
+    );
+    expect(
+      simulation.getSnapshot().experiment.attemptAccounting.attemptsStarted,
+    ).toBe(setup.roster.length);
+    const world = structuredClone(afterFirst.world);
+    await expect(simulation.executeNextTick()).rejects.toMatchObject({
+      code: 'experiment_budget_exhausted',
+    });
+    expect(calls).toBe(setup.roster.length);
+    expect(simulation.getSnapshot().world.hexes).toEqual(world.hexes);
+    expect(simulation.reset().experiment.attemptAccounting).toMatchObject({
+      attemptsStarted: 0,
+      attemptsFinalized: 0,
+      knownCostCredits: 0,
+      attemptsWithUnknownCost: 0,
+      exhausted: false,
+    });
+    await simulation.executeNextTick();
+    expect(
+      simulation.getSnapshot().experiment.attemptAccounting.attemptsStarted,
+    ).toBeGreaterThan(0);
+    const applied = simulation.applyWorldSetup({
+      ...setup,
+      modelConfiguration: {
+        ...setup.modelConfiguration,
+        globalModelId: 'deterministic-script',
+      },
+    });
+    expect(applied.experiment.attemptAccounting).toMatchObject({
+      attemptsStarted: 0,
+      attemptsFinalized: 0,
+      knownCostCredits: 0,
+      attemptsWithUnknownCost: 0,
+      exhausted: false,
+    });
   });
 });
