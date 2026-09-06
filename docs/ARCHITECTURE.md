@@ -116,6 +116,19 @@ range bypass. Patient Zero receives no extra movement, action, infection,
 capture, ownership, or alliance authority. Every agent observation is built
 from one frozen pre-tick snapshot.
 
+The authoritative world's newest 120 events remain a bounded operator/display
+feed. Agent observations do not depend on that mixed feed for their promised
+factual windows. The Game API separately retains bounded movement, action,
+communication, control-change, alliance-lifecycle, and capture ledgers,
+including participant-specific private-message histories. These ledgers accept
+only newly committed engine events: simultaneous ticks carry the complete
+untrimmed event batch into commit and ingest it once after the final
+cancellation check while separately capping the display feed; legacy turns
+ingest only successful committed events, and provider failures, retries awaiting resolution, skips, and
+cancellations add no facts. World reset and applied World Setup reinitialize
+the ledgers; model, personality, and behavior configuration changes preserve
+them.
+
 Patient Zero's global diplomacy context is a fixed-cap sparse summary of
 authoritative eligible pairs, acceptable proposals, leave availability,
 aggregate blocker counts, and prioritized blocker examples. Deterministic

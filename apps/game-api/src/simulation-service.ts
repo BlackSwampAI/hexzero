@@ -23,11 +23,7 @@ import {
   updateExperimentModelsRequestSchema,
   updateExperimentBehaviorRequestSchema,
   h3CellSchema,
-  RECENT_DIRECT_MESSAGE_LIMIT,
-  RECENT_PUBLIC_MESSAGE_LIMIT,
-  RECENT_CONTROL_CHANGE_LIMIT,
   RECENT_ALLIANCE_EVENT_LIMIT,
-  RECENT_ZERO_MESSAGE_LIMIT,
   RECENT_ZERO_STRATEGIC_EVENT_LIMIT,
   PERSONALITY_MAX_LENGTH,
   OPENROUTER_PROVIDER_TIMEOUT_MS,
@@ -103,6 +99,7 @@ import {
   ExperimentMetricAccumulator,
 } from './experiment-export';
 import { geographicDirectionBetweenCells } from './geographic-direction';
+import { ObservationHistory } from './observation-history';
 
 const RESET_GENERATED_AT = '2026-08-13T12:00:00.000Z';
 const MAX_TURN_HISTORY = 120;
@@ -282,6 +279,7 @@ export class SimulationService {
   #agentGoals = new Map<AgentId, AgentGoalState>();
   #agentMemories = new Map<AgentId, MemoryEntry[]>();
   #simulatedPlayerEvents: SimulatedPlayerEvent[] = [];
+  #observationHistory: ObservationHistory;
 
   constructor({
     provider,
@@ -307,6 +305,7 @@ export class SimulationService {
     this.#state = toWorldState(
       createDevelopmentWorld({ generatedAt: RESET_GENERATED_AT }),
     );
+    this.#observationHistory = new ObservationHistory(this.#state.events);
     this.#status = provider.configured ? 'paused' : 'configuration-error';
     this.#experimentId = experimentIdSchema.parse(this.#createExperimentId());
     this.#experimentStartedAt = this.#now();
@@ -436,6 +435,7 @@ export class SimulationService {
     this.#experimentTurns = [];
     this.#configurationEvents = [];
     this.#simulatedPlayerEvents = [];
+    this.#observationHistory = new ObservationHistory(this.#state.events);
     this.#initialExperimentAgents = structuredClone([
       ...this.#state.agents.values(),
     ]);
@@ -576,6 +576,7 @@ export class SimulationService {
     this.#experimentTurns = [];
     this.#configurationEvents = [];
     this.#simulatedPlayerEvents = [];
+    this.#observationHistory = new ObservationHistory(this.#state.events);
     this.#initialExperimentAgents = structuredClone([
       ...this.#state.agents.values(),
     ]);
@@ -1187,6 +1188,9 @@ export class SimulationService {
           ...expirationEvents,
         ]);
       }
+      const committedObservationEvents = state.events.slice(
+        preTickState.events.length,
+      );
       state = {
         ...state,
         events: state.events.slice(-MAX_WORLD_EVENT_HISTORY),
@@ -1271,6 +1275,7 @@ export class SimulationService {
         nextGoals,
         nextMemories,
         playerAdvance.events,
+        committedObservationEvents,
       );
       this.#status = 'paused';
       return records;
@@ -1306,8 +1311,10 @@ export class SimulationService {
     goals: Map<AgentId, AgentGoalState>,
     memories: Map<AgentId, MemoryEntry[]>,
     playerEvents: SimulatedPlayerEvent[],
+    observationEvents: WorldEvent[],
   ): void {
     this.#state = state;
+    this.#observationHistory.ingest(observationEvents);
     this.#completedTickCount = tickNumber;
     this.#virtualTime = virtualTime;
     this.#lastTickIntervalMinutes = interval;
@@ -1379,7 +1386,13 @@ export class SimulationService {
       allianceEvents: [],
     });
     this.#pendingFailedTurn = null;
-    this.#commitCompletedTurn(record, this.#state, agents.length);
+    this.#commitCompletedTurn(
+      record,
+      this.#state,
+      agents.length,
+      undefined,
+      [],
+    );
     this.#status = 'paused';
     return record;
   }
@@ -1603,6 +1616,9 @@ export class SimulationService {
         turnNumber,
         context,
       );
+      const committedObservationEvents = stateAfterExpiration.events.slice(
+        preActionState.events.length,
+      );
       const candidateState = {
         ...stateAfterExpiration,
         events: stateAfterExpiration.events.slice(-MAX_WORLD_EVENT_HISTORY),
@@ -1670,11 +1686,17 @@ export class SimulationService {
       );
 
       this.#pendingFailedTurn = null;
-      this.#commitCompletedTurn(record, candidateState, agents.length, {
-        agentId: agent.id,
-        goal: appliedGoal.goal,
-        memoryEntries: appliedMemory.entries,
-      });
+      this.#commitCompletedTurn(
+        record,
+        candidateState,
+        agents.length,
+        {
+          agentId: agent.id,
+          goal: appliedGoal.goal,
+          memoryEntries: appliedMemory.entries,
+        },
+        committedObservationEvents,
+      );
       this.#status = 'paused';
       return record;
     } catch (error) {
@@ -1749,11 +1771,13 @@ export class SimulationService {
       goal: AgentGoalState | undefined;
       memoryEntries?: MemoryEntry[];
     },
+    observationEvents: WorldEvent[] = [],
   ): void {
     const turns = [...this.#turns, record].slice(-MAX_TURN_HISTORY);
     const cursor = (this.#cursor + 1) % agentCount;
 
     this.#state = state;
+    this.#observationHistory.ingest(observationEvents);
     if (goalCommit?.goal)
       this.#agentGoals.set(goalCommit.agentId, goalCommit.goal);
     else if (goalCommit) this.#agentGoals.delete(goalCommit.agentId);
@@ -1960,12 +1984,8 @@ export class SimulationService {
             `${this.#scenario.worldSeed}:${agent.id}:${this.#completedTurnCount + 1}:${b.cell}`,
           ),
       );
-    const recentMovements = this.#state.events
-      .filter(
-        (event): event is Extract<WorldEvent, { type: 'agent-moved' }> =>
-          event.type === 'agent-moved' && event.agentId === agent.id,
-      )
-      .slice(-6)
+    const recentMovements = this.#observationHistory
+      .movements(agent.id)
       .map(({ fromCell, toCell, occurredAt }) => ({
         fromCell,
         toCell,
@@ -2017,37 +2037,14 @@ export class SimulationService {
           a.id.localeCompare(b.id),
       )
       .slice(0, 8);
-    const recentEvents = this.#state.events
-      .filter(
-        (
-          event,
-        ): event is Extract<
-          WorldEvent,
-          {
-            type:
-              'agent-moved' | 'hex-infected' | 'hex-captured' | 'agent-waited';
-          }
-        > =>
-          event.type === 'agent-moved' ||
-          event.type === 'hex-infected' ||
-          event.type === 'hex-captured' ||
-          event.type === 'agent-waited',
-      )
-      .slice(-8)
-      .map((event) => ({
-        type: event.type,
-        agentId: event.agentId,
-        occurredAt: event.occurredAt,
-        summary: summarizeEvent(event, this.#state),
-      }));
-    const recentPublicMessages = this.#state.events
-      .filter(
-        (
-          event,
-        ): event is Extract<WorldEvent, { type: 'public-message-sent' }> =>
-          event.type === 'public-message-sent',
-      )
-      .slice(-RECENT_PUBLIC_MESSAGE_LIMIT)
+    const recentEvents = this.#observationHistory.actions().map((event) => ({
+      type: event.type,
+      agentId: event.agentId,
+      occurredAt: event.occurredAt,
+      summary: summarizeEvent(event, this.#state),
+    }));
+    const recentPublicMessages = this.#observationHistory
+      .publicMessages()
       .map((event) => {
         const sender = this.#state.agents.get(event.agentId);
         if (!sender) throw new Error('A public-message sender does not exist.');
@@ -2059,15 +2056,8 @@ export class SimulationService {
           occurredAt: event.occurredAt,
         };
       });
-    const recentDirectMessages = this.#state.events
-      .filter(
-        (
-          event,
-        ): event is Extract<WorldEvent, { type: 'direct-message-sent' }> =>
-          event.type === 'direct-message-sent' &&
-          (event.agentId === agent.id || event.recipientId === agent.id),
-      )
-      .slice(-RECENT_DIRECT_MESSAGE_LIMIT)
+    const recentDirectMessages = this.#observationHistory
+      .directMessages(agent.id)
       .map((event) => {
         const sender = this.#state.agents.get(event.agentId);
         const recipient = this.#state.agents.get(event.recipientId);
@@ -2085,15 +2075,8 @@ export class SimulationService {
           distance: event.distance,
         } as const;
       });
-    const recentAllianceMessages = this.#state.events
-      .filter(
-        (
-          event,
-        ): event is Extract<WorldEvent, { type: 'alliance-message-sent' }> =>
-          event.type === 'alliance-message-sent' &&
-          (event.agentId === agent.id || event.recipientIds.includes(agent.id)),
-      )
-      .slice(-RECENT_DIRECT_MESSAGE_LIMIT)
+    const recentAllianceMessages = this.#observationHistory
+      .allianceMessages(agent.id)
       .map((event) => {
         const sender = this.#state.agents.get(event.agentId);
         if (!sender)
@@ -2107,13 +2090,8 @@ export class SimulationService {
           occurredAt: event.occurredAt,
         };
       });
-    const recentZeroMessages = this.#state.events
-      .filter(
-        (event): event is Extract<WorldEvent, { type: 'zero-message-sent' }> =>
-          event.type === 'zero-message-sent' &&
-          (event.agentId === agent.id || event.recipientIds.includes(agent.id)),
-      )
-      .slice(-RECENT_ZERO_MESSAGE_LIMIT)
+    const recentZeroMessages = this.#observationHistory
+      .zeroMessages(agent.id)
       .map((event) => {
         const sender = this.#state.agents.get(event.agentId);
         if (!sender) throw new Error('A Zero-message sender does not exist.');
@@ -2126,14 +2104,8 @@ export class SimulationService {
           occurredAt: event.occurredAt,
         };
       });
-    const recentControlChanges = this.#state.events
-      .filter(
-        (event): event is Extract<WorldEvent, { type: 'hex-captured' }> =>
-          event.type === 'hex-captured' &&
-          (event.controllerAgentId === agent.id ||
-            event.previousControllerAgentId === agent.id),
-      )
-      .slice(-RECENT_CONTROL_CHANGE_LIMIT)
+    const recentControlChanges = this.#observationHistory
+      .controlChanges(agent.id)
       .map((event) => {
         const gained = event.controllerAgentId === agent.id;
         const otherAgentId = gained
@@ -2151,9 +2123,13 @@ export class SimulationService {
           occurredAt: event.occurredAt,
         };
       });
+    const completePlayerPressureEvents = [
+      ...this.#simulatedPlayerEvents,
+      ...currentCandidatePlayerEvents,
+    ];
     const recentPlayerThreats = this.#scenario.capabilities
       .simulatedPlayerPressure
-      ? this.#state.events
+      ? completePlayerPressureEvents
           .filter(
             (
               event,
@@ -2181,10 +2157,6 @@ export class SimulationService {
             affectedOwnTerritory,
           }))
       : [];
-    const completePlayerPressureEvents = [
-      ...this.#simulatedPlayerEvents,
-      ...currentCandidatePlayerEvents,
-    ];
     const patientZeroPlayerThreats = this.#scenario.capabilities
       .simulatedPlayerPressure
       ? currentCandidatePlayerEvents
@@ -2360,21 +2332,13 @@ export class SimulationService {
               ],
               diplomacyFeasibility: [],
               diplomacySummary: this.#patientZeroDiplomacySummary(),
-              recentStrategicEvents: this.#state.events
-                .filter(isAllianceEvent)
-                .slice(-RECENT_ZERO_STRATEGIC_EVENT_LIMIT)
+              recentStrategicEvents: this.#observationHistory
+                .allianceEvents(RECENT_ZERO_STRATEGIC_EVENT_LIMIT)
                 .map((event) => ({
                   event,
                   summary: summarizeAllianceEvent(event, this.#state),
                 })),
-              recentTerritoryChanges: this.#state.events
-                .filter(
-                  (
-                    event,
-                  ): event is Extract<WorldEvent, { type: 'hex-captured' }> =>
-                    event.type === 'hex-captured',
-                )
-                .slice(-RECENT_CONTROL_CHANGE_LIMIT),
+              recentTerritoryChanges: this.#observationHistory.captures(),
               playerThreatFeed: this.#scenario.capabilities
                 .simulatedPlayerPressure
                 ? {
@@ -2403,9 +2367,8 @@ export class SimulationService {
       outboundAllianceProposals: [
         ...(this.#state.pendingAllianceProposals?.values() ?? []),
       ].filter(({ proposerAgentId }) => proposerAgentId === agent.id),
-      recentAllianceEvents: this.#state.events
-        .filter(isAllianceEvent)
-        .slice(-RECENT_ALLIANCE_EVENT_LIMIT)
+      recentAllianceEvents: this.#observationHistory
+        .allianceEvents(RECENT_ALLIANCE_EVENT_LIMIT)
         .map((event) => ({
           event,
           summary: summarizeAllianceEvent(event, this.#state),
