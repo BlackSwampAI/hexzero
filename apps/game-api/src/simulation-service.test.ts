@@ -54,7 +54,11 @@ import {
 import { geographicDirectionBetweenCells } from './geographic-direction';
 
 const now = () => '2026-08-13T12:00:01.000Z';
-const createEventId = () => '67aa21b9-fc78-4b04-9f92-9862bf346f96';
+function deterministicEventIdGenerator() {
+  let sequence = 0;
+  return () =>
+    `67aa21b9-fc78-4b04-9f92-${String(++sequence).padStart(12, '0')}`;
+}
 const compatibleModels: CompatibleModel[] = [
   {
     id: 'author/global-model',
@@ -87,7 +91,11 @@ const compatibleModels: CompatibleModel[] = [
 ];
 
 function service(provider: AgentProvider) {
-  return new SimulationService({ provider, now, createEventId });
+  return new SimulationService({
+    provider,
+    now,
+    createEventId: deterministicEventIdGenerator(),
+  });
 }
 
 function exportRequest(level: 'minimal' | 'standard' | 'full-safe' | 'custom') {
@@ -1362,7 +1370,7 @@ describe('SimulationService', () => {
     const simulation = new SimulationService({
       provider,
       now,
-      createEventId,
+      createEventId: deterministicEventIdGenerator(),
       experimentRetentionLimit: 10,
     });
     await simulation.executeNextTick();
@@ -2406,7 +2414,7 @@ describe('SimulationService', () => {
     const simulation = new SimulationService({
       provider,
       now,
-      createEventId,
+      createEventId: deterministicEventIdGenerator(),
       experimentRetentionLimit: 125,
     });
     for (let index = 0; index < 125; index += 1)
@@ -2432,7 +2440,7 @@ describe('SimulationService', () => {
         { worldAction: { type: 'wait' }, summary: '3' },
       ]),
       now,
-      createEventId,
+      createEventId: deterministicEventIdGenerator(),
       experimentRetentionLimit: 2,
     });
     await simulation.executeNextTurn();
@@ -2521,7 +2529,7 @@ describe('SimulationService', () => {
         { worldAction: { type: 'wait' }, summary: 'Wait.' },
       ]),
       now,
-      createEventId,
+      createEventId: deterministicEventIdGenerator(),
       createExperimentId: () =>
         `aaaaaaaa-aaaa-4aaa-8aaa-${String(++sequence).padStart(12, '0')}`,
     });
@@ -3458,7 +3466,7 @@ describe('SimulationService', () => {
         new Date(
           Date.parse('2026-08-13T12:00:00.000Z') + clock++,
         ).toISOString(),
-      createEventId,
+      createEventId: deterministicEventIdGenerator(),
     });
     for (let index = 0; index < 48; index += 1)
       await simulation.executeNextTurn();
@@ -3549,6 +3557,7 @@ describe('SimulationService', () => {
           },
           summary: 'Send directly.',
         },
+        { worldAction: { type: 'wait' }, summary: 'After reset.' },
       ]),
     );
     await simulation.executeNextTurn();
@@ -3573,6 +3582,38 @@ describe('SimulationService', () => {
       directMessagesSent: 0,
       directMessagesReceived: 0,
     });
+    const afterReset = await simulation.executeNextTurn();
+    expect(afterReset.observation.recentPublicMessages).toEqual([]);
+    expect(afterReset.observation.recentDirectMessages).toEqual([]);
+  });
+
+  it('applied World Setup clears bounded observation history', async () => {
+    const simulation = service(
+      new ScriptedAgentProvider([
+        {
+          worldAction: { type: 'wait' },
+          communication: {
+            channel: 'public',
+            message: 'Before applying setup.',
+          },
+          summary: 'Publish.',
+        },
+        { worldAction: { type: 'wait' }, summary: 'After setup.' },
+      ]),
+    );
+    await simulation.executeNextTurn();
+    const setup = defaultWorldSetupRequest();
+    simulation.applyWorldSetup({
+      ...setup,
+      modelConfiguration: {
+        ...setup.modelConfiguration,
+        globalModelId: 'deterministic-script',
+      },
+    });
+
+    const afterSetup = await simulation.executeNextTurn();
+    expect(afterSetup.observation.recentPublicMessages).toEqual([]);
+    expect(afterSetup.observation.recentEvents).toEqual([]);
   });
 
   it('updates an existing agent and uses the trimmed personality on its next turn', async () => {
@@ -4307,14 +4348,16 @@ describe('SimulationService', () => {
   });
 
   it('cancels an active provider request without mutating or consuming a turn', async () => {
+    let shouldBlock = true;
     const provider: AgentProvider = {
       mode: 'scripted-test',
       model: 'cancel-test',
       configured: true,
       async decide(_observation, _model, options) {
-        await new Promise<void>((resolve) => {
-          options?.signal?.addEventListener('abort', () => resolve());
-        });
+        if (shouldBlock)
+          await new Promise<void>((resolve) => {
+            options?.signal?.addEventListener('abort', () => resolve());
+          });
         return {
           decision: { worldAction: { type: 'wait' }, summary: 'Too late.' },
           metadata: {
@@ -4339,6 +4382,10 @@ describe('SimulationService', () => {
       experiment: { totalCompletedTurns: 0 },
     });
     expect(simulation.getSnapshot().world).toEqual(before);
+    shouldBlock = false;
+    const afterCancellation = await simulation.executeNextTurn();
+    expect(afterCancellation.observation.recentEvents).toEqual([]);
+    expect(afterCancellation.observation.recentPublicMessages).toEqual([]);
   });
 
   it('resolves models per turn and records between-turn model changes', async () => {

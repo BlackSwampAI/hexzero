@@ -71,6 +71,17 @@ independence from unrelated general world-event history churn.
 
 Configurable-scenario coverage is deterministic and offline: `world-scenario-v1`, temporary roster/world limits, actual H3 count and area, radius presets, seeded identities and separated spawns, default compatibility, infeasibility, pure preview, atomic apply/current-scenario reset, dynamic assignment reconciliation, density warnings, and schema-v9 attribution. Geocoding uses injected fakes; browser coverage retains the default flow and adds a 469-cell/12-agent scenario flow.
 
+Observation-history tests independently churn more than the 120-event World
+Lab display bound and verify chronological limits for per-agent movement and
+recently-occupied facts, global actions and public messages,
+participant-private direct/alliance/Zero messages, control changes, alliance
+lifecycle, and Patient Zero capture history. Service commit paths ingest only
+newly committed facts from the complete pre-display-truncation batch;
+cancellation, unresolved failure, retry setup, and skip
+paths cannot add or duplicate them. Reset and applied World Setup reinitialize
+the ledgers. Cleaner locality continues to use its dedicated committed event
+ledger plus the current candidate interval.
+
 Legacy sequential recovery remains covered only as schema-v9 compatibility. Tick tests instead verify that an exhausted per-agent repair or transient retry becomes a final lost-tick record while sibling records commit, and that whole-tick cancellation commits nothing. No live provider call is made.
 
 Default validation is deterministic and offline except dependency/browser installation and optional basemap requests during browser rendering. No default test or GitHub Actions job contacts OpenRouter.
