@@ -20,6 +20,6 @@
     "@hexzero/agent-runtime": "workspace:*",
     "@hexzero/world-engine": "workspace:*",
     "tsx": "4.23.12",
-    "vitest": "4.1.10"
+    "vitest": "4.1.11"
   }
 }
