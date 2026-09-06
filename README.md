@@ -82,6 +82,11 @@ validation.
 
 Export previews report exact serialized UTF-8 bytes and a model-agnostic `ceil(bytes / 4)` approximate AI-input-token estimate. Compact JSON is the default for AI sharing; Pretty JSON remains available for human review, and preview estimates reflect the selected serialization. This is a sharing-budget aid, not tokenizer output or a billing guarantee. Exports exclude fixed prompts, raw provider payloads, credentials, authorization headers, private reasoning, and unbounded diagnostics.
 
+World Setup also configures server-owned provider-attempt and conservative
+credit-admission limits. The per-attempt credit reservation bounds admission
+exposure using exact decimal accounting; it is not an upstream provider-account
+spending cap or billing guarantee.
+
 ## Opt-in real-provider smoke
 
 The smoke command performs exactly one bounded real decision request and validates it. It is never part of default tests or CI:

@@ -149,6 +149,10 @@ unknown-token attempt disclosure, exact known-cost accumulation, and distinct
 unknown-cost attempt versus logical-turn counts. Fake-timer transport tests cover
 valid `Retry-After`, the bounded missing/invalid-header fallback, shared-deadline
 consumption, cancellation during backoff, and the unchanged two-call ceiling.
+Attempt-admission tests also cover exact small-decimal arithmetic, atomic
+permit/credit rejection, unstarted reservation release, known-cost refund,
+unknown and in-flight exposure, idempotent finalization, reservation overage
+fail-closed behavior, and whole-tick rejection before provider dispatch.
 
 - Centralized development-contract tests prove radius 6 produces exactly 127 unique open/uncontrolled cells, eight unique deterministic starts, stable IDs/default personalities, and an eight-entry scoreboard with up to seven other-agent observations.
 - Alliance engine/schema tests cover 10- and 32-agent feasibility, full-roster membership, a maximum-count five-alliance partition without color capacity, free-agent formation, member invitations, unaffiliated join requests to allied recipients, recipient-only acceptance, proposal conflicts, exact two-tick expiry for tick callers, legacy two-roster-round expiry, stale invalidation, one-alliance membership, unilateral leave/switch semantics, deterministic accessible color reuse, and allied-capture rejection.

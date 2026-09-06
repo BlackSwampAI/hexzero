@@ -36,7 +36,7 @@ their nested rollups.
 
 `OPENROUTER_API_KEY` is the only required OpenRouter environment value and is read only by the Game API process. It never enters catalog DTOs, assignments, exports, fixtures, browser responses, errors, or logs. The repository-root `.env` is ignored; `.env.example` contains only a placeholder.
 
-The development API has no authentication, rate limiting, or monetary spending guard. It does enforce a server-owned per-experiment provider-attempt ceiling configured by World Setup. It binds to loopback and its CORS allowlist is limited to the documented local World Lab origins. Do not deploy its cost-incurring tick endpoint to unauthenticated public traffic.
+The development API has no authentication, rate limiting, or provider-account balance enforcement. It does enforce server-owned per-experiment provider-attempt and conservative credit-admission ceilings configured by World Setup. Credit reservations bound admission exposure but cannot guarantee the upstream bill, especially when reported cost exceeds the operator's reservation. It binds to loopback and its CORS allowlist is limited to the documented local World Lab origins. Do not deploy its cost-incurring tick endpoint to unauthenticated public traffic.
 
 ## Model-provider isolation
 

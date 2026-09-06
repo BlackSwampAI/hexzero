@@ -84,7 +84,8 @@ export async function dispatchTickDecisions(
         if (options.beginAttempt && !finalizeAccounting) {
           const failure: ProviderFailure = {
             code: 'budget-exhausted',
-            message: 'The experiment provider-attempt limit was exhausted.',
+            message:
+              'The experiment does not have enough provider-attempt or credit-admission capacity.',
             retryable: false,
             model: job.modelId,
           };

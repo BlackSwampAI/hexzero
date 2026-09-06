@@ -109,8 +109,10 @@ describe('game API simulation boundary', () => {
           globalModelId: 'deterministic-script',
         },
         executionLimits: {
-          version: 'execution-limits-v1',
+          version: 'execution-limits-v2',
           providerAttemptLimit: 1,
+          creditLimit: null,
+          reservationCreditsPerAttempt: '0.01',
         },
       }),
     });
@@ -122,7 +124,7 @@ describe('game API simulation boundary', () => {
       error: {
         code: 'experiment_budget_exhausted',
         message:
-          'The experiment does not have enough provider attempts remaining for a complete tick.',
+          'The experiment does not have enough provider-attempt or credit-admission capacity for a complete tick.',
       },
     });
     expect(calls).toBe(0);

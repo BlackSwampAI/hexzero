@@ -2487,7 +2487,16 @@ const scenarioRosterSchema = z
     });
   });
 
-export const experimentExecutionLimitsSchema = z
+export const creditDecimalSchema = z
+  .string()
+  .regex(/^(?:0|[1-9]\d*)(?:\.\d+)?$/, 'Use a canonical decimal string.')
+  .max(80);
+export const positiveCreditDecimalSchema = creditDecimalSchema.refine(
+  (value) => /[1-9]/.test(value),
+  'Credit value must be positive.',
+);
+
+const archivedExperimentExecutionLimitsV1Schema = z
   .object({
     version: z.literal('execution-limits-v1').default('execution-limits-v1'),
     providerAttemptLimit: z
@@ -2498,6 +2507,29 @@ export const experimentExecutionLimitsSchema = z
       .nullable(),
   })
   .strict();
+export const experimentExecutionLimitsSchema = z
+  .object({
+    version: z.literal('execution-limits-v2').default('execution-limits-v2'),
+    providerAttemptLimit: z
+      .number()
+      .int()
+      .positive()
+      .max(WORLD_SCENARIO_LIMITS.maximumProviderAttempts)
+      .nullable(),
+    creditLimit: positiveCreditDecimalSchema.nullable(),
+    reservationCreditsPerAttempt: positiveCreditDecimalSchema,
+  })
+  .strict();
+const defaultExperimentExecutionLimits = {
+  version: 'execution-limits-v2',
+  providerAttemptLimit: DEFAULT_PROVIDER_ATTEMPT_LIMIT,
+  creditLimit: null,
+  reservationCreditsPerAttempt: '0.01',
+} as const;
+const compatibleExperimentExecutionLimitsSchema = z.union([
+  experimentExecutionLimitsSchema,
+  archivedExperimentExecutionLimitsV1Schema,
+]);
 export type ExperimentExecutionLimits = z.infer<
   typeof experimentExecutionLimitsSchema
 >;
@@ -2542,10 +2574,9 @@ const worldSetupRequestObjectSchema = z
       .min(WORLD_SCENARIO_LIMITS.minimumTickIntervalMinutes)
       .max(WORLD_SCENARIO_LIMITS.maximumTickIntervalMinutes)
       .default(DEFAULT_MAXIMUM_TICK_INTERVAL_MINUTES),
-    executionLimits: experimentExecutionLimitsSchema.default({
-      version: 'execution-limits-v1',
-      providerAttemptLimit: DEFAULT_PROVIDER_ATTEMPT_LIMIT,
-    }),
+    executionLimits: compatibleExperimentExecutionLimitsSchema.default(
+      defaultExperimentExecutionLimits,
+    ),
     patientZeroAgentId: agentIdSchema,
     roster: scenarioRosterSchema,
     modelConfiguration: experimentModelConfigurationSchema,
@@ -2582,6 +2613,15 @@ function validateWorldSetupRequest(
   context: z.RefinementCtx,
   allowArchivedDisabledV1 = false,
 ) {
+  if (
+    !allowArchivedDisabledV1 &&
+    request.executionLimits.version !== 'execution-limits-v2'
+  )
+    context.addIssue({
+      code: 'custom',
+      path: ['executionLimits', 'version'],
+      message: 'Active World Setup requires execution-limits-v2.',
+    });
   const expectedObjective = request.simulatedPlayer.enabled
     ? OBJECTIVE_PROMPT_VERSION
     : 'durable-influence-v2';
@@ -2647,8 +2687,13 @@ function validateWorldSetupRequest(
     });
 }
 
-export const worldSetupRequestSchema =
-  worldSetupRequestObjectSchema.superRefine(validateWorldSetupRequest);
+export const worldSetupRequestSchema = worldSetupRequestObjectSchema
+  .extend({
+    executionLimits: experimentExecutionLimitsSchema.default(
+      defaultExperimentExecutionLimits,
+    ),
+  })
+  .superRefine(validateWorldSetupRequest);
 export type WorldSetupRequest = z.infer<typeof worldSetupRequestSchema>;
 export const defaultWorldSetupResponseSchema = z.object({
   request: worldSetupRequestSchema,
@@ -2688,6 +2733,11 @@ function validateAppliedScenario(
 }
 
 export const appliedScenarioSchema = worldSetupRequestObjectSchema
+  .extend({
+    executionLimits: experimentExecutionLimitsSchema.default(
+      defaultExperimentExecutionLimits,
+    ),
+  })
   .extend(appliedScenarioShape)
   .superRefine(validateAppliedScenario);
 export type AppliedScenario = z.infer<typeof appliedScenarioSchema>;
@@ -2770,10 +2820,22 @@ export const experimentAttemptAccountingSchema = z
     attemptsFinalized: z.number().int().nonnegative(),
     attemptsInFlight: z.number().int().nonnegative(),
     remainingAttempts: z.number().int().nonnegative().nullable(),
-    knownCostCredits: z.number().finite().nonnegative(),
+    creditLimit: positiveCreditDecimalSchema.nullable(),
+    reservationCreditsPerAttempt: positiveCreditDecimalSchema,
+    unstartedReservedCredits: creditDecimalSchema,
+    committedCreditExposure: creditDecimalSchema,
+    remainingAdmissionCredits: creditDecimalSchema.nullable(),
+    knownFinalizedCostCredits: creditDecimalSchema,
+    reservationOverageCredits: creditDecimalSchema,
     attemptsWithUnknownCost: z.number().int().nonnegative(),
     exhausted: z.boolean(),
-    exhaustionReason: z.literal('provider-attempt-limit').nullable(),
+    exhaustionReason: z
+      .enum([
+        'provider-attempt-limit',
+        'credit-admission-limit',
+        'credit-reservation-overrun',
+      ])
+      .nullable(),
   })
   .strict()
   .superRefine((accounting, context) => {
@@ -2798,6 +2860,16 @@ export const experimentAttemptAccountingSchema = z
           'Unlimited attempt accounting must report null remaining attempts.',
       });
     if (
+      (accounting.creditLimit === null) !==
+      (accounting.remainingAdmissionCredits === null)
+    )
+      context.addIssue({
+        code: 'custom',
+        path: ['remainingAdmissionCredits'],
+        message:
+          'Unlimited credit admission must report null remaining credits.',
+      });
+    if (
       accounting.attemptsWithUnknownCost > accounting.attemptsFinalized ||
       accounting.exhausted !== (accounting.exhaustionReason !== null)
     )
@@ -2818,7 +2890,13 @@ const defaultExperimentAttemptAccounting = {
   attemptsFinalized: 0,
   attemptsInFlight: 0,
   remainingAttempts: DEFAULT_PROVIDER_ATTEMPT_LIMIT,
-  knownCostCredits: 0,
+  creditLimit: null,
+  reservationCreditsPerAttempt: '0.01',
+  unstartedReservedCredits: '0',
+  committedCreditExposure: '0',
+  remainingAdmissionCredits: null,
+  knownFinalizedCostCredits: '0',
+  reservationOverageCredits: '0',
   attemptsWithUnknownCost: 0,
   exhausted: false,
   exhaustionReason: null,

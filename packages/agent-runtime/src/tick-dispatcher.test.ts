@@ -306,7 +306,11 @@ describe('dispatchTickDecisions', () => {
     expect(finalized).toEqual([undefined]);
     expect(result).toMatchObject({
       outcome: 'lost-tick',
-      failure: { code: 'budget-exhausted' },
+      failure: {
+        code: 'budget-exhausted',
+        message:
+          'The experiment does not have enough provider-attempt or credit-admission capacity.',
+      },
       attempts: [{ failure: { code: 'network' } }],
     });
   });

@@ -103,6 +103,16 @@ import { geographicDirectionBetweenCells } from './geographic-direction';
 import { ObservationHistory } from './observation-history';
 import { AttemptAccounting } from './attempt-accounting';
 
+function attemptAccountingForScenario(
+  executionLimits: AppliedScenario['executionLimits'],
+): AttemptAccounting {
+  return new AttemptAccounting(
+    executionLimits.providerAttemptLimit,
+    executionLimits.creditLimit,
+    executionLimits.reservationCreditsPerAttempt,
+  );
+}
+
 const RESET_GENERATED_AT = '2026-08-13T12:00:00.000Z';
 const MAX_TURN_HISTORY = 120;
 const MAX_WORLD_EVENT_HISTORY = 120;
@@ -348,8 +358,8 @@ export class SimulationService {
       modelConfiguration: structuredClone(this.#modelConfiguration),
       behaviorConfiguration: structuredClone(this.#behaviorConfiguration),
     };
-    this.#attemptAccounting = new AttemptAccounting(
-      this.#scenario.executionLimits.providerAttemptLimit,
+    this.#attemptAccounting = attemptAccountingForScenario(
+      this.#scenario.executionLimits,
     );
   }
 
@@ -451,8 +461,8 @@ export class SimulationService {
     this.#experimentMetrics = new ExperimentMetricAccumulator([
       ...this.#state.agents.keys(),
     ]);
-    this.#attemptAccounting = new AttemptAccounting(
-      this.#scenario.executionLimits.providerAttemptLimit,
+    this.#attemptAccounting = attemptAccountingForScenario(
+      this.#scenario.executionLimits,
     );
     this.#modelConfiguration = {
       ...structuredClone(this.#scenario.modelConfiguration),
@@ -595,8 +605,8 @@ export class SimulationService {
     this.#experimentMetrics = new ExperimentMetricAccumulator([
       ...this.#state.agents.keys(),
     ]);
-    this.#attemptAccounting = new AttemptAccounting(
-      this.#scenario.executionLimits.providerAttemptLimit,
+    this.#attemptAccounting = attemptAccountingForScenario(
+      this.#scenario.executionLimits,
     );
     this.#status = this.#provider.configured ? 'paused' : 'configuration-error';
     return this.getSnapshot();
@@ -1054,7 +1064,7 @@ export class SimulationService {
       this.#status = 'budget-exhausted';
       throw new SimulationValidationError(
         'experiment_budget_exhausted',
-        'The experiment does not have enough provider attempts remaining for a complete tick.',
+        'The experiment does not have enough provider-attempt or credit-admission capacity for a complete tick.',
       );
     }
 
@@ -1496,7 +1506,7 @@ export class SimulationService {
           this.#status = 'budget-exhausted';
           throw new SimulationValidationError(
             'experiment_budget_exhausted',
-            'The experiment provider-attempt limit was exhausted.',
+            'The experiment does not have enough provider-attempt or credit-admission capacity.',
           );
         }
         const currentAttemptStartedAt = this.#now();

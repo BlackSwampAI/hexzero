@@ -1381,8 +1381,10 @@ export function defaultWorldSetupRequest(): WorldSetupRequest {
     minimumTickIntervalMinutes: DEFAULT_MINIMUM_TICK_INTERVAL_MINUTES,
     maximumTickIntervalMinutes: DEFAULT_MAXIMUM_TICK_INTERVAL_MINUTES,
     executionLimits: {
-      version: 'execution-limits-v1',
+      version: 'execution-limits-v2',
       providerAttemptLimit: DEFAULT_PROVIDER_ATTEMPT_LIMIT,
+      creditLimit: null,
+      reservationCreditsPerAttempt: '0.01',
     },
     patientZeroAgentId: roster[0]!.id,
     roster,
