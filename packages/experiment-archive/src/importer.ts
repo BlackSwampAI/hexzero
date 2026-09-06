@@ -169,8 +169,8 @@ export function importExperimentExport(
           first_retained_turn, last_retained_turn, dropped_records,
           retention_complete, requested_range_extends_beyond_retention,
           source_metrics_json, source_territory_json, source_alliances_json,
-          metric_inconsistencies_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          metric_inconsistencies_json, attempt_retention_json, attempt_accounting_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       runInsert(
         experimentInsert,
@@ -198,6 +198,8 @@ export function importExperimentExport(
           json(document.currentTerritory),
           json(document.currentAlliances),
           json(sourceMetricInconsistencies(document))!,
+          json(document.attemptRetention),
+          json(document.attemptAccounting),
         ],
         report,
       );
@@ -219,6 +221,20 @@ export function importExperimentExport(
           source_territory_json = COALESCE(?, source_territory_json),
           source_alliances_json = COALESCE(?, source_alliances_json),
           simulated_player_metrics_json = COALESCE(?, simulated_player_metrics_json),
+          attempt_retention_json = CASE
+            WHEN ? IS NULL THEN attempt_retention_json
+            WHEN attempt_retention_json IS NULL
+              OR json_extract(?, '$.totalStartedAttempts') > json_extract(attempt_retention_json, '$.totalStartedAttempts')
+              OR (json_extract(?, '$.totalStartedAttempts') = json_extract(attempt_retention_json, '$.totalStartedAttempts')
+                  AND json_extract(?, '$.retainedAttempts') >= json_extract(attempt_retention_json, '$.retainedAttempts'))
+            THEN ? ELSE attempt_retention_json END,
+          attempt_accounting_json = CASE
+            WHEN ? IS NULL THEN attempt_accounting_json
+            WHEN attempt_accounting_json IS NULL
+              OR json_extract(?, '$.attemptsStarted') > json_extract(attempt_accounting_json, '$.attemptsStarted')
+              OR (json_extract(?, '$.attemptsStarted') = json_extract(attempt_accounting_json, '$.attemptsStarted')
+                  AND json_extract(?, '$.attemptsFinalized') >= json_extract(attempt_accounting_json, '$.attemptsFinalized'))
+            THEN ? ELSE attempt_accounting_json END,
           retention_limit = MAX(retention_limit, ?),
           total_completed_turns = MAX(total_completed_turns, ?),
           retained_turns = MAX(retained_turns, ?),
@@ -239,6 +255,16 @@ export function importExperimentExport(
         json(document.currentTerritory),
         json(document.currentAlliances),
         json(document.simulatedPlayerMetrics),
+        json(document.attemptRetention),
+        json(document.attemptRetention),
+        json(document.attemptRetention),
+        json(document.attemptRetention),
+        json(document.attemptRetention),
+        json(document.attemptAccounting),
+        json(document.attemptAccounting),
+        json(document.attemptAccounting),
+        json(document.attemptAccounting),
+        json(document.attemptAccounting),
         document.retention.limit,
         document.retention.totalCompletedTurns,
         document.retention.retainedTurns,
@@ -273,6 +299,7 @@ export function importExperimentExport(
       importAgents(archive, document, report);
       importMap(archive, document, report);
       importTurns(archive, document, report);
+      importProviderAttempts(archive, document, report);
       importCommunications(archive, document, report);
       importAllianceEvents(archive, document, report);
       importWorldEvents(archive, document, report);
@@ -558,6 +585,76 @@ function importTurns(
         report,
       );
     }
+  }
+}
+
+function importProviderAttempts(
+  archive: ArchiveDatabase,
+  document: ExperimentExportDocument,
+  report: ImportReport,
+): void {
+  if (document.schemaVersion !== 11) return;
+  const statement = archive.database.prepare(`
+    INSERT OR IGNORE INTO provider_attempts(
+      id, experiment_id, agent_id, intended_turn_number, intended_tick_number,
+      kind, started_at, completed_at, outcome, model_id, reasoning_profile,
+      provider, failure_code, failure_message, validation_codes_json,
+      latency_ms, prompt_tokens, completion_tokens, total_tokens,
+      reasoning_tokens, cached_read_tokens, cache_write_tokens,
+      reserved_credits, actual_cost_credits, source_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      completed_at = excluded.completed_at,
+      outcome = excluded.outcome,
+      provider = excluded.provider,
+      failure_code = excluded.failure_code,
+      failure_message = excluded.failure_message,
+      validation_codes_json = excluded.validation_codes_json,
+      latency_ms = excluded.latency_ms,
+      prompt_tokens = excluded.prompt_tokens,
+      completion_tokens = excluded.completion_tokens,
+      total_tokens = excluded.total_tokens,
+      reasoning_tokens = excluded.reasoning_tokens,
+      cached_read_tokens = excluded.cached_read_tokens,
+      cache_write_tokens = excluded.cache_write_tokens,
+      actual_cost_credits = excluded.actual_cost_credits,
+      source_json = excluded.source_json
+    WHERE provider_attempts.outcome = 'in-flight'
+      AND excluded.outcome <> 'in-flight'
+  `);
+  for (const attempt of document.providerAttempts ?? []) {
+    const provider = attempt.provider;
+    runInsert(
+      statement,
+      [
+        attempt.id,
+        document.experiment.id,
+        attempt.agentId,
+        attempt.intendedTurnNumber,
+        attempt.intendedTickNumber ?? null,
+        attempt.kind,
+        attempt.startedAt,
+        attempt.completedAt ?? null,
+        attempt.outcome,
+        attempt.modelId,
+        attempt.reasoningProfile,
+        provider?.provider ?? null,
+        attempt.failure?.code ?? null,
+        attempt.failure?.message ?? null,
+        json(attempt.failure?.validationCodes),
+        provider?.latencyMs ?? attempt.failure?.latencyMs ?? null,
+        provider?.promptTokens ?? null,
+        provider?.completionTokens ?? null,
+        provider?.totalTokens ?? null,
+        provider?.reasoningTokens ?? null,
+        provider?.cachedReadTokens ?? null,
+        provider?.cacheWriteTokens ?? null,
+        attempt.reservedCredits,
+        attempt.actualCostCredits ?? null,
+        json(attempt)!,
+      ],
+      report,
+    );
   }
 }
 

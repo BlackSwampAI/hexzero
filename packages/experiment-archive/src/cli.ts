@@ -191,6 +191,7 @@ const HELP = `Usage:
   pnpm experiment:db alliance-events <experiment-id> [--agent id] [--from-turn n] [--to-turn n] [--reason reason] [--limit n]
   pnpm experiment:db patient-zero <experiment-id> [--agent id] [--from-turn n] [--to-turn n] [--limit n]
   pnpm experiment:db failures <experiment-id> [--agent id] [--reason code] [--limit n]
+  pnpm experiment:db provider-attempts <experiment-id> [--agent id] [--from-turn n] [--to-turn n] [--outcome value] [--limit n]
   pnpm experiment:db notes import <file.md> --type <type> --status <status> [--tag tag] [--experiment id] [--provenance text] [--supersedes note-id]
   pnpm experiment:db notes search <query> [--type type] [--status status] [--tag tag] [--experiment id] [--limit n]
   pnpm experiment:db notes list [filters]
@@ -247,6 +248,11 @@ async function main(): Promise<void> {
       );
     } else if (command === 'failures') {
       result = queries.failures(
+        requirePositional(args, 1, 'experiment ID'),
+        detailFilters(args),
+      );
+    } else if (command === 'provider-attempts') {
+      result = queries.providerAttempts(
         requirePositional(args, 1, 'experiment ID'),
         detailFilters(args),
       );

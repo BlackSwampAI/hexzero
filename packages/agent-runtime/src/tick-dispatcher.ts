@@ -24,6 +24,10 @@ export interface TickDecisionSuccess extends TickDecisionJob {
   outcome: 'completed';
   decision: ProviderDecision;
   attempts: ModelAttempt[];
+  finalizeAttempt?: (
+    outcome?: 'completed' | 'provider-error' | 'cancelled',
+    failure?: ProviderFailure,
+  ) => void;
 }
 
 export interface TickDecisionFailure extends TickDecisionJob {
@@ -41,10 +45,19 @@ export interface TickDispatcherOptions {
   now?: () => string;
   nowMs?: () => number;
   waitForMs?: (delayMs: number, signal?: AbortSignal) => Promise<void>;
+  deferSuccessfulFinalization?: boolean;
   beginAttempt?: (
     job: TickDecisionJob,
     kind: ModelAttempt['kind'],
-  ) => ((metadata?: ProviderDecision['metadata']) => void) | null;
+    startedAt: string,
+  ) =>
+    | ((completion: {
+        outcome: 'completed' | 'provider-error' | 'cancelled' | 'timeout';
+        completedAt: string;
+        provider?: ProviderDecision['metadata'];
+        failure?: ProviderFailure;
+      }) => void)
+    | null;
 }
 
 /**
@@ -80,7 +93,8 @@ export async function dispatchTickDecisions(
           results[index] = deadlineFailure(job, attempts);
           break;
         }
-        const finalizeAccounting = options.beginAttempt?.(job, kind);
+        const startedAt = now();
+        const finalizeAccounting = options.beginAttempt?.(job, kind, startedAt);
         if (options.beginAttempt && !finalizeAccounting) {
           const failure: ProviderFailure = {
             code: 'budget-exhausted',
@@ -92,8 +106,11 @@ export async function dispatchTickDecisions(
           results[index] = { ...job, outcome: 'lost-tick', failure, attempts };
           break;
         }
-        const startedAt = now();
         let accountingMetadata: ProviderDecision['metadata'] | undefined;
+        let accountingFailure: ProviderFailure | undefined;
+        let accountingOutcome:
+          'completed' | 'provider-error' | 'cancelled' | 'timeout' =
+          'provider-error';
         try {
           const decision = await decideBeforeDeadline(provider, job, {
             reasoningProfile: job.reasoningProfile,
@@ -106,6 +123,8 @@ export async function dispatchTickDecisions(
           if (nowMs() >= options.deadlineAtMs) {
             const completedAt = now();
             const failure = timeoutFailure(job);
+            accountingFailure = failure;
+            accountingOutcome = 'timeout';
             results[index] = deadlineFailure(job, [
               ...attempts,
               {
@@ -130,7 +149,27 @@ export async function dispatchTickDecisions(
             reasoningProfile: job.reasoningProfile,
             provider: decision.metadata,
           });
-          results[index] = { ...job, outcome: 'completed', decision, attempts };
+          let finalized = false;
+          const completedResult: TickDecisionSuccess = {
+            ...job,
+            outcome: 'completed',
+            decision,
+            attempts,
+            finalizeAttempt: (outcome = 'completed', failure) => {
+              if (finalized) return;
+              finalized = true;
+              finalizeAccounting?.({
+                outcome,
+                completedAt: now(),
+                provider: accountingMetadata,
+                failure,
+              });
+            },
+          };
+          results[index] = completedResult;
+          accountingOutcome = 'completed';
+          if (!options.deferSuccessfulFinalization)
+            completedResult.finalizeAttempt?.();
           break;
         } catch (error) {
           const providerError = sanitizedProviderError(error, job.modelId) ?? {
@@ -143,11 +182,20 @@ export async function dispatchTickDecisions(
             metadata: undefined,
           };
           accountingMetadata = providerError.metadata ?? accountingMetadata;
-          if (
-            providerError.failure.code === 'cancelled' ||
-            options.signal?.aborted
-          )
+          accountingFailure = providerError.failure;
+          if (options.signal?.aborted) {
+            accountingFailure = cancelled().failure;
+            accountingOutcome = 'cancelled';
             throw cancelled();
+          }
+          if (providerError.failure.code === 'cancelled') {
+            accountingOutcome = 'cancelled';
+            throw cancelled();
+          }
+          accountingOutcome =
+            providerError.failure.code === 'timeout'
+              ? 'timeout'
+              : 'provider-error';
           attempts.push({
             attemptNumber: attempts.length + 1,
             kind,
@@ -183,7 +231,13 @@ export async function dispatchTickDecisions(
           };
           break;
         } finally {
-          finalizeAccounting?.(accountingMetadata);
+          if (accountingOutcome !== 'completed')
+            finalizeAccounting?.({
+              outcome: accountingOutcome,
+              completedAt: now(),
+              provider: accountingMetadata,
+              failure: accountingFailure,
+            });
         }
       }
     }
@@ -196,11 +250,21 @@ export async function dispatchTickDecisions(
     (entry): entry is PromiseRejectedResult =>
       entry.status === 'rejected' && isCancelled(entry.reason),
   );
-  if (cancellation) throw cancelled();
+  if (cancellation) {
+    for (const result of results)
+      if (result?.outcome === 'completed')
+        result.finalizeAttempt?.('completed');
+    throw cancelled();
+  }
   const unexpected = settled.find(
     (entry): entry is PromiseRejectedResult => entry.status === 'rejected',
   );
-  if (unexpected) throw unexpected.reason;
+  if (unexpected) {
+    for (const result of results)
+      if (result?.outcome === 'completed')
+        result.finalizeAttempt?.('completed');
+    throw unexpected.reason;
+  }
   return results;
 }
 

@@ -298,7 +298,8 @@ describe('dispatchTickDecisions', () => {
         nowMs: () => 0,
         beginAttempt: () => {
           if (permits-- < 1) return null;
-          return (metadata) => finalized.push(metadata?.costCredits);
+          return (completion) =>
+            finalized.push(completion.provider?.costCredits);
         },
       },
     );
@@ -328,7 +329,7 @@ describe('dispatchTickDecisions', () => {
       {
         deadlineAtMs: Date.now() + 1_000,
         signal: controller.signal,
-        beginAttempt: () => (metadata) => finalized.push(metadata),
+        beginAttempt: () => (completion) => finalized.push(completion),
       },
     );
     await Promise.resolve();
@@ -336,6 +337,74 @@ describe('dispatchTickDecisions', () => {
     await expect(pending).rejects.toMatchObject({
       failure: { code: 'cancelled' },
     });
-    expect(finalized).toEqual([undefined]);
+    expect(finalized).toMatchObject([
+      { outcome: 'cancelled', failure: { code: 'cancelled' } },
+    ]);
+  });
+
+  it('distinguishes a completed call from a concurrently aborted call', async () => {
+    const controller = new AbortController();
+    const finalized = new Map<string, unknown>();
+    let callOrdinal = 0;
+    let completedFinalization!: () => void;
+    const firstFinalized = new Promise<void>((resolve) => {
+      completedFinalization = resolve;
+    });
+    const pending = dispatchTickDecisions(
+      {
+        mode: 'scripted-test',
+        configured: true,
+        async decide(_observation, _model, options) {
+          const ordinal = callOrdinal++;
+          if (ordinal === 0) {
+            return {
+              decision: {
+                worldAction: { type: 'wait' },
+                summary: 'Completed before sibling cancellation.',
+              },
+              metadata: {
+                provider: 'scripted-test',
+                model: jobs[0]!.modelId,
+                latencyMs: 1,
+                costCredits: 0.01,
+              },
+            };
+          }
+          await new Promise<void>((resolve) =>
+            options?.signal?.addEventListener('abort', () => resolve(), {
+              once: true,
+            }),
+          );
+          throw new Error('unsafe error after abort');
+        },
+      },
+      jobs.slice(0, 2),
+      {
+        concurrency: 2,
+        deadlineAtMs: Date.now() + 1_000,
+        signal: controller.signal,
+        beginAttempt: (job) => (completion) => {
+          finalized.set(job.agentId, completion);
+          if (
+            job.agentId === jobs[0]!.agentId &&
+            completion.outcome === 'completed'
+          )
+            completedFinalization();
+        },
+      },
+    );
+    await firstFinalized;
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({
+      failure: { code: 'cancelled' },
+    });
+    expect(finalized.get(jobs[0]!.agentId)).toMatchObject({
+      outcome: 'completed',
+      provider: { costCredits: 0.01 },
+    });
+    expect(finalized.get(jobs[1]!.agentId)).toMatchObject({
+      outcome: 'cancelled',
+      failure: { code: 'cancelled' },
+    });
   });
 });

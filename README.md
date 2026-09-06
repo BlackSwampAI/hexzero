@@ -64,14 +64,16 @@ repair or transient-retry charge per agent. All agents observe the
 same frozen pre-tick world; valid decisions resolve together while an individual
 provider failure is retained as that agent's final lost tick. Start is
 deliberately disabled when the server has no key. This development API has no
-authentication or monetary cost controls and is not suitable for an unauthenticated
-public deployment.
+authentication or provider-account balance enforcement. Its experiment-scoped
+attempt and credit-admission limits are operator safeguards, not an upstream
+billing guarantee, so it is not suitable for unauthenticated public deployment.
 
 State is held only in the Game API process. The API captures one active safe
 experiment with bounded complete tick groups while the browser snapshot remains
-bounded without splitting a tick. Schema-v10 exports add tick number, resolution
-position, virtual time, interval, and lost-tick attribution; schema-v9 archive
-imports remain supported. Model and reasoning-profile assignments may be changed
+bounded without splitting a tick. Schema-v11 exports add an independent safe,
+bounded provider-attempt ledger to schema-v10 tick attribution, including work
+that did not produce a committed turn; schema-v9/v10 archive imports remain
+supported. Model and reasoning-profile assignments may be changed
 between ticks; behavior locks after tick one. A saved slug absent from the
 current compatible catalog is preserved and blocks execution until explicitly
 replaced. Every provider decision is one plain-text response containing a
@@ -86,6 +88,9 @@ World Setup also configures server-owned provider-attempt and conservative
 credit-admission limits. The per-attempt credit reservation bounds admission
 exposure using exact decimal accounting; it is not an upstream provider-account
 spending cap or billing guarantee.
+Provider-attempt records contain only bounded sanitized attribution, usage, and
+failure fields; prompts, raw responses, credentials, and private reasoning are
+excluded.
 
 ## Opt-in real-provider smoke
 

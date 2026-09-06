@@ -299,4 +299,43 @@ export const migrations: readonly Migration[] = [
         ON simulated_player_activity(experiment_id, tick_number, type, id);
     `,
   },
+  {
+    version: 4,
+    description: 'independent safe provider-attempt ledger',
+    sql: `
+      ALTER TABLE experiments ADD COLUMN attempt_retention_json TEXT;
+      ALTER TABLE experiments ADD COLUMN attempt_accounting_json TEXT;
+      CREATE TABLE provider_attempts (
+        id TEXT PRIMARY KEY,
+        experiment_id TEXT NOT NULL REFERENCES experiments(id) ON DELETE CASCADE,
+        agent_id TEXT NOT NULL,
+        intended_turn_number INTEGER NOT NULL,
+        intended_tick_number INTEGER,
+        kind TEXT NOT NULL,
+        started_at TEXT NOT NULL,
+        completed_at TEXT,
+        outcome TEXT NOT NULL,
+        model_id TEXT NOT NULL,
+        reasoning_profile TEXT NOT NULL,
+        provider TEXT,
+        failure_code TEXT,
+        failure_message TEXT,
+        validation_codes_json TEXT,
+        latency_ms INTEGER,
+        prompt_tokens INTEGER,
+        completion_tokens INTEGER,
+        total_tokens INTEGER,
+        reasoning_tokens INTEGER,
+        cached_read_tokens INTEGER,
+        cache_write_tokens INTEGER,
+        reserved_credits TEXT NOT NULL,
+        actual_cost_credits TEXT,
+        source_json TEXT NOT NULL
+      ) STRICT;
+      CREATE INDEX provider_attempts_experiment_tick_agent_idx
+        ON provider_attempts(experiment_id, intended_tick_number, agent_id);
+      CREATE INDEX provider_attempts_experiment_outcome_start_idx
+        ON provider_attempts(experiment_id, outcome, started_at, id);
+    `,
+  },
 ] as const;

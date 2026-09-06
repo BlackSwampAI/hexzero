@@ -2336,6 +2336,133 @@ export const modelAttemptSchema = z.object({
 });
 export type ModelAttempt = z.infer<typeof modelAttemptSchema>;
 
+export const providerAttemptIdSchema = z.uuid().brand<'ProviderAttemptId'>();
+export type ProviderAttemptId = z.infer<typeof providerAttemptIdSchema>;
+
+export const providerAttemptOutcomeSchema = z.enum([
+  'completed',
+  'provider-error',
+  'cancelled',
+  'timeout',
+  'in-flight',
+]);
+
+function canonicalProviderCost(value: number): string {
+  const raw = String(value).toLowerCase();
+  if (!raw.includes('e')) {
+    if (!raw.includes('.')) return raw;
+    return raw.replace(/0+$/u, '').replace(/\.$/u, '');
+  }
+  const [mantissa, exponentText = '0'] = raw.split('e');
+  const [whole, fraction = ''] = mantissa!.split('.');
+  const exponent = Number(exponentText);
+  const digits = `${whole}${fraction}`;
+  const decimal = whole!.length + exponent;
+  const expanded =
+    decimal <= 0
+      ? `0.${'0'.repeat(-decimal)}${digits}`
+      : decimal >= digits.length
+        ? `${digits}${'0'.repeat(decimal - digits.length)}`
+        : `${digits.slice(0, decimal)}.${digits.slice(decimal)}`;
+  if (!expanded.includes('.')) return expanded;
+  const trimmed = expanded.replace(/0+$/u, '').replace(/\.$/u, '');
+  return trimmed === '' ? '0' : trimmed;
+}
+
+export const providerAttemptRecordSchema = z
+  .object({
+    id: providerAttemptIdSchema,
+    agentId: agentIdSchema,
+    intendedTurnNumber: z.number().int().positive(),
+    intendedTickNumber: z.number().int().positive().optional(),
+    kind: modelAttemptSchema.shape.kind,
+    startedAt: z.iso.datetime(),
+    completedAt: z.iso.datetime().optional(),
+    outcome: providerAttemptOutcomeSchema,
+    modelId: modelIdSchema,
+    reasoningProfile: reasoningProfileSchema.default('provider-default'),
+    provider: providerMetadataSchema.optional(),
+    failure: providerFailureSchema.optional(),
+    reservedCredits: z.string().regex(/^(?:0|[1-9]\d*)(?:\.\d+)?$/),
+    actualCostCredits: z
+      .string()
+      .regex(/^(?:0|[1-9]\d*)(?:\.\d+)?$/)
+      .optional(),
+  })
+  .strict()
+  .superRefine((attempt, context) => {
+    const finalized = attempt.outcome !== 'in-flight';
+    if (finalized !== Boolean(attempt.completedAt))
+      context.addIssue({
+        code: 'custom',
+        path: ['completedAt'],
+        message: 'Only finalized provider attempts require a completion time.',
+      });
+    if (
+      attempt.outcome === 'in-flight' &&
+      (attempt.failure || attempt.actualCostCredits)
+    )
+      context.addIssue({
+        code: 'custom',
+        message: 'In-flight provider attempts cannot claim final results.',
+      });
+    if (attempt.outcome === 'completed' && attempt.failure)
+      context.addIssue({
+        code: 'custom',
+        path: ['failure'],
+        message: 'Completed provider attempts cannot contain a failure.',
+      });
+    if (
+      ['provider-error', 'cancelled', 'timeout'].includes(attempt.outcome) &&
+      !attempt.failure
+    )
+      context.addIssue({
+        code: 'custom',
+        path: ['failure'],
+        message: 'Unsuccessful provider attempts require a safe failure.',
+      });
+    if (
+      attempt.outcome === 'cancelled' &&
+      attempt.failure?.code !== 'cancelled'
+    )
+      context.addIssue({
+        code: 'custom',
+        path: ['failure', 'code'],
+        message: 'Cancelled attempts require a cancelled failure.',
+      });
+    if (attempt.outcome === 'timeout' && attempt.failure?.code !== 'timeout')
+      context.addIssue({
+        code: 'custom',
+        path: ['failure', 'code'],
+        message: 'Timed-out attempts require a timeout failure.',
+      });
+    if (
+      attempt.provider?.costCredits !== undefined &&
+      attempt.actualCostCredits !==
+        canonicalProviderCost(attempt.provider.costCredits)
+    )
+      context.addIssue({
+        code: 'custom',
+        path: ['actualCostCredits'],
+        message: 'Actual cost must agree with safe provider metadata.',
+      });
+  });
+export type ProviderAttemptRecord = z.infer<typeof providerAttemptRecordSchema>;
+
+export const providerAttemptRetentionSchema = z
+  .object({
+    limit: z.number().int().positive(),
+    totalStartedAttempts: z.number().int().nonnegative(),
+    retainedAttempts: z.number().int().nonnegative(),
+    droppedRecords: z.number().int().nonnegative(),
+    complete: z.boolean(),
+    requestedRangeExtendsBeyondRetention: z.boolean(),
+  })
+  .strict();
+export type ProviderAttemptRetention = z.infer<
+  typeof providerAttemptRetentionSchema
+>;
+
 const turnRecordBaseSchema = z.object({
   turnNumber: z.number().int().positive(),
   tickNumber: z.number().int().positive().optional(),
@@ -3816,6 +3943,7 @@ export const experimentExportPreviewSchema = z.object({
   matchingCommunicationCount: z.number().int().nonnegative(),
   matchingControlChangeCount: z.number().int().nonnegative(),
   matchingDiplomacyEventCount: z.number().int().nonnegative(),
+  matchingProviderAttemptCount: z.number().int().nonnegative().default(0),
   selectedAgentCount: z
     .number()
     .int()
@@ -3985,7 +4113,7 @@ export type ExperimentExportWorldState = z.infer<
 
 const experimentExportDocumentObjectSchema = z
   .object({
-    schemaVersion: z.union([z.literal(9), z.literal(10)]),
+    schemaVersion: z.union([z.literal(9), z.literal(10), z.literal(11)]),
     generatedAt: z.iso.datetime(),
     experiment: experimentManifestSchema,
     retention: experimentRetentionSchema,
@@ -4000,6 +4128,7 @@ const experimentExportDocumentObjectSchema = z
       matchingCommunicationCount: z.number().int().nonnegative(),
       matchingControlChangeCount: z.number().int().nonnegative(),
       matchingDiplomacyEventCount: z.number().int().nonnegative(),
+      matchingProviderAttemptCount: z.number().int().nonnegative().optional(),
       matchingSimulatedPlayerEventCount: z
         .number()
         .int()
@@ -4050,6 +4179,9 @@ const experimentExportDocumentObjectSchema = z
     controlChanges: z.array(exportedControlChangeSchema).optional(),
     allianceEvents: z.array(allianceEventSchema).optional(),
     tickSummaries: z.array(experimentTickSummarySchema).optional(),
+    providerAttempts: z.array(providerAttemptRecordSchema).optional(),
+    attemptRetention: providerAttemptRetentionSchema.optional(),
+    attemptAccounting: experimentAttemptAccountingSchema.optional(),
     turns: z.array(experimentExportTurnSchema),
   })
   .superRefine((document, context) => {
@@ -4120,7 +4252,21 @@ const experimentExportDocumentObjectSchema = z
         code: 'custom',
         message: 'Schema-v9 turns cannot claim simultaneous tick metadata.',
       });
-    if (document.schemaVersion === 10) {
+    const v11TickNative =
+      document.schemaVersion === 11 && document.turns.some(hasTickMetadata);
+    if (document.schemaVersion === 11) {
+      const tickMetadataCount = document.turns.filter(hasTickMetadata).length;
+      if (
+        tickMetadataCount !== 0 &&
+        tickMetadataCount !== document.turns.length
+      )
+        context.addIssue({
+          code: 'custom',
+          message:
+            'Schema-v11 exports cannot mix sequential and tick-native turns.',
+        });
+    }
+    if (document.schemaVersion === 10 || v11TickNative) {
       if (document.tickSummaries === undefined)
         context.addIssue({
           code: 'custom',
@@ -4188,6 +4334,85 @@ const experimentExportDocumentObjectSchema = z
             'Schema-v10 tick counts and summaries must match exported records.',
         });
     }
+    if (
+      document.schemaVersion === 11 &&
+      !v11TickNative &&
+      document.tickSummaries?.length !== 0
+    )
+      context.addIssue({
+        code: 'custom',
+        message: 'Sequential schema-v11 exports require empty tick summaries.',
+      });
+    if (document.schemaVersion === 11) {
+      if (
+        document.providerAttempts === undefined ||
+        document.attemptRetention === undefined ||
+        document.attemptAccounting === undefined ||
+        document.selection.matchingProviderAttemptCount === undefined
+      )
+        context.addIssue({
+          code: 'custom',
+          message: 'Schema-v11 exports require independent attempt accounting.',
+        });
+      const attempts = document.providerAttempts ?? [];
+      const selectedIds = new Set(document.selection.selectedAgentIds);
+      const exportedIds = new Set(document.agents.map(({ id }) => id));
+      if (new Set(attempts.map(({ id }) => id)).size !== attempts.length)
+        context.addIssue({
+          code: 'custom',
+          path: ['providerAttempts'],
+          message: 'Provider-attempt IDs must be unique.',
+        });
+      if (
+        attempts.some(
+          ({ agentId }) =>
+            !selectedIds.has(agentId) || !exportedIds.has(agentId),
+        )
+      )
+        context.addIssue({
+          code: 'custom',
+          path: ['providerAttempts'],
+          message: 'Provider attempts must belong to selected exported agents.',
+        });
+      if (document.selection.matchingProviderAttemptCount !== attempts.length)
+        context.addIssue({
+          code: 'custom',
+          path: ['selection', 'matchingProviderAttemptCount'],
+          message: 'Provider-attempt selection count must match the export.',
+        });
+      const retention = document.attemptRetention;
+      const accounting = document.attemptAccounting;
+      if (
+        retention &&
+        (retention.totalStartedAttempts !==
+          retention.retainedAttempts + retention.droppedRecords ||
+          retention.retainedAttempts > retention.limit ||
+          retention.complete !== (retention.droppedRecords === 0))
+      )
+        context.addIssue({
+          code: 'custom',
+          path: ['attemptRetention'],
+          message: 'Provider-attempt retention totals must be consistent.',
+        });
+      if (
+        retention &&
+        accounting &&
+        retention.totalStartedAttempts !== accounting.attemptsStarted
+      )
+        context.addIssue({
+          code: 'custom',
+          path: ['attemptRetention', 'totalStartedAttempts'],
+          message: 'Attempt retention and accounting totals must agree.',
+        });
+    } else if (
+      document.providerAttempts !== undefined ||
+      document.attemptRetention !== undefined ||
+      document.attemptAccounting !== undefined
+    )
+      context.addIssue({
+        code: 'custom',
+        message: 'Legacy exports cannot claim schema-v11 attempt accounting.',
+      });
     if (document.schemaVersion === 9 && document.tickSummaries !== undefined)
       context.addIssue({
         code: 'custom',

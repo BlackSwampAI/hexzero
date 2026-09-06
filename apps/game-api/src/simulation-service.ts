@@ -105,11 +105,13 @@ import { AttemptAccounting } from './attempt-accounting';
 
 function attemptAccountingForScenario(
   executionLimits: AppliedScenario['executionLimits'],
+  retentionLimit = DEFAULT_EXPERIMENT_RETENTION,
 ): AttemptAccounting {
   return new AttemptAccounting(
     executionLimits.providerAttemptLimit,
     executionLimits.creditLimit,
     executionLimits.reservationCreditsPerAttempt,
+    retentionLimit * 2,
   );
 }
 
@@ -360,6 +362,7 @@ export class SimulationService {
     };
     this.#attemptAccounting = attemptAccountingForScenario(
       this.#scenario.executionLimits,
+      this.#experimentRetentionLimit,
     );
   }
 
@@ -463,6 +466,7 @@ export class SimulationService {
     ]);
     this.#attemptAccounting = attemptAccountingForScenario(
       this.#scenario.executionLimits,
+      this.#experimentRetentionLimit,
     );
     this.#modelConfiguration = {
       ...structuredClone(this.#scenario.modelConfiguration),
@@ -607,6 +611,7 @@ export class SimulationService {
     ]);
     this.#attemptAccounting = attemptAccountingForScenario(
       this.#scenario.executionLimits,
+      this.#experimentRetentionLimit,
     );
     this.#status = this.#provider.configured ? 'paused' : 'configuration-error';
     return this.getSnapshot();
@@ -749,11 +754,12 @@ export class SimulationService {
       version !== 7 &&
       version !== 8 &&
       version !== 9 &&
-      version !== 10
+      version !== 10 &&
+      version !== 11
     )
       throw new SimulationValidationError(
         'invalid_model_configuration',
-        'Only schema-version 5 through 10 experiment exports can be imported.',
+        'Only schema-version 5 through 11 experiment exports can be imported.',
       );
     if (version === 5) {
       const legacyConfiguration: ExperimentModelConfiguration = {
@@ -1115,8 +1121,9 @@ export class SimulationService {
     this.#cancellationRequested = false;
     this.#status = 'waiting-for-model';
     const deadlineAtMs = Date.now() + OPENROUTER_PROVIDER_TIMEOUT_MS;
+    let dispatched: Awaited<ReturnType<typeof dispatchTickDecisions>> = [];
     try {
-      const dispatched = await dispatchTickDecisions(
+      dispatched = await dispatchTickDecisions(
         this.#provider,
         agents.map(({ id }) => {
           const resolved = this.#resolvedModel(id);
@@ -1132,15 +1139,28 @@ export class SimulationService {
           deadlineAtMs,
           signal: controller.signal,
           now: this.#now,
-          beginAttempt: (_job, kind) => {
+          deferSuccessfulFinalization: true,
+          beginAttempt: (job, kind, attemptStartedAt) => {
+            const intendedTurnNumber =
+              this.#completedTurnCount +
+              Math.max(1, order.indexOf(job.agentId) + 1);
+            const details = {
+              agentId: job.agentId,
+              intendedTurnNumber,
+              intendedTickNumber: tickNumber,
+              kind,
+              startedAt: attemptStartedAt,
+              modelId: job.modelId,
+              reasoningProfile: job.reasoningProfile,
+            };
             const permitId =
               kind === 'initial'
-                ? this.#attemptAccounting.startReserved()
-                : this.#attemptAccounting.startAdditional();
+                ? this.#attemptAccounting.startReserved(details)
+                : this.#attemptAccounting.startAdditional(details);
             return permitId === null
               ? null
-              : (metadata) =>
-                  this.#attemptAccounting.finalize(permitId, metadata);
+              : (completion) =>
+                  this.#attemptAccounting.finalize(permitId, completion);
           },
         },
       );
@@ -1321,11 +1341,32 @@ export class SimulationService {
         playerAdvance.events,
         committedObservationEvents,
       );
+      for (const result of dispatched)
+        if (result.outcome === 'completed') result.finalizeAttempt?.();
       this.#status = this.#attemptAccounting.snapshot().exhausted
         ? 'budget-exhausted'
         : 'paused';
       return records;
     } catch (error) {
+      const cancelledAttempt =
+        controller.signal.aborted ||
+        error instanceof SimulationTurnCancelledError;
+      const failure: ProviderFailure = cancelledAttempt
+        ? {
+            code: 'cancelled',
+            message: 'The model request was cancelled by the operator.',
+            retryable: false,
+          }
+        : {
+            code: 'simulation-validation',
+            message: 'The simultaneous tick could not be committed safely.',
+            retryable: true,
+          };
+      for (const result of dispatched)
+        if (result.outcome === 'completed') {
+          if (cancelledAttempt) result.finalizeAttempt?.('completed');
+          else result.finalizeAttempt?.('provider-error', failure);
+        }
       if (
         controller.signal.aborted ||
         (error &&
@@ -1490,6 +1531,7 @@ export class SimulationService {
     const selectedModel = resolvedModel.modelId!;
     let providerResult: ProviderDecision | undefined;
     let successfulProviderMetadata: ProviderMetadata | undefined;
+    let successfulAccountingPermitId: number | null = null;
     const attemptHistory = [...(pending?.attempts ?? [])];
     const deadlineAtMs = Date.now() + OPENROUTER_PROVIDER_TIMEOUT_MS;
 
@@ -1501,7 +1543,15 @@ export class SimulationService {
       let validationFeedback: ProviderFailure['validationCodes'] =
         pending?.failure.validationCodes;
       for (let automaticCall = 0; automaticCall < 2; automaticCall += 1) {
-        const accountingPermitId = this.#attemptAccounting.startAdditional();
+        const currentAttemptStartedAt = this.#now();
+        const accountingPermitId = this.#attemptAccounting.startAdditional({
+          agentId: agent.id,
+          intendedTurnNumber: turnNumber,
+          kind: nextKind,
+          startedAt: currentAttemptStartedAt,
+          modelId: selectedModel,
+          reasoningProfile: resolvedModel.reasoningProfile,
+        });
         if (accountingPermitId === null) {
           this.#status = 'budget-exhausted';
           throw new SimulationValidationError(
@@ -1509,10 +1559,10 @@ export class SimulationService {
             'The experiment does not have enough provider-attempt or credit-admission capacity.',
           );
         }
-        const currentAttemptStartedAt = this.#now();
         successfulAttemptStartedAt = currentAttemptStartedAt;
         successfulAttemptKind = nextKind;
         let accountingMetadata: ProviderMetadata | undefined;
+        let accountingFailure: ProviderFailure | undefined;
         try {
           providerResult = await this.#provider.decide(
             providerObservation,
@@ -1542,9 +1592,15 @@ export class SimulationService {
           const providerError = asProviderError(error);
           accountingMetadata = providerError.metadata ?? accountingMetadata;
           if (providerError.failure.code === 'cancelled') {
+            // A response that already returned is completed provider work even
+            // when cancellation prevents the later world commit. Leave its
+            // finalization to the outer rollback boundary.
+            if (!successfulProviderMetadata)
+              accountingFailure = providerError.failure;
             this.#status = 'paused';
             throw new SimulationTurnCancelledError();
           }
+          accountingFailure = providerError.failure;
           const attemptProvider = providerError.metadata ?? {
             provider: this.#provider.mode,
             model: providerError.failure.model ?? selectedModel,
@@ -1636,10 +1692,19 @@ export class SimulationService {
               : 'provider-error';
           return record;
         } finally {
-          this.#attemptAccounting.finalize(
-            accountingPermitId,
-            accountingMetadata,
-          );
+          if (accountingFailure)
+            this.#attemptAccounting.finalize(accountingPermitId, {
+              outcome:
+                accountingFailure.code === 'cancelled'
+                  ? 'cancelled'
+                  : accountingFailure.code === 'timeout'
+                    ? 'timeout'
+                    : 'provider-error',
+              completedAt: this.#now(),
+              provider: accountingMetadata,
+              failure: accountingFailure,
+            });
+          else successfulAccountingPermitId = accountingPermitId;
         }
       }
 
@@ -1775,6 +1840,14 @@ export class SimulationService {
         },
         committedObservationEvents,
       );
+      if (successfulAccountingPermitId !== null) {
+        this.#attemptAccounting.finalize(successfulAccountingPermitId, {
+          outcome: 'completed',
+          completedAt: this.#now(),
+          provider: successfulProviderMetadata,
+        });
+        successfulAccountingPermitId = null;
+      }
       this.#status = this.#attemptAccounting.snapshot().exhausted
         ? 'budget-exhausted'
         : 'paused';
@@ -1807,6 +1880,15 @@ export class SimulationService {
         },
       } satisfies ModelAttempt;
       const attempts = [...attemptHistory, attempt];
+      if (successfulAccountingPermitId !== null) {
+        this.#attemptAccounting.finalize(successfulAccountingPermitId, {
+          outcome: 'provider-error',
+          completedAt: this.#now(),
+          provider: attempt.provider,
+          failure,
+        });
+        successfulAccountingPermitId = null;
+      }
       this.#pendingFailedTurn = {
         turnNumber,
         agentId: agent.id,
@@ -1832,6 +1914,43 @@ export class SimulationService {
         allianceEvents: [],
       });
     } finally {
+      if (successfulAccountingPermitId !== null) {
+        const cancelled = Boolean(
+          this.#activeRequestController?.signal.aborted,
+        );
+        if (cancelled && successfulProviderMetadata) {
+          this.#attemptAccounting.finalize(successfulAccountingPermitId, {
+            outcome: 'completed',
+            completedAt: this.#now(),
+            provider: successfulProviderMetadata,
+          });
+          successfulAccountingPermitId = null;
+        }
+      }
+      if (successfulAccountingPermitId !== null) {
+        const cancelled = Boolean(
+          this.#activeRequestController?.signal.aborted,
+        );
+        const failure: ProviderFailure = cancelled
+          ? {
+              code: 'cancelled',
+              message: 'The model request was cancelled by the operator.',
+              retryable: false,
+              model: selectedModel,
+            }
+          : {
+              code: 'simulation-validation',
+              message: 'The provider result could not be committed safely.',
+              retryable: true,
+              model: selectedModel,
+            };
+        this.#attemptAccounting.finalize(successfulAccountingPermitId, {
+          outcome: cancelled ? 'cancelled' : 'provider-error',
+          completedAt: this.#now(),
+          provider: successfulProviderMetadata,
+          failure,
+        });
+      }
       this.#busy = false;
       this.#activeAgentId = null;
       this.#activeRequestController = null;
@@ -1970,8 +2089,10 @@ export class SimulationService {
       modelConfiguration: this.#modelConfiguration,
       behaviorConfiguration: this.#behaviorConfiguration,
       scenario: this.#scenario,
-      schemaVersion:
-        this.#completedTickCount > 0 || this.#completedTurnCount === 0 ? 10 : 9,
+      schemaVersion: 11,
+      providerAttempts: this.#attemptAccounting.ledger(),
+      attemptRetention: this.#attemptAccounting.retention(),
+      attemptAccounting: this.#attemptAccounting.snapshot(),
       agentGoals: [...this.#state.agents.keys()].map((agentId) => ({
         agentId,
         goal: structuredClone(this.#agentGoals.get(agentId) ?? null),

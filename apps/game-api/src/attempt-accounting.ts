@@ -1,4 +1,13 @@
-import type { ProviderMetadata } from '@hexzero/shared';
+import {
+  providerAttemptRecordSchema,
+  type AgentId,
+  type ModelAttempt,
+  type ModelId,
+  type ProviderAttemptRecord,
+  type ProviderFailure,
+  type ProviderMetadata,
+  type ReasoningProfile,
+} from '@hexzero/shared';
 
 export type AttemptExhaustionReason =
   | 'provider-attempt-limit'
@@ -22,6 +31,23 @@ export interface AttemptAccountingSnapshot {
   attemptsWithUnknownCost: number;
   exhausted: boolean;
   exhaustionReason: AttemptExhaustionReason | null;
+}
+
+export interface AttemptStart {
+  agentId: AgentId;
+  intendedTurnNumber: number;
+  intendedTickNumber?: number;
+  kind: ModelAttempt['kind'];
+  startedAt: string;
+  modelId: ModelId;
+  reasoningProfile: ReasoningProfile;
+}
+
+export interface AttemptCompletion {
+  outcome: 'completed' | 'provider-error' | 'cancelled' | 'timeout';
+  completedAt: string;
+  provider?: ProviderMetadata;
+  failure?: ProviderFailure;
 }
 
 interface Decimal {
@@ -98,6 +124,9 @@ export class AttemptAccounting {
   #unknownCost = 0;
   #nextPermitId = 1;
   readonly #inFlight = new Set<number>();
+  readonly #records = new Map<number, ProviderAttemptRecord>();
+  #retainedRecords: ProviderAttemptRecord[] = [];
+  #droppedRecords = 0;
   #exhaustionReason: AttemptExhaustionReason | null = null;
   readonly limit: number | null;
   readonly creditLimit: string | null;
@@ -107,6 +136,7 @@ export class AttemptAccounting {
     limit: number | null,
     creditLimit: string | null = null,
     reservationCreditsPerAttempt = '0.01',
+    readonly ledgerLimit = 10_000,
   ) {
     this.limit = limit;
     this.creditLimit = creditLimit === null ? null : canonical(creditLimit);
@@ -142,31 +172,71 @@ export class AttemptAccounting {
     return true;
   }
 
-  startReserved(): number | null {
+  startReserved(details?: AttemptStart): number | null {
     if (this.#reserved < 1) return null;
+    const permitId = this.#nextPermitId;
+    const record = details
+      ? providerAttemptRecordSchema.parse({
+          id: crypto.randomUUID(),
+          ...details,
+          outcome: 'in-flight',
+          reservedCredits: this.reservationCreditsPerAttempt,
+        })
+      : undefined;
     this.#reserved -= 1;
     this.#started += 1;
     this.#committedExposure = add(
       this.#committedExposure,
       this.reservationCreditsPerAttempt,
     );
-    const permitId = this.#nextPermitId++;
+    this.#nextPermitId += 1;
     this.#inFlight.add(permitId);
+    if (record) {
+      this.#records.set(permitId, record);
+      this.#retain(record);
+    }
     return permitId;
   }
 
-  startAdditional(): number | null {
+  startAdditional(details?: AttemptStart): number | null {
     if (!this.reserve(1)) return null;
-    return this.startReserved();
+    return this.startReserved(details);
   }
 
   releaseReservations(): void {
     this.#reserved = 0;
   }
 
-  finalize(permitId: number, metadata?: ProviderMetadata): void {
-    if (!this.#inFlight.delete(permitId)) return;
+  finalize(
+    permitId: number,
+    completion?: ProviderMetadata | AttemptCompletion,
+  ): void {
+    if (!this.#inFlight.has(permitId)) return;
+    const detailed = completion && 'outcome' in completion ? completion : null;
+    const metadata =
+      detailed?.provider ??
+      (completion && !('outcome' in completion) ? completion : undefined);
+    const started = this.#records.get(permitId);
+    let finalizedRecord: ProviderAttemptRecord | undefined;
+    if (started && detailed) {
+      finalizedRecord = providerAttemptRecordSchema.parse({
+        ...started,
+        ...detailed,
+        actualCostCredits:
+          metadata?.costCredits === undefined
+            ? undefined
+            : canonical(String(metadata.costCredits)),
+      });
+    }
+    this.#inFlight.delete(permitId);
     this.#finalized += 1;
+    if (started && finalizedRecord) {
+      this.#records.delete(permitId);
+      const index = this.#retainedRecords.findIndex(
+        ({ id }) => id === started.id,
+      );
+      if (index >= 0) this.#retainedRecords[index] = finalizedRecord;
+    }
     if (metadata?.costCredits === undefined) {
       this.#unknownCost += 1;
       return;
@@ -187,6 +257,31 @@ export class AttemptAccounting {
         subtractFloor(reservation, actual),
       );
     }
+  }
+
+  #retain(record: ProviderAttemptRecord): void {
+    this.#retainedRecords.push(record);
+    while (this.#retainedRecords.length > this.ledgerLimit) {
+      const removed = this.#retainedRecords.shift()!;
+      for (const [permit, candidate] of this.#records)
+        if (candidate.id === removed.id) this.#records.delete(permit);
+      this.#droppedRecords += 1;
+    }
+  }
+
+  ledger(): readonly ProviderAttemptRecord[] {
+    return structuredClone(this.#retainedRecords);
+  }
+
+  retention() {
+    return {
+      limit: this.ledgerLimit,
+      totalStartedAttempts: this.#started,
+      retainedAttempts: this.#retainedRecords.length,
+      droppedRecords: this.#droppedRecords,
+      complete: this.#droppedRecords === 0,
+      requestedRangeExtendsBeyondRetention: false,
+    };
   }
 
   #reservedCredits(): string {

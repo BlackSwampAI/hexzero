@@ -76,6 +76,25 @@ function parseJson<T>(value: unknown, fallback: T): T {
   }
 }
 
+function addDecimalStrings(left: string, right: string): string {
+  const split = (value: string) => {
+    const [whole, fraction = ''] = value.split('.');
+    return { digits: BigInt(`${whole}${fraction}`), scale: fraction.length };
+  };
+  const a = split(left);
+  const b = split(right);
+  const scale = Math.max(a.scale, b.scale);
+  const sum =
+    a.digits * 10n ** BigInt(scale - a.scale) +
+    b.digits * 10n ** BigInt(scale - b.scale);
+  if (sum === 0n) return '0';
+  if (scale === 0) return String(sum);
+  const padded = String(sum).padStart(scale + 1, '0');
+  return `${padded.slice(0, -scale)}.${padded.slice(-scale)}`
+    .replace(/0+$/u, '')
+    .replace(/\.$/u, '');
+}
+
 export class ExperimentQueryService {
   readonly #db: DatabaseSync;
 
@@ -276,6 +295,49 @@ export class ExperimentQueryService {
     return page(rows, limit);
   }
 
+  providerAttempts(
+    experimentId: string,
+    filters: DetailFilters = {},
+  ): QueryPage<Record<string, unknown>> {
+    const limit = boundedLimit(filters.limit);
+    const clauses: string[] = [];
+    const values: Array<string | number> = [];
+    if (filters.agent) {
+      clauses.push('agent_id = ?');
+      values.push(filters.agent);
+    }
+    if (filters.fromTurn !== undefined) {
+      clauses.push('intended_turn_number >= ?');
+      values.push(filters.fromTurn);
+    }
+    if (filters.toTurn !== undefined) {
+      clauses.push('intended_turn_number <= ?');
+      values.push(filters.toTurn);
+    }
+    if (filters.outcome) {
+      clauses.push('outcome = ?');
+      values.push(filters.outcome);
+    }
+    const rows = this.#db
+      .prepare(
+        `
+        SELECT id, agent_id AS agent, intended_turn_number AS intendedTurn,
+               intended_tick_number AS intendedTick, kind, started_at AS startedAt,
+               completed_at AS completedAt, outcome, model_id AS model,
+               reasoning_profile AS reasoning, provider, failure_code AS failureCode,
+               reserved_credits AS reservedCredits,
+               actual_cost_credits AS actualCostCredits
+        FROM provider_attempts WHERE experiment_id = ?
+          ${clauses.map((clause) => `AND ${clause}`).join('\n')}
+        ORDER BY started_at ASC, id ASC LIMIT ?
+      `,
+      )
+      .all(experimentId, ...values, limit + 1) as Array<
+      Record<string, unknown>
+    >;
+    return page(rows, limit);
+  }
+
   patientZero(
     experimentId: string,
     filters: DetailFilters = {},
@@ -428,6 +490,7 @@ export class ExperimentQueryService {
       .prepare('SELECT * FROM experiments WHERE id = ?')
       .get(experimentId) as Record<string, unknown> | undefined;
     if (!experiment) throw new Error(`Unknown experiment: ${experimentId}`);
+    const hasIndependentAttempts = Number(experiment.schema_version) >= 11;
     const roster = this.#db
       .prepare(
         `
@@ -477,7 +540,35 @@ export class ExperimentQueryService {
       .all(experimentId);
     const ticks = this.#db
       .prepare(
-        `
+        hasIndependentAttempts
+          ? `
+        WITH turn_totals AS (
+          SELECT tick_number AS tick, MIN(virtual_time) AS virtualTime,
+                 MIN(tick_interval_minutes) AS intervalMinutes,
+                 COUNT(*) AS agentRecords,
+                 SUM(outcome = 'lost-tick') AS lostTicks,
+                 SUM(outcome = 'lost-tick' AND json_extract(failure_json, '$.code') = 'timeout') AS deadlineMisses
+          FROM turns WHERE experiment_id = ? AND tick_number IS NOT NULL
+          GROUP BY tick_number
+        ), attempt_totals AS (
+          SELECT intended_tick_number AS tick, COUNT(*) AS providerCallCount,
+                 SUM(latency_ms) AS aggregateLatencyMs,
+                 MAX(latency_ms) AS maximumLatencyMs,
+                 ROUND(SUM(CAST(actual_cost_credits AS REAL)), 8) AS knownCostCredits,
+                 SUM(actual_cost_credits IS NULL) AS attemptsWithUnknownCost
+          FROM provider_attempts
+          WHERE experiment_id = ? AND intended_tick_number IS NOT NULL
+          GROUP BY intended_tick_number
+        )
+        SELECT t.*, COALESCE(a.providerCallCount, 0) AS providerCallCount,
+               COALESCE(a.knownCostCredits, 0) AS knownCostCredits,
+               COALESCE(a.attemptsWithUnknownCost, 0) AS attemptsWithUnknownCost,
+               COALESCE(a.aggregateLatencyMs, 0) AS aggregateLatencyMs,
+               COALESCE(a.maximumLatencyMs, 0) AS maximumLatencyMs
+        FROM turn_totals t LEFT JOIN attempt_totals a ON a.tick = t.tick
+        ORDER BY t.tick ASC LIMIT ?
+      `
+          : `
         WITH attempt_totals AS (
           SELECT turn_id, COUNT(*) AS providerCalls,
                  SUM(latency_ms) AS aggregateLatencyMs,
@@ -540,7 +631,23 @@ export class ExperimentQueryService {
       .all(experimentId);
     const usageByAgent = this.#db
       .prepare(
-        `
+        hasIndependentAttempts
+          ? `
+        SELECT agent_id AS agent,
+               COUNT(*) AS modelAttempts,
+               SUM(latency_ms) AS latencyTotalMs,
+               SUM(latency_ms IS NOT NULL) AS attemptsWithKnownLatency,
+               ROUND(AVG(latency_ms), 2) AS averageLatencyMs,
+               SUM(prompt_tokens) AS promptTokens,
+               SUM(completion_tokens) AS completionTokens,
+               SUM(total_tokens) AS totalTokens,
+               ROUND(SUM(CAST(actual_cost_credits AS REAL)), 8) AS knownCostCredits,
+               SUM(actual_cost_credits IS NULL) AS attemptsWithUnknownCost,
+               SUM(CASE WHEN actual_cost_credits IS NULL THEN CAST(reserved_credits AS REAL) ELSE 0 END) AS reservedUnknownExposure
+        FROM provider_attempts WHERE experiment_id = ?
+        GROUP BY agent_id ORDER BY agent_id
+      `
+          : `
         SELECT agent_id AS agent,
                COUNT(*) AS modelAttempts,
                SUM(latency_ms) AS latencyTotalMs,
@@ -557,6 +664,40 @@ export class ExperimentQueryService {
       )
       .all(experimentId) as Array<Record<string, unknown>>;
     const usageAggregate = aggregateUsage(usageByAgent);
+    const independentAttemptRows = hasIndependentAttempts
+      ? (this.#db
+          .prepare(
+            `SELECT agent_id AS agent, outcome, reserved_credits AS reservedCredits,
+                    actual_cost_credits AS actualCostCredits
+             FROM provider_attempts WHERE experiment_id = ?
+             ORDER BY started_at, id`,
+          )
+          .all(experimentId) as Array<Record<string, unknown>>)
+      : [];
+    const attemptOutcomes = countBy(independentAttemptRows, 'outcome');
+    const attemptOutcomesByAgent = [
+      ...new Set(independentAttemptRows.map(({ agent }) => String(agent))),
+    ].map((agent) => ({
+      agent,
+      outcomes: countBy(
+        independentAttemptRows.filter((row) => row.agent === agent),
+        'outcome',
+      ),
+    }));
+    const exactKnownCostCredits = independentAttemptRows.reduce(
+      (sum, row) =>
+        row.actualCostCredits === null
+          ? sum
+          : addDecimalStrings(sum, String(row.actualCostCredits)),
+      '0',
+    );
+    const exactReservedUnknownExposure = independentAttemptRows.reduce(
+      (sum, row) =>
+        row.actualCostCredits !== null
+          ? sum
+          : addDecimalStrings(sum, String(row.reservedCredits)),
+      '0',
+    );
     const sizeTrends = this.#db
       .prepare(
         `
@@ -691,6 +832,19 @@ export class ExperimentQueryService {
         ),
       },
       usage: { aggregate: usageAggregate, byAgent: usageByAgent },
+      ...(hasIndependentAttempts
+        ? {
+            providerAttempts: {
+              total: independentAttemptRows.length,
+              outcomes: attemptOutcomes,
+              byAgent: attemptOutcomesByAgent,
+              exactKnownCostCredits,
+              exactReservedUnknownExposure,
+              retention: parseJson(experiment.attempt_retention_json, null),
+              accounting: parseJson(experiment.attempt_accounting_json, null),
+            },
+          }
+        : {}),
       promptAndObservationSizeTrends: sizeTrends,
       directionChangesAfterCommunication: directions,
       retention: {
