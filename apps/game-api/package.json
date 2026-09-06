@@ -16,14 +16,14 @@
     "@hexzero/experiment-archive": "workspace:*",
     "@hexzero/shared": "workspace:*",
     "@hexzero/world-engine": "workspace:*",
-    "@hono/node-server": "2.1.0",
+    "@hono/node-server": "2.1.1",
     "h3-js": "4.5.0",
-    "hono": "4.13.2"
+    "hono": "4.13.5"
   },
   "devDependencies": {
     "@types/node": "24.13.3",
     "esbuild": "0.28.2",
     "tsx": "4.23.12",
-    "vitest": "4.1.10"
+    "vitest": "4.1.11"
   }
 }
