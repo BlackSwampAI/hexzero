@@ -728,6 +728,108 @@ describe('experiment archive', () => {
     );
   });
 
+  it('imports schema-v11 provider attempts independently and idempotently', async () => {
+    const archive = new ArchiveDatabase({ path: ':memory:' });
+    const document = await currentExport();
+    expect(document.schemaVersion).toBe(11);
+    const first = importExperimentExport(archive, document);
+    const second = importExperimentExport(archive, document);
+    expect(first.rejected).toBe(0);
+    expect(second.existing).toBeGreaterThan(0);
+    const attempts = new ExperimentQueryService(archive).providerAttempts(
+      document.experiment.id,
+    );
+    expect(attempts.rows).toHaveLength(document.providerAttempts?.length ?? 0);
+    expect(attempts.rows[0]).toMatchObject({
+      outcome: 'completed',
+      reservedCredits: '0.01',
+    });
+    expect(
+      archive.database
+        .prepare(
+          'SELECT typeof(reserved_credits) AS type FROM provider_attempts LIMIT 1',
+        )
+        .get(),
+    ).toEqual({ type: 'text' });
+    expect(
+      new ExperimentQueryService(archive).summary(document.experiment.id),
+    ).toMatchObject({
+      providerAttempts: {
+        total: document.providerAttempts?.length,
+        outcomes: { completed: document.providerAttempts?.length },
+      },
+    });
+    archive.close();
+  });
+
+  it('advances an archived in-flight attempt once and rejects stale regression', async () => {
+    const archive = new ArchiveDatabase({ path: ':memory:' });
+    const finalized = await currentExport();
+    const sourceAttempt = finalized.providerAttempts![0]!;
+    const inFlight = experimentExportDocumentSchema.parse({
+      ...finalized,
+      generatedAt: '2026-08-13T12:00:03.000Z',
+      providerAttempts: [
+        {
+          id: sourceAttempt.id,
+          agentId: sourceAttempt.agentId,
+          intendedTurnNumber: sourceAttempt.intendedTurnNumber,
+          ...(sourceAttempt.intendedTickNumber
+            ? { intendedTickNumber: sourceAttempt.intendedTickNumber }
+            : {}),
+          kind: sourceAttempt.kind,
+          startedAt: sourceAttempt.startedAt,
+          outcome: 'in-flight',
+          modelId: sourceAttempt.modelId,
+          reasoningProfile: sourceAttempt.reasoningProfile,
+          reservedCredits: sourceAttempt.reservedCredits,
+        },
+        ...finalized.providerAttempts!.slice(1),
+      ],
+      attemptAccounting: {
+        ...finalized.attemptAccounting!,
+        attemptsFinalized: finalized.attemptAccounting!.attemptsStarted - 1,
+        attemptsInFlight: 1,
+        knownFinalizedCostCredits: '0',
+        attemptsWithUnknownCost: 0,
+      },
+    });
+    importExperimentExport(archive, inFlight);
+
+    const finalizedLater = experimentExportDocumentSchema.parse({
+      ...finalized,
+      generatedAt: '2026-08-13T12:00:04.000Z',
+    });
+    importExperimentExport(archive, finalizedLater);
+    importExperimentExport(
+      archive,
+      experimentExportDocumentSchema.parse({
+        ...inFlight,
+        generatedAt: '2026-08-13T12:00:05.000Z',
+      }),
+    );
+    expect(
+      archive.database
+        .prepare(
+          'SELECT COUNT(*) AS count, outcome, actual_cost_credits AS cost FROM provider_attempts WHERE id = ?',
+        )
+        .get(sourceAttempt.id),
+    ).toEqual({
+      count: 1,
+      outcome: sourceAttempt.outcome,
+      cost: sourceAttempt.actualCostCredits ?? null,
+    });
+    expect(
+      new ExperimentQueryService(archive).summary(finalized.experiment.id),
+    ).toMatchObject({
+      providerAttempts: {
+        retention: finalized.attemptRetention,
+        accounting: finalized.attemptAccounting,
+      },
+    });
+    archive.close();
+  });
+
   it('rejects credentials and private-reasoning fields from exports and notes', async () => {
     const archive = new ArchiveDatabase({ path: ':memory:' });
     const unsafe = {

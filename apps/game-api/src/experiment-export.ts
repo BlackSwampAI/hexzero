@@ -35,10 +35,13 @@ import {
   type AgentGoalState,
   type MemoryEntry,
   type SimulatedPlayerEvent,
+  type ProviderAttemptRecord,
+  type ProviderAttemptRetention,
+  type ExperimentAttemptAccounting,
 } from '@hexzero/shared';
 
 export interface ExperimentSource {
-  schemaVersion: 9 | 10;
+  schemaVersion: 9 | 10 | 11;
   id: ExperimentId;
   startedAt: string;
   providerMode: 'openrouter' | 'scripted-test';
@@ -56,6 +59,9 @@ export interface ExperimentSource {
   agentGoals: readonly { agentId: AgentId; goal: AgentGoalState | null }[];
   agentMemories: readonly { agentId: AgentId; entries: MemoryEntry[] }[];
   simulatedPlayerEvents: readonly SimulatedPlayerEvent[];
+  providerAttempts?: readonly ProviderAttemptRecord[];
+  attemptRetention?: ProviderAttemptRetention;
+  attemptAccounting?: ExperimentAttemptAccounting;
 }
 
 export class ExperimentExportValidationError extends Error {
@@ -718,6 +724,7 @@ export function createExperimentExport(
   const communications = filterCommunications(source, request, selectedSet);
   const controlChanges = filterControlChanges(source, request, selectedSet);
   const allianceEvents = filterAllianceEvents(source, request, selectedSet);
+  const providerAttempts = filterProviderAttempts(source, request, selectedSet);
   const firstRetainedTurn = source.turns[0]?.turnNumber;
   const lastRetainedTurn = source.turns.at(-1)?.turnNumber;
   const requestedRangeExtendsBeyondRetention = rangeExtendsBeyondRetention(
@@ -770,7 +777,7 @@ export function createExperimentExport(
     selection: {
       selectedAgentIds,
       matchingTurnCount: filtered.length,
-      ...(source.schemaVersion === 10
+      ...(source.schemaVersion === 10 || source.schemaVersion === 11
         ? {
             matchingTickCount: new Set(
               filtered.map(({ tickNumber }) => tickNumber).filter(Boolean),
@@ -780,6 +787,9 @@ export function createExperimentExport(
       matchingCommunicationCount: communications.length,
       matchingControlChangeCount: controlChanges.length,
       matchingDiplomacyEventCount: allianceEvents.length,
+      ...(source.schemaVersion === 11
+        ? { matchingProviderAttemptCount: providerAttempts.length }
+        : {}),
       matchingSimulatedPlayerEventCount: source.simulatedPlayerEvents.filter(
         (event) =>
           new Set(
@@ -863,8 +873,19 @@ export function createExperimentExport(
       : {}),
     allianceEvents: structuredClone(allianceEvents),
     turns: filtered.map((turn) => exportTurn(turn, request)),
-    ...(source.schemaVersion === 10
+    ...(source.schemaVersion === 10 || source.schemaVersion === 11
       ? { tickSummaries: summarizeTicks(filtered) }
+      : {}),
+    ...(source.schemaVersion === 11
+      ? {
+          providerAttempts,
+          attemptRetention: {
+            ...source.attemptRetention!,
+            requestedRangeExtendsBeyondRetention:
+              source.attemptRetention!.droppedRecords > 0,
+          },
+          attemptAccounting: source.attemptAccounting!,
+        }
       : {}),
   };
   return experimentExportDocumentSchema.parse(document);
@@ -961,6 +982,13 @@ export function createExperimentPreview(
       new Set(document.selection.selectedAgentIds),
     ),
   );
+  const ledgerKnownCost = (document.providerAttempts ?? []).reduce(
+    (sum, attempt) => sum + Number(attempt.actualCostCredits ?? 0),
+    0,
+  );
+  const ledgerUnknownCost = (document.providerAttempts ?? []).filter(
+    ({ actualCostCredits }) => actualCostCredits === undefined,
+  ).length;
   return experimentExportPreviewSchema.parse({
     experimentId: source.id,
     matchingTurnCount: document.selection.matchingTurnCount,
@@ -970,12 +998,20 @@ export function createExperimentPreview(
     matchingCommunicationCount: document.selection.matchingCommunicationCount,
     matchingControlChangeCount: document.selection.matchingControlChangeCount,
     matchingDiplomacyEventCount: document.selection.matchingDiplomacyEventCount,
+    matchingProviderAttemptCount:
+      document.selection.matchingProviderAttemptCount ?? 0,
     selectedAgentCount: document.selection.selectedAgentIds.length,
     firstMatchingTurn: document.selection.firstMatchingTurn,
     lastMatchingTurn: document.selection.lastMatchingTurn,
     retention: document.retention,
-    knownCostCredits: metrics.aggregate.knownCostCredits,
-    attemptsWithUnknownCost: metrics.aggregate.attemptsWithUnknownCost,
+    knownCostCredits:
+      document.schemaVersion === 11
+        ? ledgerKnownCost
+        : metrics.aggregate.knownCostCredits,
+    attemptsWithUnknownCost:
+      document.schemaVersion === 11
+        ? ledgerUnknownCost
+        : metrics.aggregate.attemptsWithUnknownCost,
     turnsWithUnknownCost: metrics.aggregate.turnsWithUnknownCost,
     serializedUtf8Bytes,
     approximateAiInputTokens: Math.ceil(serializedUtf8Bytes / 4),
@@ -1025,6 +1061,36 @@ function filterTurns(
     turns = turns.slice(-request.turns.count);
   }
   return turns.map((turn) => structuredClone(turn));
+}
+
+function filterProviderAttempts(
+  source: ExperimentSource,
+  request: ExperimentExportRequest,
+  selected: Set<AgentId>,
+): ProviderAttemptRecord[] {
+  let attempts = (source.providerAttempts ?? []).filter(({ agentId }) =>
+    selected.has(agentId),
+  );
+  if (request.turns.mode === 'range') {
+    const { fromTurn, toTurn } = request.turns;
+    attempts = attempts.filter(
+      ({ intendedTurnNumber }) =>
+        intendedTurnNumber >= fromTurn && intendedTurnNumber <= toTurn,
+    );
+  } else if (request.turns.mode === 'latest') {
+    const fromTurn = Math.max(
+      1,
+      source.totalCompletedTurns - request.turns.count + 1,
+    );
+    attempts = attempts.filter(
+      ({ intendedTurnNumber }) => intendedTurnNumber >= fromTurn,
+    );
+  }
+  return structuredClone(attempts).sort(
+    (left, right) =>
+      left.startedAt.localeCompare(right.startedAt) ||
+      left.id.localeCompare(right.id),
+  );
 }
 
 function filterCommunications(

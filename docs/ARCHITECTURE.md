@@ -302,3 +302,9 @@ Versioned behavior profiles, seeded assignment, and authoritative diplomacy affo
 Behavior configuration is experiment-owned and includes registry version 1, assignment mode, seed, and one allowlisted personality/strategy pair per agent. Balanced random is the safe default. Reset creates a new experiment and deterministic assignment from its seed; the first completed turn locks behavior. Every retained turn copies its effective assignment, while model and reasoning changes retain their existing between-request semantics.
 
 Schema-v8 computed metrics include complete personality, strategy, observed personality/strategy-combination, and agent breakdowns derived from the same filtered retained turns and attempt records as the aggregate. Logical-turn, provider-call, failure, recovery, token, and cost counters therefore remain attributable without storing reasoning. Structural provider failures retain the broad compatibility code plus bounded details such as missing proposal IDs and contradictory diplomacy recipient fields in attempt telemetry and safe exports. Well-formed unavailable IDs remain engine-authoritative rejections and are not retried.
+
+# Provider-attempt accounting
+
+Provider work has an independent bounded lifecycle ledger. Schema-v11 exports
+and archive-v4 preserve safe attempt records even when no world turn commits;
+turn-owned model-attempt arrays remain compatibility detail only.

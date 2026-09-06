@@ -1,6 +1,6 @@
 # Local experiment archive
 
-The archive accepts current schema-v10 exports and legacy schema-v9 exports.
+The archive accepts current schema-v11 exports and legacy schema-v9/v10 exports.
 Schema-v10 may add safe goal revision/result and current-goal fields. Current archive imports validate and preserve compatibility while normalized goal analytics remain deferred; the archive never restores active goal state.
 Schema-v10 may also include compact memory requests, results, and current ledgers. The archive accepts these additive fields observationally but does not normalize, rank, retrieve, or restore memory.
 Migration 2 adds nullable tick number, deterministic tick position, virtual
@@ -105,3 +105,11 @@ pnpm experiment:db compare <run-a-id> <run-b-id> --format markdown
 The archive stores only schema-validated safe export fields and curated notes. It rejects recognizable credential material and prohibited raw/private reasoning keys. It does not store fixed prompts, raw provider bodies, authorization headers, private chain-of-thought, or provider credentials. Agent messages and notes remain untrusted research data.
 
 MCP and embeddings are deferred because bounded local retrieval solves the immediate need without a network/tool authorization surface or derived semantic store. `ExperimentQueryService` and `ResearchNoteService` are the future extension point for a read-only MCP adapter; write/import authority remains outside that adapter.
+
+# Schema-v11 provider attempts
+
+Archive schema v4 stores schema-v11 `providerAttempts` independently of turns.
+Use `pnpm experiment:db provider-attempts <experiment-id>` to inspect committed
+and uncommitted provider work. Monetary values round-trip as canonical TEXT.
+For v11 summaries this ledger is canonical; legacy model attempts are not added
+again. The SQLite archive is for analysis and is not active runtime recovery.

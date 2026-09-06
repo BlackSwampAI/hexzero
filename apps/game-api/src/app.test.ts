@@ -1150,7 +1150,7 @@ describe('game API simulation boundary', () => {
     const { document } = experimentExportResponseSchema.parse(
       await response.json(),
     );
-    expect(document.schemaVersion).toBe(10);
+    expect(document.schemaVersion).toBe(11);
     const lostTick = document.turns.find(
       ({ outcome }) => outcome === 'lost-tick',
     );

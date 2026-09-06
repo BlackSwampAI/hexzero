@@ -170,4 +170,60 @@ describe('AttemptAccounting', () => {
       expect(accounting.snapshot().attemptsStarted).toBe(0);
     },
   );
+
+  it('retains independent finalized and in-flight records with honest bounds', () => {
+    const accounting = new AttemptAccounting(null, null, '0.0100', 2);
+    const details = (turn: number) => ({
+      agentId: '128f3f38-6b7d-4db7-9e95-751b4ce2681e' as never,
+      intendedTurnNumber: turn,
+      intendedTickNumber: 1,
+      kind: 'initial' as const,
+      startedAt: `2026-08-13T12:00:0${turn}.000Z`,
+      modelId: 'deterministic-script' as never,
+      reasoningProfile: 'provider-default' as const,
+    });
+    const first = accounting.startAdditional(details(1))!;
+    accounting.finalize(first, {
+      outcome: 'completed',
+      completedAt: '2026-08-13T12:00:02.000Z',
+      provider: {
+        provider: 'scripted-test',
+        model: 'deterministic-script' as never,
+        latencyMs: 1,
+        costCredits: 0.00000001,
+      },
+    });
+    accounting.startAdditional(details(2));
+    accounting.startAdditional(details(3));
+    expect(accounting.ledger()).toMatchObject([
+      { intendedTurnNumber: 2, outcome: 'in-flight', reservedCredits: '0.01' },
+      { intendedTurnNumber: 3, outcome: 'in-flight', reservedCredits: '0.01' },
+    ]);
+    expect(accounting.retention()).toEqual({
+      limit: 2,
+      totalStartedAttempts: 3,
+      retainedAttempts: 2,
+      droppedRecords: 1,
+      complete: false,
+      requestedRangeExtendsBeyondRetention: false,
+    });
+  });
+
+  it('does not mutate accounting when safe start-record validation fails', () => {
+    const accounting = new AttemptAccounting(2);
+    expect(accounting.reserve(1)).toBe(true);
+    const before = accounting.snapshot();
+    expect(() =>
+      accounting.startReserved({
+        agentId: 'not-a-uuid' as never,
+        intendedTurnNumber: 1,
+        kind: 'initial',
+        startedAt: '2026-08-13T12:00:00.000Z',
+        modelId: 'deterministic-script' as never,
+        reasoningProfile: 'provider-default',
+      }),
+    ).toThrow();
+    expect(accounting.snapshot()).toEqual(before);
+    expect(accounting.ledger()).toEqual([]);
+  });
 });

@@ -58,6 +58,7 @@ import {
   memoryOperationResultSchema,
   createMemoryId,
   archiveExperimentExportResponseSchema,
+  providerAttemptRecordSchema,
 } from '.';
 
 const agentId = '128f3f38-6b7d-4db7-9e95-751b4ce2681e';
@@ -1571,6 +1572,52 @@ describe('personality mutation contracts', () => {
       archiveExperimentExportResponseSchema.safeParse({
         ...confirmation,
         archivePath: '/private/archive.sqlite',
+      }).success,
+    ).toBe(false);
+  });
+
+  it('validates safe provider-attempt lifecycle records and canonical costs', () => {
+    const base = {
+      id: '018f3f38-6b7d-7db7-8e95-751b4ce2681e',
+      agentId,
+      intendedTurnNumber: 1,
+      intendedTickNumber: 1,
+      kind: 'initial',
+      startedAt: '2026-08-13T12:00:00.000Z',
+      modelId: 'deterministic-script',
+      reasoningProfile: 'provider-default',
+      reservedCredits: '0.01',
+    };
+    expect(
+      providerAttemptRecordSchema.safeParse({ ...base, outcome: 'in-flight' })
+        .success,
+    ).toBe(true);
+    expect(
+      providerAttemptRecordSchema.safeParse({
+        ...base,
+        outcome: 'completed',
+        completedAt: '2026-08-13T12:00:01.000Z',
+        actualCostCredits: '0.00000001',
+        provider: {
+          provider: 'scripted-test',
+          model: 'deterministic-script',
+          latencyMs: 1,
+          costCredits: 1e-8,
+        },
+      }).success,
+    ).toBe(true);
+    expect(
+      providerAttemptRecordSchema.safeParse({
+        ...base,
+        outcome: 'cancelled',
+        completedAt: '2026-08-13T12:00:01.000Z',
+      }).success,
+    ).toBe(false);
+    expect(
+      providerAttemptRecordSchema.safeParse({
+        ...base,
+        outcome: 'in-flight',
+        rawResponse: 'unsafe',
       }).success,
     ).toBe(false);
   });

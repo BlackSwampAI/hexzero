@@ -197,3 +197,9 @@ The separately opted-in `pnpm smoke:openrouter -- <compatible-model-slug> [initi
 World Lab also offers an explicit “Test selected model” probe. It uses the production text/flat-JSON contract and selected reasoning profile, does not advance or mutate the world, may incur a small charge, and is cached by model plus profile plus contract version. It is never invoked by deterministic validation or CI.
 
 Experiment-archive tests generate current schema-v9 exports through the deterministic scripted provider and cover migration/reopen, canonical and legacy path resolution, legacy export filenames, transactional rollback, stable idempotent identifiers, normalized round trips, bounded filters, summary/comparison calculations, canonical metric agreement with preserved source inconsistencies, Patient Zero classifications, retention completeness, FTS notes/supersession, explicit persistence failures, and credential/private-reasoning rejection. They use only in-memory or temporary SQLite databases and make no live provider or geocoding requests.
+
+# Provider-attempt ledger
+
+Offline tests cover attempt success, failure, cancellation, timeout, retry,
+retention, export filtering, and archive idempotency. Real-provider calls remain
+explicit opt-in smoke tests and are excluded from default CI.

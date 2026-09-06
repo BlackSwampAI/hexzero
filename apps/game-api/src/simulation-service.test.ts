@@ -1278,6 +1278,17 @@ describe('SimulationService', () => {
     expect(accounting.attemptsFinalized).toBe(accounting.attemptsStarted);
     expect(accounting.attemptsWithUnknownCost).toBe(accounting.attemptsStarted);
     expect(accounting.attemptsStarted).toBe(8);
+    const cancelledExport = simulation.generateExperimentExport(
+      exportRequest('minimal'),
+    );
+    expect(cancelledExport.turns).toEqual([]);
+    expect(cancelledExport.providerAttempts).toHaveLength(8);
+    expect(
+      cancelledExport.providerAttempts?.every(
+        ({ outcome, failure }) =>
+          outcome === 'cancelled' && failure?.code === 'cancelled',
+      ),
+    ).toBe(true);
   });
 
   it('retains safe provider cost when legacy cancellation is observed after the response', async () => {
@@ -1308,6 +1319,7 @@ describe('SimulationService', () => {
     );
     expect(simulation.getSnapshot()).toMatchObject({
       turnNumber: 0,
+      turns: [],
       experiment: {
         attemptAccounting: {
           attemptsStarted: 1,
@@ -1318,6 +1330,81 @@ describe('SimulationService', () => {
         },
       },
     });
+    expect(
+      simulation.generateExperimentExport(exportRequest('minimal')),
+    ).toMatchObject({
+      turns: [],
+      providerAttempts: [
+        {
+          outcome: 'completed',
+          actualCostCredits: '0.125',
+        },
+      ],
+    });
+    expect(
+      simulation.generateExperimentExport(exportRequest('minimal'))
+        .providerAttempts?.[0],
+    ).not.toHaveProperty('failure');
+  });
+
+  it('keeps completed and truly cancelled simultaneous calls distinct without committing', async () => {
+    const firstAgentId = defaultWorldSetupRequest().roster[0]!.id;
+    let completed!: () => void;
+    const firstCompleted = new Promise<void>((resolve) => {
+      completed = resolve;
+    });
+    const simulation = service({
+      mode: 'scripted-test',
+      model: 'deterministic-script',
+      configured: true,
+      async decide(observation, _model, options): Promise<ProviderDecision> {
+        if (observation.agentId === firstAgentId) {
+          setTimeout(completed, 0);
+          return {
+            decision: {
+              worldAction: { type: 'wait' },
+              summary: 'Provider work completed before cancellation.',
+            },
+            metadata: {
+              provider: 'scripted-test',
+              model: 'deterministic-script',
+              latencyMs: 1,
+              costCredits: 0.01,
+            },
+          };
+        }
+        await new Promise<void>((resolve) =>
+          options?.signal?.addEventListener('abort', () => resolve(), {
+            once: true,
+          }),
+        );
+        throw new AgentProviderError({
+          code: 'cancelled',
+          message: 'Provider work was actually aborted.',
+          retryable: false,
+        });
+      },
+    });
+    const pending = simulation.executeNextTick();
+    await firstCompleted;
+    simulation.cancelCurrentRequest();
+    await expect(pending).rejects.toBeInstanceOf(SimulationTurnCancelledError);
+    const snapshot = simulation.getSnapshot();
+    expect(snapshot).toMatchObject({ tickNumber: 0, turnNumber: 0, turns: [] });
+    const exported = simulation.generateExperimentExport(
+      exportRequest('minimal'),
+    );
+    expect(exported.turns).toEqual([]);
+    expect(
+      exported.providerAttempts?.filter(
+        ({ outcome }) => outcome === 'completed',
+      ),
+    ).toHaveLength(1);
+    expect(
+      exported.providerAttempts?.filter(
+        ({ outcome }) => outcome === 'cancelled',
+      ),
+    ).toHaveLength(7);
   });
 
   it('dispatches per-agent model and reasoning overrides for a tick', async () => {
@@ -1388,7 +1475,7 @@ describe('SimulationService', () => {
     );
     expect(
       legacy.generateExperimentExport(exportRequest('minimal')).schemaVersion,
-    ).toBe(9);
+    ).toBe(11);
 
     const tick = service(
       new ScriptedAgentProvider(
@@ -1408,7 +1495,7 @@ describe('SimulationService', () => {
     expect(() => tick.skipFailedTurn()).toThrow(SimulationConflictError);
     expect(
       tick.generateExperimentExport(exportRequest('minimal')).schemaVersion,
-    ).toBe(10);
+    ).toBe(11);
     expect(
       tick.generateExperimentExport(exportRequest('minimal')).experiment
         .decisionContractVersion,
@@ -1452,14 +1539,25 @@ describe('SimulationService', () => {
       ],
     });
     expect(retained.turns).toHaveLength(8);
-    expect(retained.schemaVersion).toBe(10);
+    expect(retained.schemaVersion).toBe(11);
     expect(new Set(retained.turns.map(({ tickNumber }) => tickNumber))).toEqual(
       new Set([2]),
     );
     expect(experimentExportDocumentSchema.safeParse(retained).success).toBe(
       true,
     );
+    expect(
+      experimentExportDocumentSchema.safeParse({
+        ...retained,
+        simulatedPlayerMetrics: undefined,
+      }).success,
+    ).toBe(false);
     const legacyV10 = structuredClone(retained);
+    legacyV10.schemaVersion = 10;
+    delete legacyV10.providerAttempts;
+    delete legacyV10.attemptRetention;
+    delete legacyV10.attemptAccounting;
+    delete legacyV10.selection.matchingProviderAttemptCount;
     delete legacyV10.simulatedPlayerMetrics;
     expect(
       experimentExportDocumentSchema.parse(legacyV10).simulatedPlayerMetrics,
@@ -2334,7 +2432,7 @@ describe('SimulationService', () => {
       actions: ['capture'],
       level: 'minimal',
     });
-    expect(victimExport.schemaVersion).toBe(9);
+    expect(victimExport.schemaVersion).toBe(11);
     expect(victimExport.turns).toHaveLength(0);
     expect(victimExport.selection).toMatchObject({
       matchingTurnCount: 0,
@@ -2444,7 +2542,7 @@ describe('SimulationService', () => {
       outcomes: ['rejected'],
       actions: ['capture'],
     });
-    expect(exported.schemaVersion).toBe(9);
+    expect(exported.schemaVersion).toBe(11);
     const behavior = exported.turns[0]!.behavior!;
     expect(
       exported.metrics!.byPersonality.find(
@@ -3041,7 +3139,40 @@ describe('SimulationService', () => {
         controlChanges: false,
       },
     });
-    expect(minimal.schemaVersion).toBe(9);
+    expect(minimal.schemaVersion).toBe(11);
+    expect(minimal.providerAttempts).toHaveLength(1);
+    expect(minimal.selection.matchingProviderAttemptCount).toBe(1);
+    expect(
+      experimentExportDocumentSchema.safeParse({
+        ...minimal,
+        providerAttempts: [
+          ...minimal.providerAttempts!,
+          minimal.providerAttempts![0],
+        ],
+        selection: {
+          ...minimal.selection,
+          matchingProviderAttemptCount: 2,
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      experimentExportDocumentSchema.safeParse({
+        ...minimal,
+        selection: {
+          ...minimal.selection,
+          matchingProviderAttemptCount: 0,
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      experimentExportDocumentSchema.safeParse({
+        ...minimal,
+        attemptRetention: {
+          ...minimal.attemptRetention!,
+          totalStartedAttempts: 2,
+        },
+      }).success,
+    ).toBe(false);
     expect(
       experimentExportDocumentSchema.safeParse({
         ...minimal,
@@ -4377,6 +4508,17 @@ describe('SimulationService', () => {
         },
       },
     });
+    expect(
+      simulation.generateExperimentExport(exportRequest('minimal'))
+        .providerAttempts,
+    ).toMatchObject([
+      {
+        intendedTurnNumber: 1,
+        outcome: 'provider-error',
+        failure: { code: 'simulation-validation' },
+        actualCostCredits: '0.125',
+      },
+    ]);
 
     const recovered = await simulation.retryFailedTurn();
     expect(recovered).toMatchObject({
@@ -4712,6 +4854,9 @@ describe('SimulationService', () => {
       available: false,
       issue: 'unavailable',
     });
+    expect(() =>
+      simulation.importModelConfiguration({ schemaVersion: 12 }),
+    ).toThrow('Only schema-version 5 through 11');
     const legacy = simulation.importModelConfiguration({ schemaVersion: 5 });
     expect(legacy.legacy).toBe(true);
     expect(legacy.snapshot.modelConfiguration.globalModelId).toBeNull();
