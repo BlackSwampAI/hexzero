@@ -41,6 +41,10 @@ export interface TickDispatcherOptions {
   now?: () => string;
   nowMs?: () => number;
   waitForMs?: (delayMs: number, signal?: AbortSignal) => Promise<void>;
+  beginAttempt?: (
+    job: TickDecisionJob,
+    kind: ModelAttempt['kind'],
+  ) => ((metadata?: ProviderDecision['metadata']) => void) | null;
 }
 
 /**
@@ -76,7 +80,19 @@ export async function dispatchTickDecisions(
           results[index] = deadlineFailure(job, attempts);
           break;
         }
+        const finalizeAccounting = options.beginAttempt?.(job, kind);
+        if (options.beginAttempt && !finalizeAccounting) {
+          const failure: ProviderFailure = {
+            code: 'budget-exhausted',
+            message: 'The experiment provider-attempt limit was exhausted.',
+            retryable: false,
+            model: job.modelId,
+          };
+          results[index] = { ...job, outcome: 'lost-tick', failure, attempts };
+          break;
+        }
         const startedAt = now();
+        let accountingMetadata: ProviderDecision['metadata'] | undefined;
         try {
           const decision = await decideBeforeDeadline(provider, job, {
             reasoningProfile: job.reasoningProfile,
@@ -85,6 +101,7 @@ export async function dispatchTickDecisions(
             nowMs,
             signal: options.signal,
           });
+          accountingMetadata = decision.metadata;
           if (nowMs() >= options.deadlineAtMs) {
             const completedAt = now();
             const failure = timeoutFailure(job);
@@ -124,6 +141,7 @@ export async function dispatchTickDecisions(
             } satisfies ProviderFailure,
             metadata: undefined,
           };
+          accountingMetadata = providerError.metadata ?? accountingMetadata;
           if (
             providerError.failure.code === 'cancelled' ||
             options.signal?.aborted
@@ -163,6 +181,8 @@ export async function dispatchTickDecisions(
             attempts,
           };
           break;
+        } finally {
+          finalizeAccounting?.(accountingMetadata);
         }
       }
     }

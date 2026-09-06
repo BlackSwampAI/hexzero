@@ -34,6 +34,7 @@ import {
   PATIENT_ZERO_PRESSURE_WINDOW_TICKS,
   MEMORY_ENTRY_LIMIT,
   personalitySchema,
+  providerMetadataSchema,
   simulationSnapshotSchema,
   type Agent,
   type AgentId,
@@ -100,6 +101,7 @@ import {
 } from './experiment-export';
 import { geographicDirectionBetweenCells } from './geographic-direction';
 import { ObservationHistory } from './observation-history';
+import { AttemptAccounting } from './attempt-accounting';
 
 const RESET_GENERATED_AT = '2026-08-13T12:00:00.000Z';
 const MAX_TURN_HISTORY = 120;
@@ -219,6 +221,7 @@ export type SimulationValidationCode =
   | 'invalid_personality'
   | 'invalid_model_configuration'
   | 'models_unavailable'
+  | 'experiment_budget_exhausted'
   | 'invalid_behavior_configuration';
 
 export class SimulationValidationError extends Error {
@@ -280,6 +283,7 @@ export class SimulationService {
   #agentMemories = new Map<AgentId, MemoryEntry[]>();
   #simulatedPlayerEvents: SimulatedPlayerEvent[] = [];
   #observationHistory: ObservationHistory;
+  #attemptAccounting: AttemptAccounting;
 
   constructor({
     provider,
@@ -344,6 +348,9 @@ export class SimulationService {
       modelConfiguration: structuredClone(this.#modelConfiguration),
       behaviorConfiguration: structuredClone(this.#behaviorConfiguration),
     };
+    this.#attemptAccounting = new AttemptAccounting(
+      this.#scenario.executionLimits.providerAttemptLimit,
+    );
   }
 
   getSnapshot(): SimulationSnapshot {
@@ -395,6 +402,7 @@ export class SimulationService {
         lastRetainedTurn: this.#experimentTurns.at(-1)?.turnNumber,
         droppedRecords,
         complete: droppedRecords === 0,
+        attemptAccounting: this.#attemptAccounting.snapshot(),
         metrics: this.#experimentMetrics.snapshot(agents.map(({ id }) => id)),
         currentTerritory: this.#territoryScoreboard(),
         currentAlliances: this.#allianceTerritorySummaries(),
@@ -443,6 +451,9 @@ export class SimulationService {
     this.#experimentMetrics = new ExperimentMetricAccumulator([
       ...this.#state.agents.keys(),
     ]);
+    this.#attemptAccounting = new AttemptAccounting(
+      this.#scenario.executionLimits.providerAttemptLimit,
+    );
     this.#modelConfiguration = {
       ...structuredClone(this.#scenario.modelConfiguration),
       locked: false,
@@ -584,6 +595,9 @@ export class SimulationService {
     this.#experimentMetrics = new ExperimentMetricAccumulator([
       ...this.#state.agents.keys(),
     ]);
+    this.#attemptAccounting = new AttemptAccounting(
+      this.#scenario.executionLimits.providerAttemptLimit,
+    );
     this.#status = this.#provider.configured ? 'paused' : 'configuration-error';
     return this.getSnapshot();
   }
@@ -1036,6 +1050,13 @@ export class SimulationService {
         'models_unavailable',
         'Every agent requires an available compatible model before the experiment can run.',
       );
+    if (!this.#attemptAccounting.reserve(agents.length)) {
+      this.#status = 'budget-exhausted';
+      throw new SimulationValidationError(
+        'experiment_budget_exhausted',
+        'The experiment does not have enough provider attempts remaining for a complete tick.',
+      );
+    }
 
     const tickNumber = this.#completedTickCount + 1;
     const preTickState = this.#state;
@@ -1071,6 +1092,9 @@ export class SimulationService {
           structuredClone(this.#buildObservation(id, playerAdvance.events)),
         ]),
       );
+    } catch (error) {
+      this.#attemptAccounting.releaseReservations();
+      throw error;
     } finally {
       this.#state = preTickState;
     }
@@ -1098,6 +1122,16 @@ export class SimulationService {
           deadlineAtMs,
           signal: controller.signal,
           now: this.#now,
+          beginAttempt: (_job, kind) => {
+            const permitId =
+              kind === 'initial'
+                ? this.#attemptAccounting.startReserved()
+                : this.#attemptAccounting.startAdditional();
+            return permitId === null
+              ? null
+              : (metadata) =>
+                  this.#attemptAccounting.finalize(permitId, metadata);
+          },
         },
       );
       if (controller.signal.aborted) throw new SimulationTurnCancelledError();
@@ -1277,7 +1311,9 @@ export class SimulationService {
         playerAdvance.events,
         committedObservationEvents,
       );
-      this.#status = 'paused';
+      this.#status = this.#attemptAccounting.snapshot().exhausted
+        ? 'budget-exhausted'
+        : 'paused';
       return records;
     } catch (error) {
       if (
@@ -1293,11 +1329,17 @@ export class SimulationService {
       }
       throw error;
     } finally {
+      this.#attemptAccounting.releaseReservations();
       this.#busy = false;
       this.#activeRequestController = null;
       this.#activeAgentId = null;
       this.#cancellationRequested = false;
-      if (this.#status === 'waiting-for-model') this.#status = 'paused';
+      if (this.#status === 'waiting-for-model')
+        this.#status = this.#attemptAccounting.snapshot().exhausted
+          ? 'budget-exhausted'
+          : 'paused';
+      if (this.#attemptAccounting.snapshot().exhausted)
+        this.#status = 'budget-exhausted';
     }
   }
 
@@ -1393,7 +1435,9 @@ export class SimulationService {
       undefined,
       [],
     );
-    this.#status = 'paused';
+    this.#status = this.#attemptAccounting.snapshot().exhausted
+      ? 'budget-exhausted'
+      : 'paused';
     return record;
   }
 
@@ -1431,9 +1475,11 @@ export class SimulationService {
     const turnNumber = pending?.turnNumber ?? this.#completedTurnCount + 1;
     const attemptStartedAt = this.#now();
     let successfulAttemptStartedAt = attemptStartedAt;
+    let successfulAttemptKind: ModelAttempt['kind'] = attemptKind;
     const resolvedModel = this.#resolvedModel(agent.id);
     const selectedModel = resolvedModel.modelId!;
     let providerResult: ProviderDecision | undefined;
+    let successfulProviderMetadata: ProviderMetadata | undefined;
     const attemptHistory = [...(pending?.attempts ?? [])];
     const deadlineAtMs = Date.now() + OPENROUTER_PROVIDER_TIMEOUT_MS;
 
@@ -1445,8 +1491,18 @@ export class SimulationService {
       let validationFeedback: ProviderFailure['validationCodes'] =
         pending?.failure.validationCodes;
       for (let automaticCall = 0; automaticCall < 2; automaticCall += 1) {
+        const accountingPermitId = this.#attemptAccounting.startAdditional();
+        if (accountingPermitId === null) {
+          this.#status = 'budget-exhausted';
+          throw new SimulationValidationError(
+            'experiment_budget_exhausted',
+            'The experiment provider-attempt limit was exhausted.',
+          );
+        }
         const currentAttemptStartedAt = this.#now();
         successfulAttemptStartedAt = currentAttemptStartedAt;
+        successfulAttemptKind = nextKind;
+        let accountingMetadata: ProviderMetadata | undefined;
         try {
           providerResult = await this.#provider.decide(
             providerObservation,
@@ -1458,6 +1514,12 @@ export class SimulationService {
               validationFeedback,
             },
           );
+          successfulProviderMetadata = safeRecoveryProviderMetadata(
+            providerResult.metadata,
+            this.#provider.mode,
+            selectedModel,
+          );
+          accountingMetadata = successfulProviderMetadata;
           if (this.#activeRequestController.signal.aborted)
             throw new AgentProviderError({
               code: 'cancelled',
@@ -1468,6 +1530,7 @@ export class SimulationService {
           break;
         } catch (error) {
           const providerError = asProviderError(error);
+          accountingMetadata = providerError.metadata ?? accountingMetadata;
           if (providerError.failure.code === 'cancelled') {
             this.#status = 'paused';
             throw new SimulationTurnCancelledError();
@@ -1562,6 +1625,11 @@ export class SimulationService {
               ? 'configuration-error'
               : 'provider-error';
           return record;
+        } finally {
+          this.#attemptAccounting.finalize(
+            accountingPermitId,
+            accountingMetadata,
+          );
         }
       }
 
@@ -1697,7 +1765,9 @@ export class SimulationService {
         },
         committedObservationEvents,
       );
-      this.#status = 'paused';
+      this.#status = this.#attemptAccounting.snapshot().exhausted
+        ? 'budget-exhausted'
+        : 'paused';
       return record;
     } catch (error) {
       if (
@@ -1714,13 +1784,13 @@ export class SimulationService {
       };
       const attempt = {
         attemptNumber: attemptHistory.length + 1,
-        kind: attemptKind,
-        startedAt: attemptStartedAt,
+        kind: successfulAttemptKind,
+        startedAt: successfulAttemptStartedAt,
         completedAt: this.#now(),
         modelId: selectedModel,
         reasoningProfile: resolvedModel.reasoningProfile,
         failure,
-        provider: {
+        provider: successfulProviderMetadata ?? {
           provider: this.#provider.mode,
           model: selectedModel,
           latencyMs: 0,
@@ -1735,7 +1805,9 @@ export class SimulationService {
         failure,
         attempts,
       };
-      this.#status = 'provider-error';
+      this.#status = this.#attemptAccounting.snapshot().exhausted
+        ? 'budget-exhausted'
+        : 'provider-error';
       return agentTurnRecordSchema.parse({
         turnNumber,
         agentId: agent.id,
@@ -1759,6 +1831,11 @@ export class SimulationService {
           ? 'paused'
           : 'configuration-error';
       }
+      if (
+        this.#status !== 'configuration-error' &&
+        this.#attemptAccounting.snapshot().exhausted
+      )
+        this.#status = 'budget-exhausted';
     }
   }
 
@@ -2985,4 +3062,43 @@ export function applyMemoryOperation(
       memoryId: requested.memoryId,
     },
   };
+}
+
+function safeRecoveryProviderMetadata(
+  value: unknown,
+  provider: ProviderMetadata['provider'],
+  selectedModel: ModelId,
+): ProviderMetadata {
+  const raw = value && typeof value === 'object' ? value : {};
+  let safe = providerMetadataSchema.parse({
+    provider,
+    model: selectedModel,
+    latencyMs: 0,
+  });
+  const fields = [
+    'model',
+    'selectedModel',
+    'resolvedModel',
+    'requestId',
+    'httpStatus',
+    'finishReason',
+    'nativeFinishReason',
+    'latencyMs',
+    'promptTokens',
+    'completionTokens',
+    'totalTokens',
+    'reasoningTokens',
+    'cachedReadTokens',
+    'cacheWriteTokens',
+    'costCredits',
+  ] as const;
+  for (const field of fields) {
+    if (!(field in raw)) continue;
+    const parsed = providerMetadataSchema.safeParse({
+      ...safe,
+      [field]: (raw as Record<string, unknown>)[field],
+    });
+    if (parsed.success) safe = parsed.data;
+  }
+  return safe;
 }

@@ -244,6 +244,7 @@ export function WorldLab() {
     setSnapshot(next);
     if (
       next.status === 'configuration-error' ||
+      next.status === 'budget-exhausted' ||
       next.world.hexes.every(({ state }) => state === 'infected') ||
       (boundedRunTargetRef.current !== null &&
         next.tickNumber >= boundedRunTargetRef.current)
@@ -495,11 +496,28 @@ export function WorldLab() {
         { method: 'POST' },
       );
       if (response.status === 409) {
-        setUiError('Another tick is already in progress.');
+        const error = (await response.json().catch(() => undefined)) as
+          { error?: { code?: string; message?: string } } | undefined;
+        const budgetExhausted =
+          error?.error?.code === 'experiment_budget_exhausted';
+        setUiError(
+          budgetExhausted
+            ? 'The experiment provider-attempt limit is exhausted. Reset or apply a new World Setup to continue.'
+            : 'Another tick is already in progress.',
+        );
         runningRef.current = false;
         setRunning(false);
         setBoundedRunTarget(null);
         boundedRunTargetRef.current = null;
+        if (budgetExhausted) {
+          try {
+            await reconcileAuthoritativeSnapshot();
+          } catch {
+            setUiError(
+              'The provider-attempt limit was reached, but the authoritative snapshot could not be refreshed. Refresh before retrying.',
+            );
+          }
+        }
         return;
       }
       if (!response.ok) throw new Error('turn request failed');
@@ -757,7 +775,8 @@ export function WorldLab() {
         ? 'waiting-for-model'
         : snapshot.status === 'waiting-for-model' ||
             snapshot.status === 'configuration-error' ||
-            snapshot.status === 'provider-error'
+            snapshot.status === 'provider-error' ||
+            snapshot.status === 'budget-exhausted'
           ? snapshot.status
           : running
             ? 'running'
@@ -834,7 +853,7 @@ export function WorldLab() {
             </strong>
             <span className="navbar-cost">
               {formatCost(
-                snapshot.experiment.metrics.aggregate.knownCostCredits,
+                snapshot.experiment.attemptAccounting.knownCostCredits,
               )}
             </span>
           </button>
@@ -870,13 +889,43 @@ export function WorldLab() {
                 </dd>
               </div>
               <div>
+                <dt>Provider attempts</dt>
+                <dd>
+                  {snapshot.experiment.attemptAccounting.attemptsStarted} /{' '}
+                  {snapshot.experiment.attemptAccounting.providerAttemptLimit ??
+                    'Unlimited'}
+                </dd>
+              </div>
+              <div>
+                <dt>In flight / reserved</dt>
+                <dd>
+                  {snapshot.experiment.attemptAccounting.attemptsInFlight} /{' '}
+                  {snapshot.experiment.attemptAccounting.reservedPermits}
+                </dd>
+              </div>
+              <div>
                 <dt>Known credits</dt>
                 <dd>
                   {formatCost(
-                    snapshot.experiment.metrics.aggregate.knownCostCredits,
+                    snapshot.experiment.attemptAccounting.knownCostCredits,
                   )}
                 </dd>
               </div>
+              <div>
+                <dt>Unknown-cost attempts</dt>
+                <dd>
+                  {
+                    snapshot.experiment.attemptAccounting
+                      .attemptsWithUnknownCost
+                  }
+                </dd>
+              </div>
+              {snapshot.experiment.attemptAccounting.exhaustionReason && (
+                <div>
+                  <dt>Execution limit</dt>
+                  <dd>Provider-attempt limit exhausted</dd>
+                </div>
+              )}
               <div>
                 <dt>Tokens</dt>
                 <dd>
@@ -924,7 +973,9 @@ export function WorldLab() {
                 personalityPending ||
                 fullyInfected ||
                 !snapshot.providerConfigured ||
-                !modelsReady
+                !modelsReady ||
+                snapshot.experiment.attemptAccounting.exhausted ||
+                snapshot.status === 'budget-exhausted'
               }
               type="button"
               onClick={() => {
@@ -948,7 +999,9 @@ export function WorldLab() {
               personalityPending ||
               !snapshot.providerConfigured ||
               !modelsReady ||
-              snapshot.pendingFailedTurn !== null
+              snapshot.pendingFailedTurn !== null ||
+              snapshot.experiment.attemptAccounting.exhausted ||
+              snapshot.status === 'budget-exhausted'
             }
             type="button"
             onClick={() => void executeTurn()}
@@ -1652,7 +1705,9 @@ function RunHealthSummary({
         </div>
         <div>
           <dt>Known cost</dt>
-          <dd>{formatCost(metrics.knownCostCredits)}</dd>
+          <dd>
+            {formatCost(snapshot.experiment.attemptAccounting.knownCostCredits)}
+          </dd>
         </div>
         <div>
           <dt>Successful turns</dt>
@@ -1819,6 +1874,7 @@ function WorldSetupPanel({
       objectiveVersion: scenario.objectiveVersion,
       capabilities: scenario.capabilities,
       simulatedPlayer: scenario.simulatedPlayer,
+      executionLimits: scenario.executionLimits,
     });
   }, [snapshot.scenario]);
   const [draft, setDraft] = useState(initialDraft);
@@ -2234,6 +2290,41 @@ function WorldSetupPanel({
                 setDraft({
                   ...draft,
                   maximumTickIntervalMinutes: Number(event.target.value),
+                })
+              }
+            />
+          </label>
+          <label>
+            <input
+              type="checkbox"
+              checked={draft.executionLimits.providerAttemptLimit === null}
+              onChange={(event) =>
+                setDraft({
+                  ...draft,
+                  executionLimits: {
+                    version: 'execution-limits-v1',
+                    providerAttemptLimit: event.target.checked ? null : 1000,
+                  },
+                })
+              }
+            />
+            Unlimited provider attempts
+          </label>
+          <label>
+            Provider attempt limit
+            <input
+              type="number"
+              min="1"
+              max="100000"
+              disabled={draft.executionLimits.providerAttemptLimit === null}
+              value={draft.executionLimits.providerAttemptLimit ?? ''}
+              onChange={(event) =>
+                setDraft({
+                  ...draft,
+                  executionLimits: {
+                    version: 'execution-limits-v1',
+                    providerAttemptLimit: Number(event.target.value),
+                  },
                 })
               }
             />

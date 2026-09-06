@@ -1,5 +1,10 @@
 # Architecture
 
+Provider-attempt admission is owned by `SimulationService`. Its ledger is
+deliberately separate from deterministic world state and committed-turn
+metrics: tick rollback cannot erase provider work that may already be billed.
+See ADR 0025.
+
 ## Simultaneous tick authority
 
 Before the frozen agent snapshot, the optional seeded `casual-cleaner` advances

@@ -73,6 +73,70 @@ describe('provider environment compatibility', () => {
 });
 
 describe('game API simulation boundary', () => {
+  it('returns a specific 409 before dispatch when a full tick cannot be reserved', async () => {
+    let calls = 0;
+    const app = createApp({
+      provider: {
+        mode: 'scripted-test',
+        model: 'deterministic-script',
+        configured: true,
+        async decide(): Promise<ProviderDecision> {
+          calls += 1;
+          return {
+            decision: { worldAction: { type: 'wait' }, summary: 'Wait.' },
+            metadata: {
+              provider: 'scripted-test',
+              model: 'deterministic-script',
+              latencyMs: 0,
+              costCredits: 0,
+            },
+          };
+        },
+      },
+    });
+    const defaults = defaultWorldSetupResponseSchema.parse(
+      await (
+        await app.request('/api/simulation/experiment/setup/default')
+      ).json(),
+    ).request;
+    await app.request('/api/simulation/experiment/setup', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        ...defaults,
+        modelConfiguration: {
+          ...defaults.modelConfiguration,
+          globalModelId: 'deterministic-script',
+        },
+        executionLimits: {
+          version: 'execution-limits-v1',
+          providerAttemptLimit: 1,
+        },
+      }),
+    });
+    const response = await app.request('/api/simulation/tick', {
+      method: 'POST',
+    });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: {
+        code: 'experiment_budget_exhausted',
+        message:
+          'The experiment does not have enough provider attempts remaining for a complete tick.',
+      },
+    });
+    expect(calls).toBe(0);
+    expect(
+      simulationSnapshotSchema.parse(
+        await (await app.request('/api/simulation')).json(),
+      ),
+    ).toMatchObject({
+      tickNumber: 0,
+      status: 'budget-exhausted',
+      experiment: { attemptAccounting: { attemptsStarted: 0 } },
+    });
+  });
+
   it('requires a known Patient Zero through the public setup boundary', async () => {
     const app = createApp({
       provider: new ScriptedAgentProvider([

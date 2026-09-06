@@ -1528,6 +1528,12 @@ describe('personality mutation contracts', () => {
         },
       }).success,
     ).toBe(true);
+    for (const code of ['tick_conflict', 'experiment_budget_exhausted'])
+      expect(
+        apiErrorSchema.safeParse({
+          error: { code, message: 'The tick cannot start.' },
+        }).success,
+      ).toBe(true);
     expect(
       apiErrorSchema.safeParse({
         error: {

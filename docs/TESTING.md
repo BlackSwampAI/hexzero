@@ -1,5 +1,10 @@
 # Testing
 
+Attempt-budget tests use deterministic providers and cover whole-roster tick
+admission, retry permits, cancellation finalization, and the distinction
+between known zero cost and missing/unknown cost. Provider catalog probes are
+outside this accounting boundary.
+
 Simulated-player coverage uses explicit offline seeds. Focused tests cover
 same-seed movement, accepted and occupied-cell-blocked disinfection,
 pre-observation ordering, cancellation atomicity, observation privacy,

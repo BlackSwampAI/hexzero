@@ -24,6 +24,7 @@ export const MESSAGE_RANGE = 3;
 export const DEFAULT_COMMUNICATION_RANGE_KM = 12;
 export const DEFAULT_MINIMUM_TICK_INTERVAL_MINUTES = 5;
 export const DEFAULT_MAXIMUM_TICK_INTERVAL_MINUTES = 10;
+export const DEFAULT_PROVIDER_ATTEMPT_LIMIT = 1_000;
 export const NEUTRAL_AGENT_COLOR = '#b2d3a8';
 export const RECENT_PUBLIC_MESSAGE_LIMIT = 12;
 export const RECENT_DIRECT_MESSAGE_LIMIT = 6;
@@ -2263,6 +2264,7 @@ export const providerFailureSchema = z.object({
     'invalid-tool-arguments',
     'invalid-decision',
     'simulation-validation',
+    'budget-exhausted',
   ]),
   message: z.string().trim().min(1).max(PROVIDER_ERROR_MAX_LENGTH),
   retryable: z.boolean(),
@@ -2485,6 +2487,21 @@ const scenarioRosterSchema = z
     });
   });
 
+export const experimentExecutionLimitsSchema = z
+  .object({
+    version: z.literal('execution-limits-v1').default('execution-limits-v1'),
+    providerAttemptLimit: z
+      .number()
+      .int()
+      .positive()
+      .max(WORLD_SCENARIO_LIMITS.maximumProviderAttempts)
+      .nullable(),
+  })
+  .strict();
+export type ExperimentExecutionLimits = z.infer<
+  typeof experimentExecutionLimitsSchema
+>;
+
 const worldSetupRequestObjectSchema = z
   .object({
     scenarioVersion: scenarioContractVersionSchema.default('world-scenario-v1'),
@@ -2525,6 +2542,10 @@ const worldSetupRequestObjectSchema = z
       .min(WORLD_SCENARIO_LIMITS.minimumTickIntervalMinutes)
       .max(WORLD_SCENARIO_LIMITS.maximumTickIntervalMinutes)
       .default(DEFAULT_MAXIMUM_TICK_INTERVAL_MINUTES),
+    executionLimits: experimentExecutionLimitsSchema.default({
+      version: 'execution-limits-v1',
+      providerAttemptLimit: DEFAULT_PROVIDER_ATTEMPT_LIMIT,
+    }),
     patientZeroAgentId: agentIdSchema,
     roster: scenarioRosterSchema,
     modelConfiguration: experimentModelConfigurationSchema,
@@ -2737,8 +2758,71 @@ export const simulationStatusSchema = z.enum([
   'resetting',
   'configuration-error',
   'provider-error',
+  'budget-exhausted',
 ]);
 export type SimulationStatus = z.infer<typeof simulationStatusSchema>;
+
+export const experimentAttemptAccountingSchema = z
+  .object({
+    providerAttemptLimit: z.number().int().positive().nullable(),
+    reservedPermits: z.number().int().nonnegative(),
+    attemptsStarted: z.number().int().nonnegative(),
+    attemptsFinalized: z.number().int().nonnegative(),
+    attemptsInFlight: z.number().int().nonnegative(),
+    remainingAttempts: z.number().int().nonnegative().nullable(),
+    knownCostCredits: z.number().finite().nonnegative(),
+    attemptsWithUnknownCost: z.number().int().nonnegative(),
+    exhausted: z.boolean(),
+    exhaustionReason: z.literal('provider-attempt-limit').nullable(),
+  })
+  .strict()
+  .superRefine((accounting, context) => {
+    if (
+      accounting.attemptsFinalized > accounting.attemptsStarted ||
+      accounting.attemptsInFlight !==
+        accounting.attemptsStarted - accounting.attemptsFinalized
+    )
+      context.addIssue({
+        code: 'custom',
+        path: ['attemptsInFlight'],
+        message: 'Attempt lifecycle totals must be internally consistent.',
+      });
+    if (
+      (accounting.providerAttemptLimit === null) !==
+      (accounting.remainingAttempts === null)
+    )
+      context.addIssue({
+        code: 'custom',
+        path: ['remainingAttempts'],
+        message:
+          'Unlimited attempt accounting must report null remaining attempts.',
+      });
+    if (
+      accounting.attemptsWithUnknownCost > accounting.attemptsFinalized ||
+      accounting.exhausted !== (accounting.exhaustionReason !== null)
+    )
+      context.addIssue({
+        code: 'custom',
+        path: ['exhaustionReason'],
+        message: 'Attempt cost and exhaustion summaries must be consistent.',
+      });
+  });
+export type ExperimentAttemptAccounting = z.infer<
+  typeof experimentAttemptAccountingSchema
+>;
+
+const defaultExperimentAttemptAccounting = {
+  providerAttemptLimit: DEFAULT_PROVIDER_ATTEMPT_LIMIT,
+  reservedPermits: 0,
+  attemptsStarted: 0,
+  attemptsFinalized: 0,
+  attemptsInFlight: 0,
+  remainingAttempts: DEFAULT_PROVIDER_ATTEMPT_LIMIT,
+  knownCostCredits: 0,
+  attemptsWithUnknownCost: 0,
+  exhausted: false,
+  exhaustionReason: null,
+} as const;
 
 export const simulationSnapshotSchema = z
   .object({
@@ -2802,6 +2886,9 @@ export const simulationSnapshotSchema = z
       lastRetainedTurn: z.number().int().positive().optional(),
       droppedRecords: z.number().int().nonnegative(),
       complete: z.boolean(),
+      attemptAccounting: experimentAttemptAccountingSchema.default(
+        defaultExperimentAttemptAccounting,
+      ),
       metrics: z.lazy(() => experimentMetricsSchema),
       currentTerritory: territoryScoreboardSchema,
       currentAlliances: z
@@ -3135,6 +3222,8 @@ export type HealthResponse = z.infer<typeof healthResponseSchema>;
 
 export const apiErrorCodeSchema = z.enum([
   'turn_conflict',
+  'tick_conflict',
+  'experiment_budget_exhausted',
   'reset_conflict',
   'personality_conflict',
   'invalid_agent_id',

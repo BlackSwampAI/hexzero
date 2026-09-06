@@ -14,6 +14,7 @@ import {
   DEFAULT_COMMUNICATION_RANGE_KM,
   DEFAULT_MINIMUM_TICK_INTERVAL_MINUTES,
   DEFAULT_MAXIMUM_TICK_INTERVAL_MINUTES,
+  DEFAULT_PROVIDER_ATTEMPT_LIMIT,
   NEUTRAL_AGENT_COLOR,
   assignBehavior,
   OBJECTIVE_PROMPT_VERSION,
@@ -1379,6 +1380,10 @@ export function defaultWorldSetupRequest(): WorldSetupRequest {
     communicationRangeKm: DEFAULT_COMMUNICATION_RANGE_KM,
     minimumTickIntervalMinutes: DEFAULT_MINIMUM_TICK_INTERVAL_MINUTES,
     maximumTickIntervalMinutes: DEFAULT_MAXIMUM_TICK_INTERVAL_MINUTES,
+    executionLimits: {
+      version: 'execution-limits-v1',
+      providerAttemptLimit: DEFAULT_PROVIDER_ATTEMPT_LIMIT,
+    },
     patientZeroAgentId: roster[0]!.id,
     roster,
     modelConfiguration: {

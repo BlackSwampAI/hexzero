@@ -36,7 +36,7 @@ their nested rollups.
 
 `OPENROUTER_API_KEY` is the only required OpenRouter environment value and is read only by the Game API process. It never enters catalog DTOs, assignments, exports, fixtures, browser responses, errors, or logs. The repository-root `.env` is ignored; `.env.example` contains only a placeholder.
 
-The development API has no authentication, rate limiting, or spending guard. It binds to loopback and its CORS allowlist is limited to the documented local World Lab origins. Do not deploy its cost-incurring turn endpoint to unauthenticated public traffic.
+The development API has no authentication, rate limiting, or monetary spending guard. It does enforce a server-owned per-experiment provider-attempt ceiling configured by World Setup. It binds to loopback and its CORS allowlist is limited to the documented local World Lab origins. Do not deploy its cost-incurring tick endpoint to unauthenticated public traffic.
 
 ## Model-provider isolation
 
@@ -103,7 +103,7 @@ The Game API captures only schema-validated safe observations, requested world a
 
 Export requests, agent IDs, levels, ranges, outcome/world-action filters, communication channel/status filters, and Custom dependencies are runtime-validated. Filtering and metrics remain server-owned. Schema v10 requires complete tick attribution and canonical safe per-tick summaries derived from all model attempts; schema-v9 remains the legacy sequential export format and documented older safe imports remain supported by the Game API. Selected-agent exports use sender/recipient-aware communication filtering and direct multi-agent relevance for proposals and membership changes; unrelated direct messages and rejected diplomacy are excluded. Reset clears communications, alliances, proposals, alliance events, and their metrics while preserving active personality values and unlocking preserved assignments for the new experiment.
 
-Actual cost is accepted only from OpenRouter's safe `usage.cost`. Missing cost is unknown, never zero; scripted-test providers explicitly report zero. The active Game API still has no authentication, budget enforcement, restartable persistence, provider-management endpoint, upload, or sharing link. The loopback-only boundary remains mandatory.
+Actual cost is accepted only from OpenRouter's safe `usage.cost`. Missing cost is unknown, never zero; scripted-test providers explicitly report zero. The active Game API enforces an attempt ceiling but still has no authentication, credit-denominated budget, restartable persistence, provider-management endpoint, upload, or sharing link. The loopback-only boundary remains mandatory.
 
 The offline experiment archive adds local persistence only for complete schema-validated safe exports and explicitly curated Markdown notes. Imports scan for prohibited credential/private-reasoning fields and recognizable credential values before a transaction begins; failures roll back. Both the canonical `.hexzero/` and compatible legacy `.agentborne/` database locations are ignored. The CLI exposes bounded typed queries, not arbitrary SQL, and adds no MCP, embedding, vector-store, or network-listener surface.
 

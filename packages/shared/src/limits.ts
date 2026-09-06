@@ -12,6 +12,7 @@ export const WORLD_SCENARIO_LIMITS = {
   maximumCommunicationRangeKm: 100,
   minimumTickIntervalMinutes: 1,
   maximumTickIntervalMinutes: 60,
+  maximumProviderAttempts: 100_000,
 } as const;
 
 export const WORLD_RADIUS_PRESETS = {
