@@ -41,6 +41,7 @@ import {
   type H3Cell,
   type NonCommunicationWorldEvent,
   type WorldEvent,
+  type WorldAction,
   type WorldActionResult,
   type WorldSnapshot,
   type AppliedScenario,
@@ -323,6 +324,36 @@ export function getCaptureEligibility(
   if (controller?.currentCell === agent.currentCell)
     return { eligible: false, blockedReason: 'controller-present' };
   return { eligible: true };
+}
+
+/**
+ * Lists every physical action the engine currently accepts for an agent in a
+ * frozen world state. This is intentionally derived by the same authority
+ * that resolves actions, so callers may safely map opaque model choices back
+ * to these actions without teaching a provider movement or legality rules.
+ */
+export function enumerateLegalWorldActions(
+  state: WorldState,
+  agentId: AgentId,
+): readonly WorldAction[] {
+  const agent = state.agents.get(agentId);
+  if (!agent) return [];
+
+  const proposed: WorldAction[] = [
+    ...gridDisk(agent.currentCell, 1)
+      .filter((cell) => cell !== agent.currentCell)
+      .map((cell) => h3CellSchema.safeParse(cell))
+      .filter((result) => result.success)
+      .map((result) => ({ type: 'move' as const, targetCell: result.data }))
+      .sort((left, right) => left.targetCell.localeCompare(right.targetCell)),
+    { type: 'infect' },
+    { type: 'capture' },
+    { type: 'wait' },
+  ];
+
+  return proposed.filter(
+    (action) => applyWorldAction(state, agentId, action).result.accepted,
+  );
 }
 
 export function applyWorldAction(
@@ -1366,6 +1397,7 @@ export function defaultWorldSetupRequest(): WorldSetupRequest {
   })) as ScenarioRosterEntry[];
   return {
     scenarioVersion: 'world-scenario-v1',
+    cognitionMode: 'legacy-multi-agent',
     locationLabel: 'Toledo, Ohio',
     center: {
       latitude: DEVELOPMENT_WORLD_CONFIG.latitude,

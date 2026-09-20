@@ -1899,6 +1899,7 @@ function WorldSetupPanel({
     const scenario = snapshot.scenario;
     return structuredClone({
       scenarioVersion: scenario.scenarioVersion,
+      cognitionMode: scenario.cognitionMode,
       locationLabel: scenario.locationLabel,
       center: scenario.center,
       resolution: scenario.resolution,

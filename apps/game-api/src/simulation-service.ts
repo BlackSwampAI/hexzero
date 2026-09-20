@@ -1033,6 +1033,10 @@ export class SimulationService {
   }
 
   async executeNextTurn(): Promise<AgentTurnRecord> {
+    if (this.#scenario.cognitionMode === 'zero-swarm-v1')
+      throw new SimulationConflictError(
+        'Zero-swarm ticks require the Agent Zero planner, which is not enabled in this PR.',
+      );
     if (this.#completedTickCount > 0)
       throw new SimulationConflictError(
         'Legacy sequential turns cannot run after a simultaneous tick.',
@@ -1046,6 +1050,10 @@ export class SimulationService {
 
   /** Execute one atomic simultaneous tick for every active agent. */
   async executeNextTick(): Promise<AgentTurnRecord[]> {
+    if (this.#scenario.cognitionMode === 'zero-swarm-v1')
+      throw new SimulationConflictError(
+        'Zero-swarm ticks require the Agent Zero planner, which is not enabled in this PR.',
+      );
     if (this.#busy || this.#verificationBusy)
       throw new SimulationConflictError(
         'A simulation tick is already in progress.',

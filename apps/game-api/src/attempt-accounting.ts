@@ -6,6 +6,7 @@ import {
   type ProviderAttemptRecord,
   type ProviderFailure,
   type ProviderMetadata,
+  type ReflexDecision,
   type ReasoningProfile,
 } from '@hexzero/shared';
 
@@ -48,6 +49,7 @@ export interface AttemptCompletion {
   completedAt: string;
   provider?: ProviderMetadata;
   failure?: ProviderFailure;
+  reflexDecision?: ReflexDecision;
 }
 
 interface Decimal {

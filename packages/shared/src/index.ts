@@ -73,6 +73,13 @@ export const ALLIANCE_COLOR_PALETTE = [
 export const agentIdSchema = z.uuid().brand<'AgentId'>();
 export type AgentId = z.infer<typeof agentIdSchema>;
 
+/** Selects the decision architecture used to execute an experiment. */
+export const cognitionModeSchema = z.enum([
+  'legacy-multi-agent',
+  'zero-swarm-v1',
+]);
+export type CognitionMode = z.infer<typeof cognitionModeSchema>;
+
 export const eventIdSchema = z.uuid().brand<'EventId'>();
 export type EventId = z.infer<typeof eventIdSchema>;
 
@@ -521,6 +528,80 @@ export const worldActionSchema = z.discriminatedUnion('type', [
 export type WorldAction = z.infer<typeof worldActionSchema>;
 export const agentTurnActionSchema = worldActionSchema;
 export type AgentTurnAction = WorldAction;
+
+export const swarmDirectiveSchema = z
+  .object({
+    id: z.string().trim().min(1).max(80),
+    agentId: agentIdSchema,
+    mission: z.enum(['expand', 'hold', 'relocate', 'reinforce', 'evade']),
+    targetCell: h3CellSchema.nullable(),
+    priority: z.enum(['low', 'normal', 'high']),
+    riskTolerance: z.enum(['low', 'medium', 'high']),
+    issuedAtTick: z.number().int().nonnegative(),
+    expiresAtTick: z.number().int().nonnegative(),
+    note: z.string().trim().min(1).max(160).optional(),
+  })
+  .strict()
+  .superRefine((directive, context) => {
+    if (directive.expiresAtTick < directive.issuedAtTick)
+      context.addIssue({
+        code: 'custom',
+        path: ['expiresAtTick'],
+        message: 'Directive expiry cannot precede its issue tick.',
+      });
+  });
+export type SwarmDirective = z.infer<typeof swarmDirectiveSchema>;
+
+const reflexCandidateSchema = z
+  .object({
+    id: z
+      .string()
+      .regex(/^action_[0-9]+$/)
+      .max(32),
+    description: z.string().trim().min(1).max(280),
+  })
+  .strict();
+
+export const reflexObservationSchema = z
+  .object({
+    agentId: agentIdSchema,
+    directive: swarmDirectiveSchema,
+    currentSituation: z
+      .object({
+        cellStatus: z.enum(['open', 'friendly-infected', 'other-infected']),
+        directiveProgress: z.enum(['advancing', 'stalled', 'blocked']),
+        nearbyPressure: z.enum(['low', 'rising', 'high']),
+        recentTerritoryTrend: z.enum(['growing', 'stable', 'shrinking']),
+        recentActionOutcome: z.enum(['success', 'rejected', 'unknown']),
+      })
+      .strict(),
+    relevantRecentFacts: z.array(z.string().trim().min(1).max(160)).max(6),
+    candidates: z.array(reflexCandidateSchema).min(1).max(9),
+  })
+  .strict()
+  .superRefine((observation, context) => {
+    if (observation.directive.agentId !== observation.agentId)
+      context.addIssue({
+        code: 'custom',
+        path: ['directive', 'agentId'],
+        message: 'A reflex directive must belong to the observed agent.',
+      });
+    const ids = observation.candidates.map(({ id }) => id);
+    if (new Set(ids).size !== ids.length)
+      context.addIssue({
+        code: 'custom',
+        path: ['candidates'],
+        message: 'Reflex candidate IDs must be unique.',
+      });
+  });
+export type ReflexObservation = z.infer<typeof reflexObservationSchema>;
+
+export const cognitionSourceSchema = z.enum([
+  'zero-llm',
+  'jev-reflex',
+  'deterministic-fallback',
+]);
+export type CognitionSource = z.infer<typeof cognitionSourceSchema>;
 
 const directMessageFields = {
   recipientId: agentIdSchema,
@@ -2016,11 +2097,44 @@ export type ProviderDecisionEnvelope = z.infer<
   typeof providerDecisionEnvelopeSchema
 >;
 
-export const providerModeSchema = z.enum(['openrouter', 'scripted-test']);
+export const providerModeSchema = z.enum([
+  'openrouter',
+  'typesafe',
+  'scripted-test',
+]);
 export type ProviderMode = z.infer<typeof providerModeSchema>;
 
 export const modelIdSchema = z.string().trim().min(1).max(200);
 export type ModelId = z.infer<typeof modelIdSchema>;
+
+export const reflexDecisionSchema = z
+  .object({
+    chosenCandidateId: z
+      .string()
+      .regex(/^action_[0-9]+$/)
+      .max(32),
+    confidence: z.number().finite().min(0).max(1),
+    probabilities: z
+      .record(
+        z
+          .string()
+          .regex(/^action_[0-9]+$/)
+          .max(32),
+        z.number().finite().min(0).max(1),
+      )
+      .refine((probabilities) => Object.keys(probabilities).length <= 9, {
+        message:
+          'Reflex probability telemetry may include at most 9 candidates.',
+      }),
+    model: modelIdSchema,
+    latencyMs: z.number().finite().nonnegative(),
+    inputTokens: z.number().int().nonnegative(),
+    outputTokens: z.number().int().nonnegative(),
+    directiveId: z.string().trim().min(1).max(80),
+    cognitionSource: cognitionSourceSchema,
+  })
+  .strict();
+export type ReflexDecision = z.infer<typeof reflexDecisionSchema>;
 
 const priceStringSchema = z
   .string()
@@ -2383,6 +2497,7 @@ export const providerAttemptRecordSchema = z
     reasoningProfile: reasoningProfileSchema.default('provider-default'),
     provider: providerMetadataSchema.optional(),
     failure: providerFailureSchema.optional(),
+    reflexDecision: reflexDecisionSchema.optional(),
     reservedCredits: z.string().regex(/^(?:0|[1-9]\d*)(?:\.\d+)?$/),
     actualCostCredits: z
       .string()
@@ -2411,6 +2526,13 @@ export const providerAttemptRecordSchema = z
         code: 'custom',
         path: ['failure'],
         message: 'Completed provider attempts cannot contain a failure.',
+      });
+    if (attempt.reflexDecision && attempt.outcome !== 'completed')
+      context.addIssue({
+        code: 'custom',
+        path: ['reflexDecision'],
+        message:
+          'Reflex decision telemetry belongs only to completed attempts.',
       });
     if (
       ['provider-error', 'cancelled', 'timeout'].includes(attempt.outcome) &&
@@ -2664,6 +2786,7 @@ export type ExperimentExecutionLimits = z.infer<
 const worldSetupRequestObjectSchema = z
   .object({
     scenarioVersion: scenarioContractVersionSchema.default('world-scenario-v1'),
+    cognitionMode: cognitionModeSchema.default('legacy-multi-agent'),
     locationLabel: z.string().trim().min(1).max(120).optional(),
     center: z.object({
       latitude: z.number().finite().min(-90).max(90),

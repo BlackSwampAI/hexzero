@@ -1606,6 +1606,32 @@ describe('personality mutation contracts', () => {
         },
       }).success,
     ).toBe(true);
+    const reflexDecision = {
+      chosenCandidateId: 'action_0',
+      confidence: 0.9,
+      probabilities: { action_0: 0.9, action_1: 0.1 },
+      model: 'jev-1.13.0',
+      latencyMs: 12,
+      inputTokens: 24,
+      outputTokens: 1,
+      directiveId: 'directive-1',
+      cognitionSource: 'jev-reflex' as const,
+    };
+    expect(
+      providerAttemptRecordSchema.safeParse({
+        ...base,
+        outcome: 'completed',
+        completedAt: '2026-08-13T12:00:01.000Z',
+        reflexDecision,
+      }).success,
+    ).toBe(true);
+    expect(
+      providerAttemptRecordSchema.safeParse({
+        ...base,
+        outcome: 'in-flight',
+        reflexDecision,
+      }).success,
+    ).toBe(false);
     expect(
       providerAttemptRecordSchema.safeParse({
         ...base,

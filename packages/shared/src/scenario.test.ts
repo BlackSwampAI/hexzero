@@ -55,6 +55,7 @@ const request = {
 describe('scenario contracts', () => {
   it('defaults safe virtual tick bounds and rejects inverted bounds', () => {
     const parsed = worldSetupRequestSchema.parse(request);
+    expect(parsed.cognitionMode).toBe('legacy-multi-agent');
     expect(parsed.minimumTickIntervalMinutes).toBe(5);
     expect(parsed.maximumTickIntervalMinutes).toBe(10);
     expect(

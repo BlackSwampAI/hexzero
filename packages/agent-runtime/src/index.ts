@@ -24,7 +24,9 @@ import {
 
 export { applyProviderEnvironmentFile } from './provider-environment';
 export * from './model-catalog';
+export * from './reflex-provider';
 export * from './tick-dispatcher';
+export * from './typesafe-jev-reflex-provider';
 
 export const OPENROUTER_ENDPOINT =
   'https://openrouter.ai/api/v1/chat/completions';
