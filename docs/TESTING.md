@@ -34,6 +34,10 @@ scripted providers and verify the acknowledgement gate, input parity, bounded
 attempt admission, safe metrics, and a no-network Markdown summary path.
 `pnpm validate`, Playwright, and GitHub CI never execute a paid run. See
 [Live swarm comparison](LIVE_SWARM_COMPARISON.md).
+The read-only `pnpm diagnose:swarm` command summarizes a running local Game API
+snapshot without provider calls, keys, prompts, or raw responses. World Lab's
+swarm activity summary shows pressure state, physical action counts, and
+fallbacks for immediate diagnosis of apparently stationary ticks.
 
 The pre-live provider audit tests the Jev request's bounded capture-pressure
 projection, omission of hidden hunter state and empty capture noise, and the

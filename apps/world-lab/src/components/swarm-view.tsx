@@ -348,6 +348,21 @@ export function SwarmActivityPanel({
 }) {
   const ticks = snapshot.swarmTicks ?? [];
   const latest = ticks.at(-1);
+  const workers = ticks.flatMap((tick) => tick.workers);
+  const actions = [
+    ...ticks.map((tick) => tick.zeroAction),
+    ...workers.map((worker) => worker.action),
+  ];
+  const countAction = (type: WorldAction['type']) =>
+    actions.filter((action) => action?.type === type).length;
+  const fallbackPlans = ticks.filter(
+    (tick) => tick.planSource === 'deterministic-fallback',
+  ).length;
+  const fallbackWorkers = workers.filter(
+    (worker) => worker.source === 'deterministic-fallback',
+  ).length;
+  const player = snapshot.world.simulatedPlayer;
+  const attempts = snapshot.experiment.attemptAccounting;
   return (
     <section
       className="panel swarm-panel swarm-activity"
@@ -355,6 +370,36 @@ export function SwarmActivityPanel({
     >
       <p className="panel-kicker">Swarm activity</p>
       <h2>Agent Zero strategy</h2>
+      <div className="swarm-diagnostic" role="status">
+        <p>
+          <strong>{ticks.length} committed ticks</strong> ·{' '}
+          {countAction('move')} moves · {countAction('infect')} infections ·{' '}
+          {countAction('wait')} waits · {fallbackPlans} Zero fallbacks ·{' '}
+          {fallbackWorkers} worker fallbacks · {attempts.attemptsStarted}{' '}
+          provider attempts
+        </p>
+        <p>
+          {player
+            ? `${player.profile} pressure: ${player.metrics.movements} moves, ${player.metrics.cellsDisinfected} cleans, ${player.metrics.blockedDisinfections} blocked cleans`
+            : 'Simulated player pressure is off. Enable it in World Setup to test cleaner or hunter behavior.'}
+        </p>
+        {latest?.plannerFailure && (
+          <p>
+            Zero planner failure: {latest.plannerFailure.code} ·{' '}
+            {latest.plannerFailure.message}
+          </p>
+        )}
+        {latest?.workers.some((worker) => worker.failure) && (
+          <p>
+            Worker failures:{' '}
+            {latest.workers
+              .flatMap((worker) =>
+                worker.failure ? [worker.failure.code] : [],
+              )
+              .join(', ')}
+          </p>
+        )}
+      </div>
       {!latest ? (
         <EmptyTelemetry />
       ) : (

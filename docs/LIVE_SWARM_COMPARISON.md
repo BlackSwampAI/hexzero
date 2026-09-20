@@ -16,6 +16,8 @@ World Lab opens in the legacy mode by default. To watch one zero-swarm experimen
 3. Select **Preview**, then **Apply / Create Experiment**. The header will say **Zero swarm v1 experiment**. In **Agents**, select an available model for Agent Zero.
 4. Use **Single tick** to start. The **Scoreboard** tab shows Zero's strategy and worker directives; selecting a worker shows its chosen action, confidence, and probabilities. The **Swarm** activity tab shows the tick history. A provider fallback notice means the corresponding key or provider is unavailable.
 
+If agents appear stationary, read the **Swarm** activity summary first: it separates moves, infections, waits, Zero/worker fallbacks, provider attempts, and simulated-player pressure. The player is disabled in the default World Setup; selecting a profile without enabling pressure does not start it. The Game API keeps the current experiment in process memory, so keep `pnpm dev` running while inspecting it. In a second terminal, `pnpm diagnose:swarm` prints a short safe JSON summary of the current local experiment. It makes no provider calls. If it reports that port 8787 is unavailable, start `pnpm dev` and leave it running; a restarted Game API has a new experiment.
+
 This UI is for inspecting one run. The matched Jev-versus-deterministic comparison below runs separately and produces a JSON report; it does not appear as a new World Lab screen.
 
 ## Run a bounded experiment

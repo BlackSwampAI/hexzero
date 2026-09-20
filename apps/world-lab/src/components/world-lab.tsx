@@ -164,7 +164,9 @@ export function WorldLab() {
   const configurationPendingRef = useRef(false);
   const exportInitializedRef = useRef(false);
   const exportTriggerRef = useRef<HTMLButtonElement>(null);
+  const modeTriggerRef = useRef<HTMLButtonElement>(null);
   const setupTriggerRef = useRef<HTMLElement>(null);
+  const [setupOpenedFromMode, setSetupOpenedFromMode] = useState(false);
   const overflowMenuRef = useRef<HTMLDetailsElement>(null);
 
   useEffect(() => {
@@ -1017,13 +1019,28 @@ export function WorldLab() {
             {!swarmMode && <ExperimentUsageMeter snapshot={snapshot} />}
           </div>
         </div>
-        <p className="test-provider-summary">
-          {swarmMode
-            ? `Zero: ${zeroModel?.modelId ?? 'model required'} · Jev: ${snapshot.swarmProviderStatus?.reflexModel ?? 'deterministic reflex'}`
-            : snapshot.providerMode === 'openrouter'
-              ? `${new Set(snapshot.resolvedModels.map(({ modelId }) => modelId ?? 'unassigned')).size} active model assignment${snapshot.resolvedModels.length === 1 ? '' : 's'}`
-              : 'Deterministic test model'}
-        </p>
+        <button
+          className="execution-mode-button"
+          ref={modeTriggerRef}
+          type="button"
+          disabled={inFlight || activeTick || resetting || running}
+          aria-label={`Current execution mode: ${swarmMode ? 'Zero swarm v1' : 'Legacy multi-agent'}. Change in World Setup`}
+          onClick={() => {
+            setSetupOpenedFromMode(true);
+            setSetupOpen(true);
+          }}
+        >
+          <strong>
+            Mode: {swarmMode ? 'Zero swarm v1' : 'Legacy multi-agent'}
+          </strong>
+          <span className="test-provider-summary">
+            {swarmMode
+              ? `Zero: ${zeroModel?.modelId ?? 'model required'} · Jev: ${snapshot.swarmProviderStatus?.reflexModel ?? 'deterministic reflex'}`
+              : snapshot.providerMode === 'openrouter'
+                ? `${new Set(snapshot.resolvedModels.map(({ modelId }) => modelId ?? 'unassigned')).size} active model assignment${snapshot.resolvedModels.length === 1 ? '' : 's'}`
+                : 'Deterministic test model'}
+          </span>
+        </button>
         <nav
           className="command-controls"
           aria-label="Simulation execution controls"
@@ -1217,6 +1234,7 @@ export function WorldLab() {
               onClick={() => {
                 if (overflowMenuRef.current)
                   overflowMenuRef.current.open = false;
+                setSetupOpenedFromMode(false);
                 setSetupOpen(true);
               }}
             >
@@ -1341,7 +1359,9 @@ export function WorldLab() {
           open
           snapshot={snapshot}
           apiBase={apiBase}
-          returnFocusRef={setupTriggerRef}
+          returnFocusRef={
+            setupOpenedFromMode ? modeTriggerRef : setupTriggerRef
+          }
           onClose={() => setSetupOpen(false)}
           onApplied={(next) => {
             setSnapshot(next);

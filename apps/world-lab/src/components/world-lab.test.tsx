@@ -1393,8 +1393,11 @@ describe('WorldLab', () => {
     expect(
       await screen.findByText('Legacy multi-agent experiment'),
     ).toBeVisible();
-    await openOverflow(user);
-    await user.click(screen.getByRole('button', { name: 'World setup' }));
+    await user.click(
+      screen.getByRole('button', {
+        name: /Current execution mode: Legacy multi-agent/,
+      }),
+    );
     await user.selectOptions(
       screen.getByLabelText('Cognition mode'),
       'zero-swarm-v1',

@@ -2,6 +2,7 @@ import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import type { SimulationSnapshot } from '@hexzero/shared';
 import {
+  SwarmActivityPanel,
   SwarmAgentInspector,
   SwarmRunPanel,
   SwarmStrategyPanel,
@@ -99,6 +100,17 @@ function snapshot(withTick = true): SimulationSnapshot {
 }
 
 describe('swarm telemetry panels', () => {
+  it('summarizes inactive player pressure, actions, and provider failures', () => {
+    const value = snapshot();
+    render(<SwarmActivityPanel snapshot={value} />);
+    const diagnostic = screen.getByRole('status');
+    expect(diagnostic).toHaveTextContent('0 moves');
+    expect(diagnostic).toHaveTextContent('1 infections');
+    expect(diagnostic).toHaveTextContent('1 Zero fallbacks');
+    expect(diagnostic).toHaveTextContent('Simulated player pressure is off');
+    expect(diagnostic).toHaveTextContent('Zero planner failure: timeout');
+  });
+
   it('shows Zero fallback and worker reflex telemetry without social labels', () => {
     const value = snapshot();
     render(

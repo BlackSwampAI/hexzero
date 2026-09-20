@@ -2152,6 +2152,32 @@ summary:focus-visible {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.execution-mode-button {
+  display: grid;
+  justify-items: start;
+  min-width: 0;
+  padding: 5px 8px;
+  text-align: left;
+  background: color-mix(in srgb, var(--blackberry-cream) 25%, var(--surface));
+}
+.execution-mode-button strong {
+  color: var(--vanilla-custard);
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+.execution-mode-button .test-provider-summary {
+  width: 100%;
+}
+.swarm-diagnostic {
+  margin: 8px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  background: var(--surface-raised);
+  font-size: 0.75rem;
+}
+.swarm-diagnostic p + p {
+  margin-top: 4px;
+}
 .command-alert {
   border-color: color-mix(in srgb, var(--danger) 45%, var(--line));
   background: color-mix(
