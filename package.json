@@ -9,6 +9,7 @@
   },
   "scripts": {
     "build": "pnpm -r --if-present build",
+    "compare:offline": "pnpm --filter @hexzero/game-api compare:offline",
     "dev": "pnpm --parallel --filter @hexzero/game-api --filter @hexzero/world-lab dev",
     "dev:test-provider": "HEXZERO_PROVIDER=scripted pnpm dev",
     "dev:api": "pnpm --filter @hexzero/game-api dev",

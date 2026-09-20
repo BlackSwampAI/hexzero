@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "esbuild src/server.ts --bundle --platform=node --format=esm --outfile=dist/server.js",
+    "compare:offline": "node --import tsx src/swarm-comparison-cli.ts",
     "dev": "tsx watch src/server.ts",
     "lint": "eslint .",
     "start": "node dist/server.js",

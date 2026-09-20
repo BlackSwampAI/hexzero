@@ -115,7 +115,10 @@ import { ObservationHistory } from './observation-history';
 import { AttemptAccounting } from './attempt-accounting';
 import {
   chooseReflexWorldAction,
+  compileReflexObservation,
   ReflexSelectionCancelledError,
+  type CompiledReflexObservation,
+  type ReflexSelection,
 } from './reflex-execution';
 
 function attemptAccountingForScenario(
@@ -134,6 +137,19 @@ const RESET_GENERATED_AT = '2026-08-13T12:00:00.000Z';
 const MAX_TURN_HISTORY = 120;
 const MAX_WORLD_EVENT_HISTORY = 120;
 const DEFAULT_EXPERIMENT_RETENTION = 5_000;
+
+function chooseDeterministicWorkerAction(
+  compiled: CompiledReflexObservation,
+  selectCandidateId: (compiled: CompiledReflexObservation) => string,
+): ReflexSelection {
+  const action = compiled.actions.get(selectCandidateId(compiled));
+  return {
+    action: action ?? { type: 'wait' },
+    observation: compiled.observation,
+    decision: null,
+    cognitionSource: 'deterministic-fallback',
+  };
+}
 
 export function selectMostRecentPatientZeroThreats<
   T extends { eventId: string; occurredAt: string },
@@ -292,6 +308,13 @@ export interface SimulationServiceOptions {
   /** Separate strategic and reflex cognition used only by zero-swarm-v1. */
   swarmPlanner?: SwarmPlanner;
   reflexProvider?: ReflexProvider;
+  /**
+   * Offline comparison seam: choose one opaque, already legal candidate without
+   * calling a reflex provider. Production zero-swarm execution leaves this unset.
+   */
+  deterministicWorkerCandidateSelector?: (
+    compiled: CompiledReflexObservation,
+  ) => string;
   now?: () => string;
   createEventId?: () => string;
   createExperimentId?: () => string;
@@ -304,6 +327,8 @@ export class SimulationService {
   readonly #provider: AgentProvider;
   readonly #swarmPlanner: SwarmPlanner | undefined;
   readonly #reflexProvider: ReflexProvider | undefined;
+  readonly #deterministicWorkerCandidateSelector:
+    ((compiled: CompiledReflexObservation) => string) | undefined;
   readonly #now: () => string;
   readonly #createEventId: () => string;
   readonly #createExperimentId: () => string;
@@ -354,6 +379,7 @@ export class SimulationService {
     provider,
     swarmPlanner,
     reflexProvider,
+    deterministicWorkerCandidateSelector,
     now = () => new Date().toISOString(),
     createEventId = () => crypto.randomUUID(),
     createExperimentId = () => crypto.randomUUID(),
@@ -369,6 +395,8 @@ export class SimulationService {
     this.#provider = provider;
     this.#swarmPlanner = swarmPlanner;
     this.#reflexProvider = reflexProvider;
+    this.#deterministicWorkerCandidateSelector =
+      deterministicWorkerCandidateSelector;
     this.#now = now;
     this.#createEventId = createEventId;
     this.#createExperimentId = createExperimentId;
@@ -1333,7 +1361,7 @@ export class SimulationService {
         if (result.outcome === 'lost-tick') continue;
         const applied = applyCommunication(
           state,
-          preTickState,
+          playerAdvance.state,
           agentId,
           result.decision.decision.communication,
           context,
@@ -1587,8 +1615,18 @@ export class SimulationService {
     )
       replanReasons.push('roster-changed');
     const replan = replanReasons.length > 0;
-    // Planning ticks reserve Zero plus workers; directive reuse only reserves workers.
-    if (!this.#attemptAccounting.reserve(agents.length - (replan ? 0 : 1))) {
+    // Planning ticks reserve Zero plus Jev workers. The explicit deterministic
+    // comparison seam only reserves Zero's planner call; it never dispatches a
+    // reflex provider attempt.
+    const requiredAttempts = this.#deterministicWorkerCandidateSelector
+      ? replan
+        ? 1
+        : 0
+      : agents.length - (replan ? 0 : 1);
+    if (
+      requiredAttempts > 0 &&
+      !this.#attemptAccounting.reserve(requiredAttempts)
+    ) {
       this.#status = 'budget-exhausted';
       throw new SimulationValidationError(
         'experiment_budget_exhausted',
@@ -1696,43 +1734,48 @@ export class SimulationService {
           ({ agentId }) => agentId === worker.id,
         )!;
         this.#activeAgentId = worker.id;
-        const choice = await chooseReflexWorldAction(
-          candidate,
-          directive,
-          this.#reflexProvider,
-          {
-            history: {
-              previousCell: this.#lastSwarmPositions.get(worker.id),
-              recentCleanedCells: this.#simulatedPlayerEvents
-                .filter(
-                  (
-                    event,
-                  ): event is Extract<
-                    SimulatedPlayerEvent,
-                    { type: 'hex-disinfected' }
-                  > => event.type === 'hex-disinfected',
-                )
-                .slice(-6)
-                .map(({ cell }) => cell),
-              captureAlerts: captureAlertsFrom(playerAdvance.events),
-              territoryDelta:
-                this.#lastSwarmTerritoryDeltas.get(worker.id) ?? 0,
-              recentActionOutcome: this.#swarmTicks
-                .at(-1)
-                ?.workers.find(({ agentId }) => agentId === worker.id)
-                ?.actionResult?.accepted
-                ? 'success'
-                : 'unknown',
-            },
-            signal: controller.signal,
-            deadlineAtMs,
-            accounting: this.#attemptAccounting,
-            initialPermitReserved: true,
-            intendedTickNumber: tickNumber,
-            intendedTurnNumber: tickTurnBase + order.indexOf(worker.id) + 1,
-            now: this.#now,
-          },
-        );
+        const history = {
+          previousCell: this.#lastSwarmPositions.get(worker.id),
+          recentCleanedCells: this.#simulatedPlayerEvents
+            .filter(
+              (
+                event,
+              ): event is Extract<
+                SimulatedPlayerEvent,
+                { type: 'hex-disinfected' }
+              > => event.type === 'hex-disinfected',
+            )
+            .slice(-6)
+            .map(({ cell }) => cell),
+          captureAlerts: captureAlertsFrom(playerAdvance.events),
+          territoryDelta: this.#lastSwarmTerritoryDeltas.get(worker.id) ?? 0,
+          recentActionOutcome: this.#swarmTicks
+            .at(-1)
+            ?.workers.find(({ agentId }) => agentId === worker.id)?.actionResult
+            ?.accepted
+            ? ('success' as const)
+            : ('unknown' as const),
+        };
+        const choice = this.#deterministicWorkerCandidateSelector
+          ? chooseDeterministicWorkerAction(
+              compileReflexObservation(candidate, directive, history),
+              this.#deterministicWorkerCandidateSelector,
+            )
+          : await chooseReflexWorldAction(
+              candidate,
+              directive,
+              this.#reflexProvider,
+              {
+                history,
+                signal: controller.signal,
+                deadlineAtMs,
+                accounting: this.#attemptAccounting,
+                initialPermitReserved: true,
+                intendedTickNumber: tickNumber,
+                intendedTurnNumber: tickTurnBase + order.indexOf(worker.id) + 1,
+                now: this.#now,
+              },
+            );
         selected.set(worker.id, choice);
       }
       if (controller.signal.aborted) throw new SimulationTurnCancelledError();
@@ -3001,6 +3044,13 @@ export class SimulationService {
     };
   }
 
+  #historicalAgent(agentId: AgentId): Agent | undefined {
+    return (
+      this.#state.agents.get(agentId) ??
+      this.#initialExperimentAgents.find(({ id }) => id === agentId)
+    );
+  }
+
   #buildObservation(
     agentId: AgentId,
     currentCandidatePlayerEvents: readonly SimulatedPlayerEvent[] = [],
@@ -3109,7 +3159,7 @@ export class SimulationService {
     const recentPublicMessages = this.#observationHistory
       .publicMessages()
       .map((event) => {
-        const sender = this.#state.agents.get(event.agentId);
+        const sender = this.#historicalAgent(event.agentId);
         if (!sender) throw new Error('A public-message sender does not exist.');
         return {
           eventId: event.id,
@@ -3122,8 +3172,8 @@ export class SimulationService {
     const recentDirectMessages = this.#observationHistory
       .directMessages(agent.id)
       .map((event) => {
-        const sender = this.#state.agents.get(event.agentId);
-        const recipient = this.#state.agents.get(event.recipientId);
+        const sender = this.#historicalAgent(event.agentId);
+        const recipient = this.#historicalAgent(event.recipientId);
         if (!sender || !recipient)
           throw new Error('A communication participant does not exist.');
         return {
@@ -3141,7 +3191,7 @@ export class SimulationService {
     const recentAllianceMessages = this.#observationHistory
       .allianceMessages(agent.id)
       .map((event) => {
-        const sender = this.#state.agents.get(event.agentId);
+        const sender = this.#historicalAgent(event.agentId);
         if (!sender)
           throw new Error('An alliance-message sender does not exist.');
         return {
@@ -3156,7 +3206,7 @@ export class SimulationService {
     const recentZeroMessages = this.#observationHistory
       .zeroMessages(agent.id)
       .map((event) => {
-        const sender = this.#state.agents.get(event.agentId);
+        const sender = this.#historicalAgent(event.agentId);
         if (!sender) throw new Error('A Zero-message sender does not exist.');
         return {
           eventId: event.id,
@@ -3175,7 +3225,7 @@ export class SimulationService {
           ? event.previousControllerAgentId
           : event.controllerAgentId;
         if (otherAgentId === null) return [];
-        const otherAgent = this.#state.agents.get(otherAgentId);
+        const otherAgent = this.#historicalAgent(otherAgentId);
         if (!otherAgent)
           throw new Error('A control-change participant does not exist.');
         return [
