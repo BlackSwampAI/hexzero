@@ -38,6 +38,9 @@ The read-only `pnpm diagnose:swarm` command summarizes a running local Game API
 snapshot without provider calls, keys, prompts, or raw responses. World Lab's
 swarm activity summary shows pressure state, physical action counts, and
 fallbacks for immediate diagnosis of apparently stationary ticks.
+Focused offline progress tests cover a worker advancing after a move, reaching
+a directive target, waiting at that target, and the corresponding status seen
+by Zero on the next planning tick.
 
 The pre-live provider audit tests the Jev request's bounded capture-pressure
 projection, omission of hidden hunter state and empty capture noise, and the

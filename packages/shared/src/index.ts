@@ -582,7 +582,12 @@ export const reflexObservationSchema = z
     currentSituation: z
       .object({
         cellStatus: z.enum(['open', 'friendly-infected', 'other-infected']),
-        directiveProgress: z.enum(['advancing', 'stalled', 'blocked']),
+        directiveProgress: z.enum([
+          'advancing',
+          'at-target',
+          'stalled',
+          'blocked',
+        ]),
         nearbyPressure: z.enum(['low', 'rising', 'high']),
         recentTerritoryTrend: z.enum(['growing', 'stable', 'shrinking']),
         recentActionOutcome: z.enum(['success', 'rejected', 'unknown']),
@@ -704,7 +709,7 @@ export const zeroStrategicObservationSchema = z
             controlledCellCount: z.number().int().nonnegative(),
             territoryDelta: z.number().int(),
             workerStatus: z
-              .enum(['advancing', 'stalled', 'blocked', 'unknown'])
+              .enum(['advancing', 'at-target', 'stalled', 'blocked', 'unknown'])
               .optional(),
             directive: swarmDirectiveSchema.nullable().optional(),
           })

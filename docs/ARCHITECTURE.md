@@ -18,6 +18,11 @@ The worker observation includes bounded, current capture alerts. The TypeSafe
 request projects them as structured capture pressure without cell IDs or tick
 numbers. The unused prose `relevantRecentFacts` field is removed; current
 situation and legal candidate descriptions supply the relevant local facts.
+Directive progress compares each worker's current cell with its position before
+the prior tick's physical action. Reaching the directive target has its own
+`at-target` observation status. Zero's worker status uses the same position
+comparison, rather than treating any accepted world action as progress. The
+existing deterministic replanning trigger for repeated waits is unchanged.
 Zero planning uses the same provider-reported OpenRouter usage normalization as
 legacy turns, including actual `usage.cost` when returned, and preserves that
 metadata when a returned plan is rejected or a bounded non-success response

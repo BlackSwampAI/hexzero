@@ -28,7 +28,7 @@ describe('zero-swarm reflex contracts', () => {
       directive,
       currentSituation: {
         cellStatus: 'open',
-        directiveProgress: 'advancing',
+        directiveProgress: 'at-target',
         nearbyPressure: 'low',
         recentTerritoryTrend: 'growing',
         recentActionOutcome: 'success',
