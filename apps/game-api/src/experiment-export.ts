@@ -128,9 +128,12 @@ export class ExperimentMetricAccumulator {
       turn.outcome === 'accepted' &&
       turn.worldActionResult.event.type === 'hex-captured'
     ) {
-      const displaced = this.#records.get(
-        turn.worldActionResult.event.previousControllerAgentId,
-      );
+      const previousControllerAgentId =
+        turn.worldActionResult.event.previousControllerAgentId;
+      const displaced =
+        previousControllerAgentId === null
+          ? undefined
+          : this.#records.get(previousControllerAgentId);
       if (displaced) displaced.territoryLostThroughCapture += 1;
     }
   }
@@ -758,9 +761,28 @@ export function createExperimentExport(
       .map(({ tickNumber }) => tickNumber)
       .filter((tick): tick is number => tick !== undefined),
     ...(exportedSwarmTicks ?? []).map(({ tickNumber }) => tickNumber),
+    ...source.simulatedPlayerEvents
+      .filter(
+        (event) =>
+          (request.agents.mode === 'all' &&
+            request.turns.mode === 'entire-retained') ||
+          (event.type === 'simulated-player-agent-captured' &&
+            selectedSet.has(event.capturedAgentId)),
+      )
+      .map(({ originatingTick }) => originatingTick),
   ]);
-  const selectedAgents = source.currentAgents
-    .filter(({ id }) => selectedSet.has(id))
+  const currentAgentsById = new Map(
+    source.currentAgents.map((agent) => [agent.id, agent]),
+  );
+  const initialAgentsById = new Map(
+    source.initialAgents.map((agent) => [agent.id, agent]),
+  );
+  const selectedAgents = selectedAgentIds
+    .map(
+      (agentId) =>
+        currentAgentsById.get(agentId) ?? initialAgentsById.get(agentId),
+    )
+    .filter((agent): agent is Agent => agent !== undefined)
     .map((agent) =>
       include.personality
         ? structuredClone(agent)
@@ -816,12 +838,22 @@ export function createExperimentExport(
       lastMatchingTurn: filtered.at(-1)?.turnNumber,
     },
     agents: selectedAgents,
-    currentGoals: source.agentGoals
-      .filter(({ agentId }) => selectedSet.has(agentId))
-      .map((entry) => structuredClone(entry)),
-    currentMemories: source.agentMemories
-      .filter(({ agentId }) => selectedSet.has(agentId))
-      .map((entry) => structuredClone(entry)),
+    currentGoals: selectedAgentIds.map((agentId) =>
+      structuredClone(
+        source.agentGoals.find((entry) => entry.agentId === agentId) ?? {
+          agentId,
+          goal: null,
+        },
+      ),
+    ),
+    currentMemories: selectedAgentIds.map((agentId) =>
+      structuredClone(
+        source.agentMemories.find((entry) => entry.agentId === agentId) ?? {
+          agentId,
+          entries: [],
+        },
+      ),
+    ),
     configurationEvents: source.configurationEvents
       .filter((event) =>
         'type' in event
@@ -919,7 +951,7 @@ function exportWorldState(world: WorldSnapshot): ExperimentExportWorldState {
 function currentTerritory(world: WorldSnapshot, agents: readonly Agent[]) {
   const counts = new Map<AgentId, number>(agents.map(({ id }) => [id, 0]));
   for (const hex of world.hexes) {
-    if (hex.state === 'infected')
+    if (hex.state === 'infected' && hex.controllerAgentId !== null)
       counts.set(
         hex.controllerAgentId,
         (counts.get(hex.controllerAgentId) ?? 0) + 1,
@@ -1040,11 +1072,12 @@ function resolveAgentIds(
   source: ExperimentSource,
   request: ExperimentExportRequest,
 ): AgentId[] {
-  const known = new Set(source.currentAgents.map(({ id }) => id));
+  const known = new Set([
+    ...source.initialAgents.map(({ id }) => id),
+    ...source.currentAgents.map(({ id }) => id),
+  ]);
   const selected =
-    request.agents.mode === 'all'
-      ? source.currentAgents.map(({ id }) => id)
-      : request.agents.agentIds;
+    request.agents.mode === 'all' ? [...known] : request.agents.agentIds;
   if (selected.some((id) => !known.has(id))) {
     throw new ExperimentExportValidationError(
       'unknown_agent',
@@ -1188,7 +1221,10 @@ function filterControlChanges(
       turn.outcome !== 'accepted' ||
       turn.worldActionResult.event.type !== 'hex-captured' ||
       (!selected.has(turn.worldActionResult.event.controllerAgentId) &&
-        !selected.has(turn.worldActionResult.event.previousControllerAgentId))
+        (turn.worldActionResult.event.previousControllerAgentId === null ||
+          !selected.has(
+            turn.worldActionResult.event.previousControllerAgentId,
+          )))
     )
       return [];
     return [
@@ -1733,8 +1769,10 @@ export function calculateExperimentMetrics(
             ({ previousControllerAgentId }) =>
               previousControllerAgentId === agentId,
           ).length
-        : relevantControlChanges.filter(({ previousControllerAgentId }) =>
-            scopedAgentIds.includes(previousControllerAgentId),
+        : relevantControlChanges.filter(
+            ({ previousControllerAgentId }) =>
+              previousControllerAgentId !== null &&
+              scopedAgentIds.includes(previousControllerAgentId),
           ).length,
       ...communicationMetrics(relevantCommunications, scopedAgentIds, agentId),
       mostRecentZeroDirective,

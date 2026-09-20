@@ -87,12 +87,17 @@ function asGeoJson(
         state: hex.state,
         controllerColor:
           hex.state === 'infected'
-            ? (effectiveColor(hex.controllerAgentId) ?? '#e44f45')
+            ? hex.controllerAgentId === null
+              ? '#8d8069'
+              : (effectiveColor(hex.controllerAgentId) ?? '#e44f45')
             : '#4a8178',
         controllerName:
           hex.state === 'infected'
-            ? (agentById.get(hex.controllerAgentId)?.name ?? 'Unknown agent')
+            ? hex.controllerAgentId === null
+              ? 'Abandoned infection'
+              : (agentById.get(hex.controllerAgentId)?.name ?? 'Unknown agent')
             : 'Uncontrolled',
+        abandoned: hex.state === 'infected' && hex.controllerAgentId === null,
         selected: hex.cell === selectedCell,
       },
       geometry: {
@@ -445,11 +450,15 @@ export function WorldMap(props: WorldMapProps) {
       markersRef.current.push(marker);
     }
     if (simulatedPlayer) {
+      const playerName =
+        simulatedPlayer.profile === 'trail-hunter-v1'
+          ? 'Trail hunter'
+          : 'Casual cleaner';
       const element = document.createElement('div');
       element.className = 'simulated-player-marker';
       element.setAttribute('role', 'img');
-      element.setAttribute('aria-label', 'Casual cleaner simulated player');
-      element.title = `Casual cleaner · ${simulatedPlayer.currentCell}`;
+      element.setAttribute('aria-label', `${playerName} simulated player`);
+      element.title = `${playerName} · ${simulatedPlayer.currentCell}`;
       element.textContent = 'P';
       const [lat, lng] = cellToLatLng(simulatedPlayer.currentCell);
       markersRef.current.push(
@@ -485,7 +494,8 @@ export function WorldMap(props: WorldMapProps) {
         }
         data-controller-colors={hexes
           .flatMap((hex) => {
-            if (hex.state === 'open') return [];
+            if (hex.state === 'open' || hex.controllerAgentId === null)
+              return [];
             const effectiveColor = resolveAgentColor(
               { world: { agents, alliances } } as unknown as Pick<
                 SimulationSnapshot,
@@ -508,7 +518,11 @@ export function WorldMap(props: WorldMapProps) {
         {simulatedPlayer && (
           <span data-testid="simulated-player-activity">
             {' '}
-            · Cleaner {simulatedPlayer.metrics.movements} moved ·{' '}
+            ·{' '}
+            {simulatedPlayer.profile === 'trail-hunter-v1'
+              ? 'Trail hunter'
+              : 'Cleaner'}{' '}
+            {simulatedPlayer.metrics.movements} moved ·{' '}
             {simulatedPlayer.metrics.cellsDisinfected} cleaned ·{' '}
             {simulatedPlayer.metrics.blockedDisinfections} blocked
           </span>

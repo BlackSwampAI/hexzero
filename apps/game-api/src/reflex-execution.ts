@@ -9,6 +9,7 @@ import {
   reflexObservationSchema,
   swarmDirectiveSchema,
   type H3Cell,
+  type CaptureAlert,
   type ProviderFailure,
   type ProviderMetadata,
   type ReflexDecision,
@@ -28,6 +29,7 @@ export interface ReflexLocalHistory {
   recentCleanedCells?: readonly H3Cell[];
   territoryDelta?: number;
   recentActionOutcome?: 'success' | 'rejected' | 'unknown';
+  captureAlerts?: readonly CaptureAlert[];
 }
 
 export interface CompiledReflexObservation {
@@ -165,6 +167,9 @@ export function compileReflexObservation(
       recentActionOutcome: history.recentActionOutcome ?? 'unknown',
     },
     relevantRecentFacts: [],
+    ...(history.captureAlerts?.length
+      ? { captureAlerts: [...history.captureAlerts].slice(-4) }
+      : {}),
     candidates,
   });
   return { observation, actions };

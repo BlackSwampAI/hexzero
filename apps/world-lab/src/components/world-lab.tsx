@@ -251,6 +251,8 @@ export function WorldLab() {
     if (
       next.status === 'configuration-error' ||
       next.status === 'budget-exhausted' ||
+      next.status === 'patient-zero-captured' ||
+      next.status === 'infection-eliminated' ||
       next.world.hexes.every(({ state }) => state === 'infected') ||
       (boundedRunTargetRef.current !== null &&
         next.tickNumber >= boundedRunTargetRef.current)
@@ -263,7 +265,7 @@ export function WorldLab() {
     setSelectedAgentId((current) =>
       next.world.agents.some(({ id }) => id === current)
         ? current
-        : next.world.agents[0]!.id,
+        : (next.world.agents[0]?.id ?? null),
     );
   }, []);
 
@@ -645,7 +647,7 @@ export function WorldLab() {
       setSelectedAgentId((selected) =>
         payload.snapshot.world.agents.some(({ id }) => id === selected)
           ? selected
-          : payload.snapshot.world.agents[0]!.id,
+          : (payload.snapshot.world.agents[0]?.id ?? null),
       );
     } catch {
       setUiError('Reset failed safely. The existing world was left intact.');
@@ -779,7 +781,9 @@ export function WorldLab() {
       ? 'reconciling-request'
       : inFlight
         ? 'waiting-for-model'
-        : snapshot.status === 'waiting-for-model' ||
+        : snapshot.status === 'patient-zero-captured' ||
+            snapshot.status === 'infection-eliminated' ||
+            snapshot.status === 'waiting-for-model' ||
             snapshot.status === 'configuration-error' ||
             snapshot.status === 'provider-error' ||
             snapshot.status === 'budget-exhausted'
@@ -788,6 +792,9 @@ export function WorldLab() {
             ? 'running'
             : 'paused';
   const activeTick = snapshot.status === 'waiting-for-model';
+  const terminal =
+    snapshot.status === 'patient-zero-captured' ||
+    snapshot.status === 'infection-eliminated';
   const swarmMode = snapshot.scenario.cognitionMode === 'zero-swarm-v1';
   const visibleActivityTab = swarmMode ? 'swarm' : activityTab;
   const zeroAgentId = snapshot.scenario.patientZeroAgentId;
@@ -1045,6 +1052,7 @@ export function WorldLab() {
                 activeTick ||
                 personalityPending ||
                 fullyInfected ||
+                terminal ||
                 !executionReady ||
                 snapshot.experiment.attemptAccounting.exhausted ||
                 snapshot.status === 'budget-exhausted'
@@ -1069,6 +1077,7 @@ export function WorldLab() {
               activeTick ||
               running ||
               personalityPending ||
+              terminal ||
               !executionReady ||
               snapshot.pendingFailedTurn !== null ||
               snapshot.experiment.attemptAccounting.exhausted ||
@@ -1273,17 +1282,25 @@ export function WorldLab() {
             {recoveryNotice}
           </div>
         )}
-        {(!modelsReady || uiError || fullyInfected || personalityNotice) && (
+        {(!modelsReady ||
+          uiError ||
+          fullyInfected ||
+          terminal ||
+          personalityNotice) && (
           <div className="command-alert" role="alert">
             {uiError ??
               (fullyInfected
                 ? 'Development world fully infected. Automatic playback is paused; Single tick remains a manual cost-incurring diagnostic action.'
-                : (personalityNotice ??
-                  (swarmMode
-                    ? 'Select an available model for Agent Zero before starting.'
-                    : reasoningUnavailable
-                      ? 'A saved reasoning profile is no longer advertised by its model. Select an available profile before starting.'
-                      : 'Select an available compatible model for every agent before starting.')))}
+                : terminal
+                  ? snapshot.status === 'patient-zero-captured'
+                    ? 'Patient Zero was captured by the simulated player. This experiment is complete; reset or apply a new World Setup to run again.'
+                    : 'All infection has been eliminated. This experiment is complete; reset or apply a new World Setup to run again.'
+                  : (personalityNotice ??
+                    (swarmMode
+                      ? 'Select an available model for Agent Zero before starting.'
+                      : reasoningUnavailable
+                        ? 'A saved reasoning profile is no longer advertised by its model. Select an available profile before starting.'
+                        : 'Select an available compatible model for every agent before starting.')))}
           </div>
         )}
         {!swarmMode && !snapshot.providerConfigured && (
@@ -1330,7 +1347,7 @@ export function WorldLab() {
             setSelectedAgentId((selected) =>
               next.world.agents.some(({ id }) => id === selected)
                 ? selected
-                : next.world.agents[0]!.id,
+                : (next.world.agents[0]?.id ?? null),
             );
             setExportAgentIds((selected) =>
               selected.filter((id) =>
@@ -1796,7 +1813,10 @@ function HexInspector({
         </div>
         <div>
           <dt>Controller</dt>
-          <dd>{controller?.name ?? 'None'}</dd>
+          <dd>
+            {controller?.name ??
+              (hex.state === 'infected' ? 'Abandoned infection' : 'None')}
+          </dd>
         </div>
         {!swarmMode && (
           <>
@@ -2566,10 +2586,30 @@ function WorldSetupPanel({
                 })
               }
             />
-            Enable casual cleaner
+            Enable simulated player pressure
           </label>
           <label>
-            Casual cleaner simulation seed
+            Simulated player profile
+            <select
+              value={draft.simulatedPlayer.profile}
+              disabled={!draft.simulatedPlayer.enabled}
+              onChange={(event) =>
+                setDraft({
+                  ...draft,
+                  simulatedPlayer: {
+                    ...draft.simulatedPlayer,
+                    profile: event.target.value as
+                      'casual-cleaner' | 'trail-hunter-v1',
+                  },
+                })
+              }
+            >
+              <option value="casual-cleaner">Casual cleaner</option>
+              <option value="trail-hunter-v1">Trail hunter v1</option>
+            </select>
+          </label>
+          <label>
+            Simulated player seed
             <input
               value={draft.simulatedPlayer.seed}
               maxLength={80}
@@ -2595,9 +2635,9 @@ function WorldSetupPanel({
           </label>
         </div>
         <p id="objective-version-provenance">
-          Engine-owned version provenance. Enabling the casual cleaner selects
-          durable-influence-v3; disabling it selects durable-influence-v2. This
-          is not a seed and cannot be edited.
+          Engine-owned version provenance. Enabling simulated player pressure
+          selects durable-influence-v3; disabling it selects
+          durable-influence-v2. This is not a seed and cannot be edited.
         </p>
       </section>
       <section className="setup-section">
@@ -2782,7 +2822,7 @@ function WorldSetupPanel({
               {preview.scenario.areaSquareKilometers.toFixed(2)} km² ·{' '}
               {preview.scenario.startingCells.length} valid spawns
               {preview.scenario.simulatedPlayer.enabled
-                ? ' · 1 seeded casual cleaner'
+                ? ` · 1 seeded ${preview.scenario.simulatedPlayer.profile === 'trail-hunter-v1' ? 'trail hunter' : 'casual cleaner'}`
                 : ' · player pressure disabled'}
             </p>
             {preview.scenario.setupWarnings.map((warning) => (

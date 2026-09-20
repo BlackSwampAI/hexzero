@@ -4,6 +4,11 @@ Simulated-player evidence is engine-authored. Agent observations may contain
 bounded recent disinfection evidence but never the cleaner's live cell, route,
 or future timing. World Lab is intentionally omniscient and may show those
 details. Agent-authored text cannot create or modify player activity.
+The optional trail hunter selects routes from visible infected cells only.
+The engine checks co-location for capture after movement; it does not use hidden
+agent positions as targets. Capture events and abandoned controllers are
+authoritative state and are safe to export without exposing player routing
+internals to agent providers.
 Patient Zero alone additionally receives a bounded current-interval feed of
 successful disinfections and occupied-cell blocks. Its named agent/alliance
 attribution is engine-authored; it contains no movement events, player ID,

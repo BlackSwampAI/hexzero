@@ -95,7 +95,10 @@ export const h3CellSchema = z
   .brand<'H3Cell'>();
 export type H3Cell = z.infer<typeof h3CellSchema>;
 
-export const simulatedPlayerProfileSchema = z.literal('casual-cleaner');
+export const simulatedPlayerProfileSchema = z.enum([
+  'casual-cleaner',
+  'trail-hunter-v1',
+]);
 export type SimulatedPlayerProfile = z.infer<
   typeof simulatedPlayerProfileSchema
 >;
@@ -140,7 +143,7 @@ export const hexSchema = z.discriminatedUnion('state', [
   z.object({
     cell: h3CellSchema,
     state: z.literal('infected'),
-    controllerAgentId: agentIdSchema,
+    controllerAgentId: agentIdSchema.nullable(),
   }),
 ]);
 export type Hex = z.infer<typeof hexSchema>;
@@ -562,6 +565,16 @@ const reflexCandidateSchema = z
   })
   .strict();
 
+export const captureAlertSchema = z
+  .object({
+    capturedAgentId: agentIdSchema,
+    cell: h3CellSchema,
+    originatingTick: z.number().int().nonnegative(),
+    abandonedCellCount: z.number().int().nonnegative(),
+  })
+  .strict();
+export type CaptureAlert = z.infer<typeof captureAlertSchema>;
+
 export const reflexObservationSchema = z
   .object({
     agentId: agentIdSchema,
@@ -576,6 +589,7 @@ export const reflexObservationSchema = z
       })
       .strict(),
     relevantRecentFacts: z.array(z.string().trim().min(1).max(160)).max(6),
+    captureAlerts: z.array(captureAlertSchema).max(4).optional(),
     candidates: z.array(reflexCandidateSchema).min(1).max(9),
   })
   .strict()
@@ -648,6 +662,7 @@ export const swarmReplanReasonSchema = z.enum([
   'territory-loss',
   'high-pressure',
   'player-disinfection',
+  'roster-changed',
 ]);
 export type SwarmReplanReason = z.infer<typeof swarmReplanReasonSchema>;
 
@@ -828,7 +843,7 @@ export const hexCapturedWorldEventSchema = worldEventBaseSchema.extend({
   type: z.literal('hex-captured'),
   cell: h3CellSchema,
   controllerAgentId: agentIdSchema,
-  previousControllerAgentId: agentIdSchema,
+  previousControllerAgentId: agentIdSchema.nullable(),
 });
 export type HexCapturedWorldEvent = z.infer<typeof hexCapturedWorldEventSchema>;
 const agentWaitedWorldEventSchema = worldEventBaseSchema.extend({
@@ -851,7 +866,7 @@ export const hexDisinfectedWorldEventSchema =
   simulatedPlayerEventBaseSchema.extend({
     type: z.literal('hex-disinfected'),
     cell: h3CellSchema,
-    previousControllerAgentId: agentIdSchema,
+    previousControllerAgentId: agentIdSchema.nullable(),
   });
 export const simulatedPlayerCleanBlockedEventSchema =
   simulatedPlayerEventBaseSchema.extend({
@@ -859,10 +874,18 @@ export const simulatedPlayerCleanBlockedEventSchema =
     cell: h3CellSchema,
     blockingAgentId: agentIdSchema,
   });
+export const simulatedPlayerAgentCapturedEventSchema =
+  simulatedPlayerEventBaseSchema.extend({
+    type: z.literal('simulated-player-agent-captured'),
+    cell: h3CellSchema,
+    capturedAgentId: agentIdSchema,
+    abandonedCellCount: z.number().int().nonnegative(),
+  });
 export const simulatedPlayerEventSchema = z.discriminatedUnion('type', [
   simulatedPlayerMovedEventSchema,
   hexDisinfectedWorldEventSchema,
   simulatedPlayerCleanBlockedEventSchema,
+  simulatedPlayerAgentCapturedEventSchema,
 ]);
 export type SimulatedPlayerEvent = z.infer<typeof simulatedPlayerEventSchema>;
 
@@ -946,6 +969,7 @@ export const safeExperimentWorldEventSchema = z.discriminatedUnion('type', [
   simulatedPlayerMovedEventSchema,
   hexDisinfectedWorldEventSchema,
   simulatedPlayerCleanBlockedEventSchema,
+  simulatedPlayerAgentCapturedEventSchema,
 ]);
 export type SafeExperimentWorldEvent = z.infer<
   typeof safeExperimentWorldEventSchema
@@ -969,6 +993,7 @@ export const worldEventSchema = z.discriminatedUnion('type', [
   simulatedPlayerMovedEventSchema,
   hexDisinfectedWorldEventSchema,
   simulatedPlayerCleanBlockedEventSchema,
+  simulatedPlayerAgentCapturedEventSchema,
 ]);
 export type WorldEvent = z.infer<typeof worldEventSchema>;
 
@@ -1118,10 +1143,7 @@ const worldSnapshotObjectSchema = z.object({
     .array(hexSchema)
     .min(1)
     .max(WORLD_SCENARIO_LIMITS.maximumGeneratedCells),
-  agents: z
-    .array(agentSchema)
-    .min(WORLD_SCENARIO_LIMITS.minimumAgents)
-    .max(WORLD_SCENARIO_LIMITS.maximumAgents),
+  agents: z.array(agentSchema).min(0).max(WORLD_SCENARIO_LIMITS.maximumAgents),
   events: z.array(worldEventSchema).max(120),
   alliances: z
     .array(allianceSchema)
@@ -1156,7 +1178,11 @@ function validateWorldControllers(
       message: 'The simulated player must remain inside the world.',
     });
   for (const [index, hex] of world.hexes.entries()) {
-    if (hex.state === 'infected' && !agentIds.has(hex.controllerAgentId))
+    if (
+      hex.state === 'infected' &&
+      hex.controllerAgentId !== null &&
+      !agentIds.has(hex.controllerAgentId)
+    )
       context.addIssue({
         code: 'custom',
         path: ['hexes', index, 'controllerAgentId'],
@@ -1274,9 +1300,9 @@ export const cellObservationSchema = z.discriminatedUnion('state', [
   z.object({
     cell: h3CellSchema,
     state: z.literal('infected'),
-    controllerAgentId: agentIdSchema,
+    controllerAgentId: agentIdSchema.nullable(),
     controllerAllianceId: allianceIdSchema.nullable(),
-    effectiveColor: colorSchema,
+    effectiveColor: colorSchema.nullable(),
   }),
 ]);
 export type CellObservation = z.infer<typeof cellObservationSchema>;
@@ -1356,7 +1382,7 @@ export const territoryScoreboardEntrySchema = z.object({
 });
 export const territoryScoreboardSchema = z
   .array(territoryScoreboardEntrySchema)
-  .min(WORLD_SCENARIO_LIMITS.minimumAgents)
+  .min(0)
   .max(WORLD_SCENARIO_LIMITS.maximumAgents)
   .refine(
     (entries) =>
@@ -2074,6 +2100,7 @@ const agentObservationObjectSchema = z.object({
     })
     .strict()
     .default({ enabled: false, recentThreats: [] }),
+  captureAlerts: z.array(captureAlertSchema).max(4).optional(),
   recentMovements: z
     .array(
       z.object({
@@ -3300,6 +3327,8 @@ export const simulationStatusSchema = z.enum([
   'configuration-error',
   'provider-error',
   'budget-exhausted',
+  'patient-zero-captured',
+  'infection-eliminated',
 ]);
 export type SimulationStatus = z.infer<typeof simulationStatusSchema>;
 
@@ -3407,7 +3436,7 @@ export const simulationSnapshotSchema = z
       .nullable()
       .default(null),
     resolutionOrder: z.array(agentIdSchema).default([]),
-    nextAgentId: agentIdSchema,
+    nextAgentId: agentIdSchema.nullable(),
     activeAgentId: agentIdSchema.nullable(),
     cancellationRequested: z.boolean().default(false),
     pendingFailedTurn: z
@@ -3433,10 +3462,16 @@ export const simulationSnapshotSchema = z
       .strict()
       .optional(),
     modelConfiguration: experimentModelConfigurationSchema,
-    behaviorConfiguration: behaviorConfigurationSchema.optional(),
+    behaviorConfiguration: behaviorConfigurationSchema
+      .safeExtend({
+        assignments: z
+          .array(behaviorAssignmentSchema)
+          .max(WORLD_SCENARIO_LIMITS.maximumAgents),
+      })
+      .optional(),
     resolvedModels: z
       .array(resolvedAgentModelSchema)
-      .min(WORLD_SCENARIO_LIMITS.minimumAgents)
+      .min(0)
       .max(WORLD_SCENARIO_LIMITS.maximumAgents),
     agentGoals: z
       .array(
@@ -3483,6 +3518,26 @@ export const simulationSnapshotSchema = z
   })
   .superRefine((snapshot, context) => {
     const rosterIds = new Set(snapshot.world.agents.map(({ id }) => id));
+    const terminal =
+      snapshot.status === 'patient-zero-captured' ||
+      snapshot.status === 'infection-eliminated';
+    if (
+      (rosterIds.size === 0 && snapshot.nextAgentId !== null) ||
+      (rosterIds.size > 0 &&
+        (snapshot.nextAgentId === null || !rosterIds.has(snapshot.nextAgentId)))
+    )
+      context.addIssue({
+        code: 'custom',
+        path: ['nextAgentId'],
+        message:
+          'Next agent must identify an active agent, or be null when none remain.',
+      });
+    if (rosterIds.size === 0 && snapshot.status !== 'infection-eliminated')
+      context.addIssue({
+        code: 'custom',
+        path: ['status'],
+        message: 'A world without active agents has an eliminated infection.',
+      });
     if (
       snapshot.scenario.simulatedPlayer.enabled !==
         Boolean(snapshot.world.simulatedPlayer) ||
@@ -3523,16 +3578,46 @@ export const simulationSnapshotSchema = z
             'An unstarted simulation cannot have tick resolution metadata.',
         });
     } else if (
-      snapshot.resolutionOrder.length !== rosterIds.size ||
-      new Set(snapshot.resolutionOrder).size !== rosterIds.size ||
-      snapshot.resolutionOrder.some((id) => !rosterIds.has(id)) ||
-      snapshot.lastTickIntervalMinutes === null
+      terminal &&
+      (snapshot.resolutionOrder.length !== 0 ||
+        snapshot.lastTickIntervalMinutes === null)
+    )
+      context.addIssue({
+        code: 'custom',
+        path: ['resolutionOrder'],
+        message:
+          'A terminal player-only tick must not resolve agent actions and requires an interval.',
+      });
+    else if (
+      !terminal &&
+      (snapshot.resolutionOrder.length !== rosterIds.size ||
+        new Set(snapshot.resolutionOrder).size !== rosterIds.size ||
+        snapshot.resolutionOrder.some((id) => !rosterIds.has(id)) ||
+        snapshot.lastTickIntervalMinutes === null)
     )
       context.addIssue({
         code: 'custom',
         path: ['resolutionOrder'],
         message:
           'A committed tick requires one ordered entry per active agent and an interval.',
+      });
+    if (
+      snapshot.status === 'infection-eliminated' &&
+      snapshot.world.agents.length !== 0
+    )
+      context.addIssue({
+        code: 'custom',
+        path: ['world', 'agents'],
+        message: 'An eliminated infection cannot retain active agents.',
+      });
+    if (
+      snapshot.status === 'patient-zero-captured' &&
+      rosterIds.has(snapshot.scenario.patientZeroAgentId)
+    )
+      context.addIssue({
+        code: 'custom',
+        path: ['world', 'agents'],
+        message: 'Patient Zero cannot remain active after capture.',
       });
     if (
       snapshot.experiment.currentTerritory.length !== rosterIds.size ||
@@ -3598,7 +3683,7 @@ export const simulationSnapshotSchema = z
       snapshot.world.agents.map(({ id }) => [id, 0]),
     );
     for (const hex of snapshot.world.hexes) {
-      if (hex.state === 'infected')
+      if (hex.state === 'infected' && hex.controllerAgentId !== null)
         authoritative.set(
           hex.controllerAgentId,
           (authoritative.get(hex.controllerAgentId) ?? 0) + 1,

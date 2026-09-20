@@ -255,6 +255,13 @@ adjacent H3 cell per explicit interval toward visible infection, uses its seed
 for stable tie-breaking, and attempts at most one disinfection. An occupied
 infected cell blocks cleaning. Other profiles and capture remain deferred.
 
+The later `trail-hunter-v1` experiment adds a separate optional profile. It
+routes from visible infected cells without using hidden agent positions as
+targets. Co-location can capture an agent, immediately remove it, and leave its
+territory infected but abandoned. If this removes the last agent, or removes
+Patient Zero from a zero-swarm experiment, the run records a terminal outcome.
+Replacement spawning remains a later population-maintenance milestone.
+
 Slice D1.1 adds no cleaner mechanics. The single Patient Zero receives a
 current-interval-only global feed of authoritative successful disinfections and
 occupied-cell blocked-clean encounters. Entries identify the affected or
