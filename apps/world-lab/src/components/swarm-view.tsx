@@ -370,6 +370,9 @@ export function SwarmActivityPanel({
     <section
       className="panel swarm-panel swarm-activity"
       aria-label="Swarm activity"
+      id="activity-swarm"
+      role="tabpanel"
+      tabIndex={0}
     >
       <p className="panel-kicker">Swarm activity</p>
       <h2>Agent Zero strategy</h2>

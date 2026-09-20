@@ -1003,6 +1003,12 @@ h2 {
   overflow: hidden;
   border-bottom: 0;
 }
+.bottom-dock.activity-dock > .swarm-activity {
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
 .bottom-dock .event-panel {
   display: flex;
   flex-direction: column;

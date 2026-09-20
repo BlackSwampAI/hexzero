@@ -53,7 +53,8 @@ choices from inconsistent probability distributions and retain factual token
 usage for rejected decisions; World Lab and the read-only diagnostic show
 these safe worker failure reasons. Cost display tests separate provider-reported
 cost from admission exposure and show that TypeSafe Jev monetary cost remains
-unknown without provider billing data.
+unknown without provider billing data. The browser suite checks that a long
+swarm activity log scrolls inside the fixed-height bottom dock.
 
 Attempt-budget tests use deterministic providers and cover whole-roster tick
 admission, retry permits, cancellation finalization, and the distinction

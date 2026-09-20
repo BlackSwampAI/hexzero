@@ -7,6 +7,41 @@ const CIPHER_ID = '89ce9ddb-611f-4a46-8f7b-36e656494aa2';
 const MINGLE_PERSONALITY =
   'You are a social coalition-builder. Seek agents, initiate and continue conversations, propose alliances, answer offers, negotiate borders, and coordinate captures against dominant rivals. Prefer cooperation and public diplomacy over silent expansion, but protect your own territory and leave an alliance that repeatedly ignores or exploits you. Make concrete proposals rather than merely announcing actions.';
 
+test('keeps long swarm activity scrollable inside the bottom dock', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await expect(page.getByText('Deterministic test model')).toBeVisible();
+  const dock = page.locator('.bottom-dock.activity-dock');
+  await dock.evaluate((element) => {
+    element.querySelector(':scope > .panel')?.remove();
+    const panel = document.createElement('section');
+    panel.className = 'panel swarm-panel swarm-activity';
+    panel.setAttribute('aria-label', 'Swarm activity');
+    panel.setAttribute('role', 'tabpanel');
+    panel.tabIndex = 0;
+    for (let index = 0; index < 30; index += 1) {
+      const entry = document.createElement('p');
+      entry.textContent = `Committed swarm tick ${index + 1}`;
+      panel.append(entry);
+    }
+    element.append(panel);
+  });
+  const log = page.getByRole('tabpanel', { name: 'Swarm activity' });
+  await expect(log).toHaveCSS('overflow-y', 'auto');
+  expect(
+    await log.evaluate(
+      (element) => element.scrollHeight > element.clientHeight,
+    ),
+  ).toBe(true);
+  await log.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+  });
+  expect(await log.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  const dockBox = await dock.boundingBox();
+  expect(dockBox?.height ?? Infinity).toBeLessThanOrEqual(211);
+});
+
 test('runs the complete deterministic World Lab browser flow', async ({
   page,
 }) => {

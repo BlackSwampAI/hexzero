@@ -111,6 +111,9 @@ describe('swarm telemetry panels', () => {
       retryable: false,
     };
     render(<SwarmActivityPanel snapshot={value} />);
+    expect(
+      screen.getByRole('tabpanel', { name: 'Swarm activity' }),
+    ).toHaveAttribute('tabindex', '0');
     const diagnostic = screen.getByRole('status');
     expect(diagnostic).toHaveTextContent('0 moves');
     expect(diagnostic).toHaveTextContent('1 infections');
