@@ -1353,6 +1353,65 @@ describe('WorldLab', () => {
     expect(overflowTrigger.closest('details')).not.toHaveAttribute('open');
   });
 
+  it('lets an operator create a zero-swarm experiment from World Setup', async () => {
+    const swarm = simulationSnapshotSchema.parse({
+      ...initial,
+      scenario: { ...initial.scenario, cognitionMode: 'zero-swarm-v1' },
+      swarmProviderStatus: {
+        plannerMode: 'scripted-swarm-test',
+        plannerConfigured: false,
+        reflexMode: 'scripted-reflex-test',
+        reflexConfigured: false,
+      },
+    });
+    let previewMode: string | undefined;
+    let appliedMode: string | undefined;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith('/setup/preview')) {
+          const request = JSON.parse(String(init?.body)) as ReturnType<
+            typeof defaultWorldSetupRequest
+          >;
+          previewMode = request.cognitionMode;
+          return jsonResponse(previewWorldSetup(request));
+        }
+        if (url.endsWith('/experiment/setup')) {
+          appliedMode = (
+            JSON.parse(String(init?.body)) as ReturnType<
+              typeof defaultWorldSetupRequest
+            >
+          ).cognitionMode;
+          return jsonResponse({ snapshot: swarm });
+        }
+        return jsonResponse(initial);
+      }),
+    );
+    const user = userEvent.setup();
+    render(<WorldLab />);
+    expect(
+      await screen.findByText('Legacy multi-agent experiment'),
+    ).toBeVisible();
+    await openOverflow(user);
+    await user.click(screen.getByRole('button', { name: 'World setup' }));
+    await user.selectOptions(
+      screen.getByLabelText('Cognition mode'),
+      'zero-swarm-v1',
+    );
+    await user.click(screen.getByRole('button', { name: 'Preview' }));
+    expect(previewMode).toBe('zero-swarm-v1');
+    await user.click(
+      screen.getByRole('button', { name: 'Apply / Create Experiment' }),
+    );
+    expect(appliedMode).toBe('zero-swarm-v1');
+    expect(await screen.findByText('Zero swarm v1 experiment')).toBeVisible();
+    expect(screen.getByRole('tab', { name: 'Swarm' })).toBeInTheDocument();
+    expect(
+      screen.queryByRole('tab', { name: 'Public chat' }),
+    ).not.toBeInTheDocument();
+  });
+
   it.each(['balanced-random', 'fully-random'] as const)(
     'previews and applies reproducible seed edits with regenerated %s assignments',
     async (behaviorMode) => {

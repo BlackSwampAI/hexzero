@@ -7,6 +7,17 @@
 
 This is a Jev ablation, not a general claim that zero-swarm is better than legacy multi-agent mode. Legacy is deliberately not included in the first live command because its provider-call pattern and cognition are different.
 
+## Observe one swarm in World Lab
+
+World Lab opens in the legacy mode by default. To watch one zero-swarm experiment:
+
+1. Set `OPENROUTER_API_KEY` and `TYPESAFE_API_KEY` for the Game API process, then run `pnpm dev`. The keys are server-only. `pnpm dev:test-provider` does not make real provider calls.
+2. Open World Lab at `http://localhost:3000`. In the top-right **More World Lab actions** menu, open **World setup**. Set **Cognition mode** to **Zero swarm v1 (Agent Zero + Jev)**. Enable simulated player pressure and select **Trail hunter v1** if you want capture pressure. Set bounded provider attempt and credit admission limits.
+3. Select **Preview**, then **Apply / Create Experiment**. The header will say **Zero swarm v1 experiment**. In **Agents**, select an available model for Agent Zero.
+4. Use **Single tick** to start. The **Scoreboard** tab shows Zero's strategy and worker directives; selecting a worker shows its chosen action, confidence, and probabilities. The **Swarm** activity tab shows the tick history. A provider fallback notice means the corresponding key or provider is unavailable.
+
+This UI is for inspecting one run. The matched Jev-versus-deterministic comparison below runs separately and produces a JSON report; it does not appear as a new World Lab screen.
+
 ## Run a bounded experiment
 
 Choose the Zero model explicitly and supply both keys in the invoking shell. The command does not load `.env` files. It makes no network call without `--confirm-provider-costs`.

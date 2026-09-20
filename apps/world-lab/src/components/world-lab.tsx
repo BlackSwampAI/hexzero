@@ -843,7 +843,9 @@ export function WorldLab() {
             WL
           </span>
           <div>
-            <p className="eyebrow">Developer simulation</p>
+            <p className="eyebrow">
+              {swarmMode ? 'Zero swarm v1' : 'Legacy multi-agent'} experiment
+            </p>
             <h1>World Lab</h1>
           </div>
           <nav className="workspace-switcher" aria-label="World Lab workspaces">
@@ -2267,6 +2269,32 @@ function WorldSetupPanel({
         </>
       }
     >
+      <section className="setup-section">
+        <h3>Execution mode</h3>
+        <label>
+          Cognition mode
+          <select
+            value={draft.cognitionMode}
+            onChange={(event) =>
+              setDraft({
+                ...draft,
+                cognitionMode: event.target
+                  .value as WorldSetupRequest['cognitionMode'],
+              })
+            }
+          >
+            <option value="legacy-multi-agent">Legacy multi-agent</option>
+            <option value="zero-swarm-v1">
+              Zero swarm v1 (Agent Zero + Jev)
+            </option>
+          </select>
+        </label>
+        <p className="field-help">
+          Choose Zero swarm v1 to run one Agent Zero planner with Jev workers.
+          Preview and apply to create a new experiment. The live comparison
+          report is a separate command-line experiment.
+        </p>
+      </section>
       <section className="setup-section">
         <h3>World</h3>
         <button
