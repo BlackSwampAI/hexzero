@@ -34,6 +34,14 @@ their nested rollups.
 
 ## Secrets and deployment
 
+`TYPESAFE_API_KEY` is server-only for the zero-swarm reflex provider. Jev sees
+compact semantic state and opaque candidate IDs. The outbound state omits H3
+cell IDs and tick numbers; the server retains directive targets and the action
+mapping. The key, raw
+TypeSafe requests and responses, and provider error bodies never enter safe
+telemetry, World Lab, archives, or exports. TypeSafe token usage is factual;
+no monetary cost is inferred from it.
+
 `OPENROUTER_API_KEY` is the only required OpenRouter environment value and is read only by the Game API process. It never enters catalog DTOs, assignments, exports, fixtures, browser responses, errors, or logs. The repository-root `.env` is ignored; `.env.example` contains only a placeholder.
 
 The development API has no authentication, rate limiting, or provider-account balance enforcement. It does enforce server-owned per-experiment provider-attempt and conservative credit-admission ceilings configured by World Setup. Credit reservations bound admission exposure but cannot guarantee the upstream bill, especially when reported cost exceeds the operator's reservation. It binds to loopback and its CORS allowlist is limited to the documented local World Lab origins. Do not deploy its cost-incurring tick endpoint to unauthenticated public traffic.

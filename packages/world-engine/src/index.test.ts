@@ -15,6 +15,7 @@ import {
   areAdjacent,
   createDevelopmentWorld,
   deterministicAllianceColor,
+  enumerateLegalWorldActions,
   getCaptureEligibility,
   getProposalTargetEligibility,
   expireAllianceProposals,
@@ -198,6 +199,32 @@ describe('H3 movement', () => {
       accepted: false,
       reason: 'not-adjacent',
     });
+  });
+
+  it('enumerates only engine-legal actions in deterministic order', () => {
+    const before = stateWithAgent();
+    const first = enumerateLegalWorldActions(before, agentId);
+    const second = enumerateLegalWorldActions(before, agentId);
+
+    expect(first).toEqual(second);
+    expect(first).toContainEqual({ type: 'infect' });
+    expect(first).toContainEqual({ type: 'wait' });
+    expect(first).not.toContainEqual({ type: 'capture' });
+    expect(
+      first
+        .filter((action) => action.type === 'move')
+        .map((action) => action.targetCell),
+    ).toEqual(
+      first
+        .filter((action) => action.type === 'move')
+        .map((action) => action.targetCell)
+        .slice()
+        .sort(),
+    );
+    for (const action of first)
+      expect(
+        applyWorldAction(before, agentId, action, context).result,
+      ).toMatchObject({ accepted: true });
   });
 });
 

@@ -1,5 +1,15 @@
 # Architecture
 
+## Zero-swarm PR A seam
+
+`cognitionMode` distinguishes `legacy-multi-agent` from `zero-swarm-v1` in
+scenarios, snapshots, and exports. The legacy tick remains the active
+production executor. Until the Agent Zero planner is connected in PR B, a
+zero-swarm production tick is rejected explicitly. The separate reflex seam
+compiles engine-legal physical actions from a frozen world, describes them as
+opaque candidates, asks Jev to select one, and maps the chosen ID back to a
+world action for normal engine validation. See ADR 0028.
+
 Provider-attempt and credit-exposure admission are owned by `SimulationService`. Its ledger is
 deliberately separate from deterministic world state and committed-turn
 metrics: tick rollback cannot erase provider work that may already be billed.
