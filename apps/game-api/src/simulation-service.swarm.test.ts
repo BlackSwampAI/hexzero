@@ -1,3 +1,4 @@
+import { gridDistance } from 'h3-js';
 import { describe, expect, it } from 'vitest';
 import {
   BrowserTestAgentProvider,
@@ -43,6 +44,7 @@ class InspectingPlanner implements SwarmPlanner {
   constructor(
     private readonly failure: boolean | number = false,
     private readonly directiveLifetime = 5,
+    private readonly targetDistance = 0,
   ) {}
   async plan(
     observation: ZeroStrategicObservation,
@@ -73,16 +75,31 @@ class InspectingPlanner implements SwarmPlanner {
         )!.id,
         directives: observation.agents
           .filter(({ agentId }) => agentId !== observation.zeroAgentId)
-          .map((agent, index) => ({
-            id: `directive-${observation.tickNumber}-${index}`,
-            agentId: agent.agentId,
-            mission: 'hold',
-            targetCell: agent.position,
-            priority: 'normal',
-            riskTolerance: 'low',
-            issuedAtTick: observation.tickNumber,
-            expiresAtTick: observation.tickNumber + this.directiveLifetime,
-          })),
+          .map((agent, index) => {
+            const targetCell =
+              this.targetDistance === 0
+                ? agent.position
+                : observation.strategicTargetCells.find(
+                    (cell) =>
+                      cell !== agent.position &&
+                      gridDistance(cell, agent.position) ===
+                        this.targetDistance,
+                  );
+            if (!targetCell)
+              throw new Error(
+                `No strategic target is ${this.targetDistance} cells from ${agent.agentId}.`,
+              );
+            return {
+              id: `directive-${observation.tickNumber}-${index}`,
+              agentId: agent.agentId,
+              mission: 'hold',
+              targetCell,
+              priority: 'normal',
+              riskTolerance: 'low',
+              issuedAtTick: observation.tickNumber,
+              expiresAtTick: observation.tickNumber + this.directiveLifetime,
+            };
+          }),
       },
       metadata: { provider: 'scripted-test', model: 'test/zero', latencyMs: 0 },
     } satisfies Awaited<ReturnType<SwarmPlanner['plan']>>;
@@ -519,6 +536,117 @@ describe('zero-swarm SimulationService tick', () => {
     expect(third?.replanReasons).toContain('directive-expired');
     expect(third?.planSource).toBe('zero-llm');
     expect(planner.observations).toHaveLength(2);
+  });
+
+  it('reports workers who wait on their targets as at-target to Zero', async () => {
+    const planner = new InspectingPlanner(false, 1);
+    const waitingReflex: ReflexProvider = {
+      mode: 'scripted-reflex-test',
+      model: 'test-reflex',
+      configured: true,
+      async decide(observation, options) {
+        const choice = observation.candidates.find(({ description }) =>
+          description.startsWith('Remain on the current cell'),
+        )!;
+        const decision = reflexDecisionSchema.parse({
+          chosenCandidateId: choice.id,
+          confidence: 1,
+          probabilities: Object.fromEntries(
+            observation.candidates.map(({ id }) => [
+              id,
+              id === choice.id ? 1 : 0,
+            ]),
+          ),
+          model: 'test-reflex',
+          latencyMs: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          directiveId: observation.directive.id,
+          cognitionSource: 'jev-reflex',
+        });
+        options?.beginAttempt?.('initial')?.({
+          outcome: 'completed',
+          reflexDecision: decision,
+        });
+        return decision;
+      },
+    };
+    const simulation = setup(planner, waitingReflex);
+
+    await simulation.executeNextTick();
+    await simulation.executeNextTick();
+    await simulation.executeNextTick();
+
+    expect(
+      simulation
+        .getSnapshot()
+        .swarmTicks?.[1]?.workers.every(
+          ({ action, actionResult }) =>
+            action?.type === 'wait' && actionResult?.accepted === true,
+        ),
+    ).toBe(true);
+    const workerObservations = planner.observations[1]?.agents.filter(
+      ({ agentId }) => agentId !== planner.observations[1]?.zeroAgentId,
+    );
+    expect(workerObservations).toHaveLength(7);
+    expect(workerObservations?.map(({ workerStatus }) => workerStatus)).toEqual(
+      Array.from({ length: 7 }, () => 'at-target'),
+    );
+  });
+
+  it('reports accepted moves toward a target as advancing to Zero', async () => {
+    const planner = new InspectingPlanner(false, 5, 2);
+    const advancingReflex: ReflexProvider = {
+      mode: 'scripted-reflex-test',
+      model: 'test-reflex',
+      configured: true,
+      async decide(observation, options) {
+        const choice = observation.candidates.find(({ description }) =>
+          description.includes('This advances toward the assigned target.'),
+        )!;
+        const decision = reflexDecisionSchema.parse({
+          chosenCandidateId: choice.id,
+          confidence: 1,
+          probabilities: Object.fromEntries(
+            observation.candidates.map(({ id }) => [
+              id,
+              id === choice.id ? 1 : 0,
+            ]),
+          ),
+          replanProbability: 0.8,
+          model: 'test-reflex',
+          latencyMs: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          directiveId: observation.directive.id,
+          cognitionSource: 'jev-reflex',
+        });
+        options?.beginAttempt?.('initial')?.({
+          outcome: 'completed',
+          reflexDecision: decision,
+        });
+        return decision;
+      },
+    };
+    const simulation = setup(planner, advancingReflex);
+
+    await simulation.executeNextTick();
+    await simulation.executeNextTick();
+
+    expect(
+      simulation
+        .getSnapshot()
+        .swarmTicks?.[0]?.workers.every(
+          ({ action, actionResult }) =>
+            action?.type === 'move' && actionResult?.accepted === true,
+        ),
+    ).toBe(true);
+    const workerObservations = planner.observations[1]?.agents.filter(
+      ({ agentId }) => agentId !== planner.observations[1]?.zeroAgentId,
+    );
+    expect(workerObservations?.map(({ workerStatus }) => workerStatus)).toEqual(
+      Array.from({ length: 7 }, () => 'advancing'),
+    );
   });
 
   it('releases reuse-tick reservations when a worker request is cancelled', async () => {

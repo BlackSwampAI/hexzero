@@ -1916,7 +1916,7 @@ export class SimulationService {
         ]),
       );
       this.#lastSwarmPositions = new Map(
-        [...state.agents.values()].map(({ id, currentCell }) => [
+        [...candidate.agents.values()].map(({ id, currentCell }) => [
           id,
           currentCell,
         ]),
@@ -2768,14 +2768,27 @@ export class SimulationService {
           this.#lastValidSwarmPlan?.directives.find(
             ({ agentId }) => agentId === agent.id,
           ) ?? null;
-        const workerStatus =
-          priorWorker?.source === 'deterministic-fallback'
-            ? ('blocked' as const)
-            : priorWorker?.actionResult?.accepted
-              ? ('advancing' as const)
-              : priorWorker
-                ? ('stalled' as const)
-                : ('unknown' as const);
+        const previousCell = this.#lastSwarmPositions.get(agent.id);
+        let workerStatus:
+          'advancing' | 'at-target' | 'stalled' | 'blocked' | 'unknown' =
+          'unknown';
+        if (priorWorker) {
+          if (directive?.targetCell === agent.currentCell)
+            workerStatus = 'at-target';
+          else if (
+            directive?.targetCell &&
+            previousCell &&
+            gridRingDistance(agent.currentCell, directive.targetCell) <
+              gridRingDistance(previousCell, directive.targetCell)
+          )
+            workerStatus = 'advancing';
+          else if (
+            priorWorker.source === 'deterministic-fallback' ||
+            priorWorker.actionResult?.accepted === false
+          )
+            workerStatus = 'blocked';
+          else workerStatus = 'stalled';
+        }
         return {
           agentId: agent.id,
           position: agent.currentCell,

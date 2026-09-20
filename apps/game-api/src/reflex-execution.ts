@@ -133,14 +133,18 @@ export function compileReflexObservation(
         (distance(action.targetCell, directive.targetCell!) ?? Infinity) <
           currentDistance,
     );
-  const directiveProgress =
+  let directiveProgress: 'advancing' | 'at-target' | 'stalled' | 'blocked' =
+    'stalled';
+  if (directive.targetCell && currentDistance === 0)
+    directiveProgress = 'at-target';
+  else if (
     previousDistance !== null &&
     currentDistance !== null &&
     currentDistance < previousDistance
-      ? ('advancing' as const)
-      : directive.targetCell && currentDistance !== 0 && !hasForwardMove
-        ? ('blocked' as const)
-        : ('stalled' as const);
+  )
+    directiveProgress = 'advancing';
+  else if (directive.targetCell && currentDistance !== 0 && !hasForwardMove)
+    directiveProgress = 'blocked';
   const nearbyCleaned = (history.recentCleanedCells ?? [])
     .slice(-6)
     .map((cell) => distance(current, h3CellSchema.parse(cell)))

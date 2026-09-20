@@ -81,6 +81,23 @@ describe('zero-swarm reflex execution seam', () => {
     expect(applied.state.agents.get(agent.id)?.currentCell).toBe(targetCell);
   });
 
+  it('reports at-target after a worker reaches its directive target', () => {
+    const { state, agent, directive, targetCell } = fixture();
+    const moved = applyWorldAction(state, agent.id, {
+      type: 'move',
+      targetCell,
+    });
+    expect(moved.result.accepted).toBe(true);
+
+    const compiled = compileReflexObservation(moved.state, directive, {
+      previousCell: agent.currentCell,
+    });
+
+    expect(compiled.observation.currentSituation.directiveProgress).toBe(
+      'at-target',
+    );
+  });
+
   it('retains only the four most recent authoritative capture alerts', () => {
     const { state, directive } = fixture();
     const capturedAgentId = [...state.agents.keys()][0]!;
