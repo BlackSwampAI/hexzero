@@ -49,6 +49,13 @@ for safe completed exports, but is legacy-turn-centric and does not substitute
 for the same-scenario swarm harness. See
 [Zero-swarm offline comparison](ZERO_SWARM_COMPARISON.md).
 
+The separately opted-in live comparison runs real OpenRouter Agent Zero with
+either Jev workers or a deterministic legal-candidate worker policy, using
+identical scenario inputs and the same Zero model for both variants. It keeps
+the production planning cadence and engine resolution, and reports safe
+per-tick observations alongside the independent provider-attempt ledger. See
+[Live swarm comparison](LIVE_SWARM_COMPARISON.md).
+
 ## Simultaneous tick authority
 
 Before the frozen agent snapshot, the optional seeded simulated-player profile
