@@ -3,6 +3,7 @@ import {
   BrowserTestAgentProvider,
   ReflexProviderError,
   ScriptedReflexProvider,
+  type AgentProvider,
   type PlannerOptions,
   type ReflexProvider,
   type SwarmPlanner,
@@ -92,9 +93,10 @@ function setup(
   planner: SwarmPlanner,
   reflex: ReflexProvider,
   pressure = false,
+  provider: AgentProvider = new BrowserTestAgentProvider(),
 ) {
   const simulation = new SimulationService({
-    provider: new BrowserTestAgentProvider(),
+    provider,
     swarmPlanner: planner,
     reflexProvider: reflex,
     now: () => '2026-08-13T12:00:00.000Z',
@@ -129,6 +131,29 @@ function setup(
 }
 
 describe('zero-swarm SimulationService tick', () => {
+  it('reports swarm providers without requiring the unused legacy provider', () => {
+    const legacy: AgentProvider = {
+      mode: 'openrouter',
+      configured: false,
+      async decide() {
+        throw new Error('Legacy provider must not run in zero-swarm mode.');
+      },
+    };
+    const simulation = setup(
+      new InspectingPlanner(),
+      new ScriptedReflexProvider([{ chosenCandidateId: 'action_0' }]),
+      false,
+      legacy,
+    );
+    const snapshot = simulation.getSnapshot();
+    expect(snapshot.providerConfigured).toBe(false);
+    expect(snapshot.status).toBe('paused');
+    expect(snapshot.swarmProviderStatus).toMatchObject({
+      plannerConfigured: true,
+      reflexConfigured: true,
+    });
+  });
+
   it('returns a schema-valid swarm tick through the API without legacy turn records', async () => {
     const simulation = setup(
       new InspectingPlanner(),
@@ -165,7 +190,17 @@ describe('zero-swarm SimulationService tick', () => {
     expect(snapshot.turnNumber).toBe(0);
     expect(snapshot.turns).toEqual([]);
     expect(snapshot.swarmTicks).toHaveLength(1);
+    expect(snapshot.swarmProviderStatus).toMatchObject({
+      plannerMode: 'scripted-swarm-test',
+      plannerConfigured: true,
+      reflexMode: 'scripted-reflex-test',
+      reflexConfigured: true,
+    });
     expect(snapshot.swarmTicks?.[0]?.workers).toHaveLength(7);
+    expect(snapshot.swarmTicks?.[0]?.workers[0]?.situation).toMatchObject({
+      directiveProgress: expect.any(String),
+      nearbyPressure: expect.any(String),
+    });
     expect(
       snapshot.swarmTicks?.[0]?.workers.every(
         ({ source }) => source === 'jev-reflex',

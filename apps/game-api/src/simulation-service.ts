@@ -422,6 +422,21 @@ export class SimulationService {
       status: this.#status,
       providerMode: this.#provider.mode,
       providerConfigured: this.#provider.configured,
+      ...(this.#scenario.cognitionMode === 'zero-swarm-v1' &&
+      this.#swarmPlanner &&
+      this.#reflexProvider
+        ? {
+            swarmProviderStatus: {
+              plannerMode: this.#swarmPlanner.mode,
+              plannerConfigured: this.#swarmPlanner.configured,
+              reflexMode: this.#reflexProvider.mode,
+              reflexConfigured: this.#reflexProvider.configured,
+              ...(this.#reflexProvider.model
+                ? { reflexModel: this.#reflexProvider.model }
+                : {}),
+            },
+          }
+        : {}),
       modelConfiguration: this.#modelConfiguration,
       behaviorConfiguration: this.#behaviorConfiguration,
       resolvedModels: agents.map(({ id }) => this.#resolvedModel(id)),
@@ -513,7 +528,14 @@ export class SimulationService {
       ...structuredClone(this.#scenario.behaviorConfiguration),
       locked: false,
     };
-    this.#status = this.#provider.configured ? 'paused' : 'configuration-error';
+    this.#status =
+      this.#scenario.cognitionMode === 'zero-swarm-v1' &&
+      this.#swarmPlanner &&
+      this.#reflexProvider
+        ? 'paused'
+        : this.#provider.configured
+          ? 'paused'
+          : 'configuration-error';
     return this.getSnapshot();
   }
 
@@ -656,7 +678,14 @@ export class SimulationService {
       this.#scenario.executionLimits,
       this.#experimentRetentionLimit,
     );
-    this.#status = this.#provider.configured ? 'paused' : 'configuration-error';
+    this.#status =
+      this.#scenario.cognitionMode === 'zero-swarm-v1' &&
+      this.#swarmPlanner &&
+      this.#reflexProvider
+        ? 'paused'
+        : this.#provider.configured
+          ? 'paused'
+          : 'configuration-error';
     return this.getSnapshot();
   }
 
@@ -1670,6 +1699,7 @@ export class SimulationService {
             directive: plan.directives.find(
               ({ agentId }) => agentId === worker.id,
             )!,
+            situation: selection.observation.currentSituation,
             action: selection.action,
             actionResult: applied.get(worker.id),
             ...(selection.decision
