@@ -338,4 +338,20 @@ export const migrations: readonly Migration[] = [
         ON provider_attempts(experiment_id, outcome, started_at, id);
     `,
   },
+  {
+    version: 5,
+    description: 'safe zero-swarm tick telemetry',
+    sql: `
+      CREATE TABLE swarm_ticks (
+        experiment_id TEXT NOT NULL REFERENCES experiments(id) ON DELETE CASCADE,
+        tick_number INTEGER NOT NULL,
+        virtual_time TEXT NOT NULL,
+        plan_source TEXT NOT NULL,
+        source_json TEXT NOT NULL,
+        PRIMARY KEY (experiment_id, tick_number)
+      ) STRICT;
+      CREATE INDEX swarm_ticks_experiment_time_idx
+        ON swarm_ticks(experiment_id, virtual_time, tick_number);
+    `,
+  },
 ] as const;

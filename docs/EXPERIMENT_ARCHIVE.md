@@ -113,3 +113,9 @@ Use `pnpm experiment:db provider-attempts <experiment-id>` to inspect committed
 and uncommitted provider work. Monetary values round-trip as canonical TEXT.
 For v11 summaries this ledger is canonical; legacy model attempts are not added
 again. The SQLite archive is for analysis and is not active runtime recovery.
+
+Archive schema v5 adds `swarm_ticks` for safe committed zero-swarm plans,
+directives, physical action results, and worker choice telemetry. Full
+all-agent exports carry these records separately from legacy `turns`.
+Provider attempts remain in the independent v4 ledger, including attempts
+from cancelled or rolled-back swarm ticks.

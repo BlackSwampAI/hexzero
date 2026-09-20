@@ -2,6 +2,8 @@ import { gridDisk, gridDistance } from 'h3-js';
 import {
   AgentProviderError,
   dispatchTickDecisions,
+  type ReflexProvider,
+  type SwarmPlanner,
   type AgentProvider,
   type ProviderDecision,
 } from '@hexzero/agent-runtime';
@@ -35,6 +37,9 @@ import {
   MEMORY_ENTRY_LIMIT,
   personalitySchema,
   providerMetadataSchema,
+  swarmDirectiveSchema,
+  swarmPlanSchema,
+  swarmTickRecordSchema,
   simulationSnapshotSchema,
   type Agent,
   type AgentId,
@@ -65,6 +70,9 @@ import {
   type AllianceEvent,
   type AllianceProposalId,
   type SimulatedPlayerEvent,
+  type SwarmPlan,
+  type SwarmTickRecord,
+  type ZeroStrategicObservation,
   type PatientZeroPressureContext,
   worldSetupRequestSchema,
   type AppliedScenario,
@@ -90,6 +98,7 @@ import {
   seededTickIntervalMinutes,
   seededTickOrder,
   advanceCasualCleaner,
+  enumerateLegalWorldActions,
   toWorldState,
   type WorldState,
 } from '@hexzero/world-engine';
@@ -102,6 +111,10 @@ import {
 import { geographicDirectionBetweenCells } from './geographic-direction';
 import { ObservationHistory } from './observation-history';
 import { AttemptAccounting } from './attempt-accounting';
+import {
+  chooseReflexWorldAction,
+  ReflexSelectionCancelledError,
+} from './reflex-execution';
 
 function attemptAccountingForScenario(
   executionLimits: AppliedScenario['executionLimits'],
@@ -248,6 +261,9 @@ export class SimulationValidationError extends Error {
 
 export interface SimulationServiceOptions {
   provider: AgentProvider;
+  /** Separate strategic and reflex cognition used only by zero-swarm-v1. */
+  swarmPlanner?: SwarmPlanner;
+  reflexProvider?: ReflexProvider;
   now?: () => string;
   createEventId?: () => string;
   createExperimentId?: () => string;
@@ -258,6 +274,8 @@ export interface SimulationServiceOptions {
 
 export class SimulationService {
   readonly #provider: AgentProvider;
+  readonly #swarmPlanner: SwarmPlanner | undefined;
+  readonly #reflexProvider: ReflexProvider | undefined;
   readonly #now: () => string;
   readonly #createEventId: () => string;
   readonly #createExperimentId: () => string;
@@ -296,9 +314,17 @@ export class SimulationService {
   #simulatedPlayerEvents: SimulatedPlayerEvent[] = [];
   #observationHistory: ObservationHistory;
   #attemptAccounting: AttemptAccounting;
+  #swarmTicks: SwarmTickRecord[] = [];
+  #experimentSwarmTicks: SwarmTickRecord[] = [];
+  #lastValidSwarmPlan: SwarmPlan | null = null;
+  #lastSwarmTerritoryCounts = new Map<AgentId, number>();
+  #lastSwarmTerritoryDeltas = new Map<AgentId, number>();
+  #lastSwarmPositions = new Map<AgentId, H3Cell>();
 
   constructor({
     provider,
+    swarmPlanner,
+    reflexProvider,
     now = () => new Date().toISOString(),
     createEventId = () => crypto.randomUUID(),
     createExperimentId = () => crypto.randomUUID(),
@@ -312,6 +338,8 @@ export class SimulationService {
     )
       throw new Error('Experiment retention limit must be a positive integer.');
     this.#provider = provider;
+    this.#swarmPlanner = swarmPlanner;
+    this.#reflexProvider = reflexProvider;
     this.#now = now;
     this.#createEventId = createEventId;
     this.#createExperimentId = createExperimentId;
@@ -405,6 +433,9 @@ export class SimulationService {
         agentId: id,
         entries: structuredClone(this.#agentMemories.get(id) ?? []),
       })),
+      ...(this.#scenario.cognitionMode === 'zero-swarm-v1'
+        ? { swarmTicks: structuredClone(this.#swarmTicks) }
+        : {}),
       turns: this.#turns,
       experiment: {
         id: this.#experimentId,
@@ -451,6 +482,12 @@ export class SimulationService {
     this.#pendingFailedTurn = null;
     this.#agentGoals = new Map();
     this.#agentMemories = new Map();
+    this.#swarmTicks = [];
+    this.#experimentSwarmTicks = [];
+    this.#lastValidSwarmPlan = null;
+    this.#lastSwarmTerritoryCounts = new Map();
+    this.#lastSwarmTerritoryDeltas = new Map();
+    this.#lastSwarmPositions = new Map();
     this.#experimentId = experimentIdSchema.parse(this.#createExperimentId());
     this.#experimentStartedAt = this.#now();
     this.#experimentTurns = [];
@@ -596,6 +633,12 @@ export class SimulationService {
     this.#pendingFailedTurn = null;
     this.#agentGoals = new Map();
     this.#agentMemories = new Map();
+    this.#swarmTicks = [];
+    this.#experimentSwarmTicks = [];
+    this.#lastValidSwarmPlan = null;
+    this.#lastSwarmTerritoryCounts = new Map();
+    this.#lastSwarmTerritoryDeltas = new Map();
+    this.#lastSwarmPositions = new Map();
     this.#experimentId = experimentIdSchema.parse(this.#createExperimentId());
     this.#experimentStartedAt = this.#now();
     this.#experimentTurns = [];
@@ -1035,7 +1078,7 @@ export class SimulationService {
   async executeNextTurn(): Promise<AgentTurnRecord> {
     if (this.#scenario.cognitionMode === 'zero-swarm-v1')
       throw new SimulationConflictError(
-        'Zero-swarm ticks require the Agent Zero planner, which is not enabled in this PR.',
+        'Zero-swarm execution supports whole simultaneous ticks only.',
       );
     if (this.#completedTickCount > 0)
       throw new SimulationConflictError(
@@ -1051,9 +1094,7 @@ export class SimulationService {
   /** Execute one atomic simultaneous tick for every active agent. */
   async executeNextTick(): Promise<AgentTurnRecord[]> {
     if (this.#scenario.cognitionMode === 'zero-swarm-v1')
-      throw new SimulationConflictError(
-        'Zero-swarm ticks require the Agent Zero planner, which is not enabled in this PR.',
-      );
+      return this.#executeZeroSwarmTick();
     if (this.#busy || this.#verificationBusy)
       throw new SimulationConflictError(
         'A simulation tick is already in progress.',
@@ -1399,6 +1440,322 @@ export class SimulationService {
           : 'paused';
       if (this.#attemptAccounting.snapshot().exhausted)
         this.#status = 'budget-exhausted';
+    }
+  }
+
+  /**
+   * The swarm path intentionally has no AgentTurnRecord: its safe telemetry is
+   * a SwarmTickRecord and it never invokes legacy social cognition.
+   */
+  async #executeZeroSwarmTick(): Promise<AgentTurnRecord[]> {
+    if (this.#busy || this.#verificationBusy)
+      throw new SimulationConflictError(
+        'A simulation tick is already in progress.',
+      );
+    if (!this.#swarmPlanner || !this.#reflexProvider)
+      throw new SimulationConflictError(
+        'Zero-swarm execution requires a planner and reflex provider.',
+      );
+    const zeroAgentId = this.#scenario.patientZeroAgentId;
+    const agents = [...this.#state.agents.values()];
+    const zero = zeroAgentId ? this.#state.agents.get(zeroAgentId) : undefined;
+    if (!zero)
+      throw new SimulationValidationError(
+        'invalid_model_configuration',
+        'Zero-swarm requires the designated Patient Zero.',
+      );
+    const resolvedZero = this.#resolvedModel(zero.id);
+    if (!resolvedZero.available || !resolvedZero.modelId)
+      throw new SimulationValidationError(
+        'models_unavailable',
+        'Agent Zero requires an available compatible model.',
+      );
+    // One reserved admission for Zero and one for every worker’s initial Jev call.
+    if (!this.#attemptAccounting.reserve(agents.length)) {
+      this.#status = 'budget-exhausted';
+      throw new SimulationValidationError(
+        'experiment_budget_exhausted',
+        'The experiment does not have enough provider-attempt or credit-admission capacity for a complete tick.',
+      );
+    }
+    const tickNumber = this.#completedTickCount + 1;
+    const tickTurnBase = (tickNumber - 1) * agents.length;
+    const preTickState = this.#state;
+    const order = seededTickOrder(
+      agents.map(({ id }) => id),
+      this.#scenario.worldSeed,
+      tickNumber,
+    );
+    const interval = seededTickIntervalMinutes(
+      this.#scenario.worldSeed,
+      tickNumber,
+      this.#scenario.minimumTickIntervalMinutes,
+      this.#scenario.maximumTickIntervalMinutes,
+    );
+    const virtualTime = new Date(
+      new Date(this.#virtualTime).getTime() + interval * 60_000,
+    ).toISOString();
+    const playerAdvance = advanceCasualCleaner(
+      preTickState,
+      this.#scenario.simulatedPlayer.seed,
+      tickNumber,
+      { createEventId: this.#createEventId, now: () => virtualTime },
+    );
+    const candidate = playerAdvance.state;
+    const controller = new AbortController();
+    this.#busy = true;
+    this.#activeRequestController = controller;
+    this.#activeAgentId = zero.id;
+    this.#cancellationRequested = false;
+    this.#status = 'waiting-for-model';
+    const deadlineAtMs = Date.now() + OPENROUTER_PROVIDER_TIMEOUT_MS;
+    let plannerFailure: ProviderFailure | undefined;
+    try {
+      const observation = this.#buildZeroStrategicObservation(
+        candidate,
+        zero.id,
+        tickNumber,
+        virtualTime,
+        playerAdvance.events,
+      );
+      let plan: SwarmPlan;
+      let planSource: 'zero-llm' | 'deterministic-fallback' = 'zero-llm';
+      let plannerMetadata: ProviderMetadata | undefined;
+      let plannerAttempts = 0;
+      try {
+        const planned = await this.#swarmPlanner.plan(
+          observation,
+          resolvedZero.modelId,
+          {
+            signal: controller.signal,
+            deadlineAtMs,
+            beginAttempt: (kind) => {
+              const startedAt = this.#now();
+              const permit =
+                kind === 'initial'
+                  ? this.#attemptAccounting.startReserved({
+                      agentId: zero.id,
+                      intendedTurnNumber:
+                        tickTurnBase + order.indexOf(zero.id) + 1,
+                      intendedTickNumber: tickNumber,
+                      kind,
+                      startedAt,
+                      modelId: resolvedZero.modelId!,
+                      reasoningProfile: resolvedZero.reasoningProfile,
+                    })
+                  : this.#attemptAccounting.startAdditional({
+                      agentId: zero.id,
+                      intendedTurnNumber:
+                        tickTurnBase + order.indexOf(zero.id) + 1,
+                      intendedTickNumber: tickNumber,
+                      kind,
+                      startedAt,
+                      modelId: resolvedZero.modelId!,
+                      reasoningProfile: resolvedZero.reasoningProfile,
+                    });
+              if (permit !== null) plannerAttempts += 1;
+              return permit === null
+                ? null
+                : (completion) =>
+                    this.#attemptAccounting.finalize(permit, {
+                      ...completion,
+                      completedAt: this.#now(),
+                    });
+            },
+          },
+        );
+        if (plannerAttempts === 0)
+          throw new Error(
+            'The planner returned without provider-attempt accounting.',
+          );
+        if (controller.signal.aborted) throw new SimulationTurnCancelledError();
+        plan = swarmPlanSchema.parse(planned.plan);
+        plannerMetadata = planned.metadata;
+        this.#assertSwarmPlan(plan, observation, zero.id, tickNumber);
+      } catch (error) {
+        if (
+          controller.signal.aborted ||
+          error instanceof SimulationTurnCancelledError
+        )
+          throw error;
+        plannerFailure = this.#providerFailure(error, resolvedZero.modelId);
+        planSource = 'deterministic-fallback';
+        plan = this.#fallbackSwarmPlan(agents, zero.id, tickNumber, candidate);
+      }
+      const zeroAction = observation.legalZeroActions.find(
+        ({ id }) => id === plan.zeroActionCandidateId,
+      )?.action ?? { type: 'wait' as const };
+      const selected = new Map<
+        AgentId,
+        Awaited<ReturnType<typeof chooseReflexWorldAction>>
+      >();
+      const workers = agents.filter(({ id }) => id !== zero.id);
+      for (const worker of workers) {
+        const directive = plan.directives.find(
+          ({ agentId }) => agentId === worker.id,
+        )!;
+        this.#activeAgentId = worker.id;
+        const choice = await chooseReflexWorldAction(
+          candidate,
+          directive,
+          this.#reflexProvider,
+          {
+            history: {
+              previousCell: this.#lastSwarmPositions.get(worker.id),
+              recentCleanedCells: this.#simulatedPlayerEvents
+                .filter(
+                  (
+                    event,
+                  ): event is Extract<
+                    SimulatedPlayerEvent,
+                    { type: 'hex-disinfected' }
+                  > => event.type === 'hex-disinfected',
+                )
+                .slice(-6)
+                .map(({ cell }) => cell),
+              territoryDelta:
+                this.#lastSwarmTerritoryDeltas.get(worker.id) ?? 0,
+              recentActionOutcome: this.#swarmTicks
+                .at(-1)
+                ?.workers.find(({ agentId }) => agentId === worker.id)
+                ?.actionResult?.accepted
+                ? 'success'
+                : 'unknown',
+            },
+            signal: controller.signal,
+            deadlineAtMs,
+            accounting: this.#attemptAccounting,
+            initialPermitReserved: true,
+            intendedTickNumber: tickNumber,
+            intendedTurnNumber: tickTurnBase + order.indexOf(worker.id) + 1,
+            now: this.#now,
+          },
+        );
+        selected.set(worker.id, choice);
+      }
+      if (controller.signal.aborted) throw new SimulationTurnCancelledError();
+      let state = candidate;
+      const context = {
+        now: () => virtualTime,
+        createEventId: this.#createEventId,
+        patientZeroAgentId: zero.id,
+        tickNumber,
+      };
+      const applied = new Map<
+        AgentId,
+        ReturnType<typeof applyWorldAction>['result']
+      >();
+      for (const agentId of order) {
+        const action =
+          agentId === zero.id ? zeroAction : selected.get(agentId)!.action;
+        const result = applyWorldAction(state, agentId, action, context);
+        state = result.state;
+        applied.set(agentId, result.result);
+      }
+      if (controller.signal.aborted) throw new SimulationTurnCancelledError();
+      const tick = swarmTickRecordSchema.parse({
+        tickNumber,
+        virtualTime,
+        tickIntervalMinutes: interval,
+        plan,
+        planSource,
+        ...(plannerFailure ? { plannerFailure } : {}),
+        ...(plannerMetadata ? { plannerMetadata } : {}),
+        zeroAction,
+        zeroActionResult: applied.get(zero.id),
+        workers: workers.map((worker) => {
+          const selection = selected.get(worker.id)!;
+          return {
+            agentId: worker.id,
+            directive: plan.directives.find(
+              ({ agentId }) => agentId === worker.id,
+            )!,
+            action: selection.action,
+            actionResult: applied.get(worker.id),
+            ...(selection.decision
+              ? { reflexDecision: selection.decision }
+              : {}),
+            source: selection.cognitionSource,
+            ...(selection.failure ? { failure: selection.failure } : {}),
+          };
+        }),
+      });
+      const observationEvents = state.events.slice(preTickState.events.length);
+      this.#state = {
+        ...state,
+        events: state.events.slice(-MAX_WORLD_EVENT_HISTORY),
+      };
+      this.#observationHistory.ingest(observationEvents);
+      this.#completedTickCount = tickNumber;
+      this.#virtualTime = virtualTime;
+      this.#lastTickIntervalMinutes = interval;
+      this.#resolutionOrder = order;
+      this.#simulatedPlayerEvents = [
+        ...this.#simulatedPlayerEvents,
+        ...structuredClone(playerAdvance.events),
+      ].slice(-this.#experimentRetentionLimit * 2);
+      this.#swarmTicks = [...this.#swarmTicks, tick].slice(-MAX_TURN_HISTORY);
+      this.#experimentSwarmTicks = [
+        ...this.#experimentSwarmTicks,
+        structuredClone(tick),
+      ].slice(-this.#experimentRetentionLimit);
+      if (planSource === 'zero-llm') this.#lastValidSwarmPlan = plan;
+      this.#lastSwarmTerritoryCounts = new Map(
+        [...state.agents.keys()].map((agentId) => [
+          agentId,
+          [...state.hexes.values()].filter(
+            (hex) =>
+              hex.state === 'infected' && hex.controllerAgentId === agentId,
+          ).length,
+        ]),
+      );
+      this.#lastSwarmTerritoryDeltas = new Map(
+        [...state.agents.keys()].map((agentId) => [
+          agentId,
+          [...state.hexes.values()].filter(
+            (hex) =>
+              hex.state === 'infected' && hex.controllerAgentId === agentId,
+          ).length -
+            [...preTickState.hexes.values()].filter(
+              (hex) =>
+                hex.state === 'infected' && hex.controllerAgentId === agentId,
+            ).length,
+        ]),
+      );
+      this.#lastSwarmPositions = new Map(
+        [...state.agents.values()].map(({ id, currentCell }) => [
+          id,
+          currentCell,
+        ]),
+      );
+      this.#behaviorConfiguration = {
+        ...this.#behaviorConfiguration,
+        locked: true,
+      };
+      this.#status = this.#attemptAccounting.snapshot().exhausted
+        ? 'budget-exhausted'
+        : 'paused';
+      return [];
+    } catch (error) {
+      if (
+        controller.signal.aborted ||
+        error instanceof ReflexSelectionCancelledError ||
+        error instanceof SimulationTurnCancelledError
+      ) {
+        this.#status = 'paused';
+        throw new SimulationTurnCancelledError();
+      }
+      throw error;
+    } finally {
+      this.#attemptAccounting.releaseReservations();
+      this.#busy = false;
+      this.#activeRequestController = null;
+      this.#activeAgentId = null;
+      this.#cancellationRequested = false;
+      if (this.#status === 'waiting-for-model')
+        this.#status = this.#attemptAccounting.snapshot().exhausted
+          ? 'budget-exhausted'
+          : 'paused';
     }
   }
 
@@ -2081,6 +2438,178 @@ export class SimulationService {
     };
   }
 
+  #buildZeroStrategicObservation(
+    state: WorldState,
+    zeroAgentId: AgentId,
+    tickNumber: number,
+    virtualTime: string,
+    playerEvents: readonly SimulatedPlayerEvent[],
+  ): ZeroStrategicObservation {
+    const counts = new Map<AgentId, number>(
+      [...state.agents.keys()].map((id) => [id, 0]),
+    );
+    for (const hex of state.hexes.values())
+      if (hex.state === 'infected')
+        counts.set(
+          hex.controllerAgentId,
+          (counts.get(hex.controllerAgentId) ?? 0) + 1,
+        );
+    const strategicTargetCells = [
+      ...new Set([
+        ...(this.#lastValidSwarmPlan?.directives.flatMap(({ targetCell }) =>
+          targetCell ? [targetCell] : [],
+        ) ?? []),
+        ...[...state.agents.values()].map(({ currentCell }) => currentCell),
+        ...[...state.hexes.keys()].sort(),
+      ]),
+    ].slice(0, 80);
+    const zero = state.agents.get(zeroAgentId)!;
+    const legalZeroActions = enumerateLegalWorldActions(state, zeroAgentId).map(
+      (action, index) => ({
+        id: `zero_action_${index}`,
+        action,
+        description:
+          action.type === 'move'
+            ? `Move ${geographicDirectionBetweenCells(zero.currentCell, action.targetCell)} into an adjacent engine-legal cell.`
+            : action.type === 'infect'
+              ? 'Infect the current open cell.'
+              : action.type === 'capture'
+                ? 'Capture the current abandoned infected cell.'
+                : 'Wait on the current cell.',
+      }),
+    );
+    return {
+      zeroAgentId,
+      tickNumber,
+      virtualTime,
+      cells: [...state.hexes.entries()].map(([cell, hex]) => ({
+        cell,
+        state: hex.state,
+        controllerAgentId:
+          hex.state === 'infected' ? hex.controllerAgentId : null,
+      })),
+      agents: [...state.agents.values()].map((agent) => {
+        const priorWorker = this.#swarmTicks
+          .at(-1)
+          ?.workers.find(({ agentId }) => agentId === agent.id);
+        const directive =
+          this.#lastValidSwarmPlan?.directives.find(
+            ({ agentId }) => agentId === agent.id,
+          ) ?? null;
+        const workerStatus =
+          priorWorker?.source === 'deterministic-fallback'
+            ? ('blocked' as const)
+            : priorWorker?.actionResult?.accepted
+              ? ('advancing' as const)
+              : priorWorker
+                ? ('stalled' as const)
+                : ('unknown' as const);
+        return {
+          agentId: agent.id,
+          position: agent.currentCell,
+          controlledCellCount: counts.get(agent.id) ?? 0,
+          territoryDelta: this.#lastSwarmTerritoryDeltas.get(agent.id) ?? 0,
+          ...(agent.id === zeroAgentId ? {} : { workerStatus, directive }),
+        };
+      }),
+      recentPlayerPressure: playerEvents.map((event) =>
+        event.type === 'hex-disinfected'
+          ? 'A nearby infected cell was cleaned this tick.'
+          : event.type === 'simulated-player-clean-blocked'
+            ? 'Cleaning pressure was blocked by an occupied infected cell.'
+            : 'The simulated player moved this tick.',
+      ),
+      legalZeroActions,
+      strategicTargetCells,
+    };
+  }
+
+  #assertSwarmPlan(
+    plan: SwarmPlan,
+    observation: ZeroStrategicObservation,
+    zeroAgentId: AgentId,
+    tickNumber: number,
+  ): void {
+    const workers = observation.agents
+      .filter(({ agentId }) => agentId !== zeroAgentId)
+      .map(({ agentId }) => agentId)
+      .toSorted();
+    const directives = plan.directives.map((directive) =>
+      swarmDirectiveSchema.parse(directive),
+    );
+    if (
+      directives.length !== workers.length ||
+      directives.some((directive) => !workers.includes(directive.agentId)) ||
+      directives.some(
+        (directive) =>
+          directive.issuedAtTick !== tickNumber ||
+          directive.expiresAtTick < tickNumber ||
+          (directive.targetCell !== null &&
+            !observation.strategicTargetCells.includes(directive.targetCell)),
+      )
+    )
+      throw new Error(
+        'The Zero plan does not contain one current, allowlisted directive per worker.',
+      );
+    if (
+      !observation.legalZeroActions.some(
+        ({ id }) => id === plan.zeroActionCandidateId,
+      )
+    )
+      throw new Error(
+        'The Zero plan selected an unknown world action candidate.',
+      );
+  }
+
+  #fallbackSwarmPlan(
+    agents: readonly Agent[],
+    zeroAgentId: AgentId,
+    tickNumber: number,
+    state: WorldState,
+  ): SwarmPlan {
+    const workers = agents.filter(({ id }) => id !== zeroAgentId);
+    const retained = this.#lastValidSwarmPlan?.directives;
+    const directives = workers.map(
+      (worker) =>
+        retained?.find(
+          (directive) =>
+            directive.agentId === worker.id &&
+            directive.expiresAtTick >= tickNumber,
+        ) ?? {
+          id: `neutral-${tickNumber}-${worker.id}`,
+          agentId: worker.id,
+          mission: 'hold' as const,
+          targetCell: state.agents.get(worker.id)!.currentCell,
+          priority: 'normal' as const,
+          riskTolerance: 'low' as const,
+          issuedAtTick: tickNumber,
+          expiresAtTick: tickNumber,
+        },
+    );
+    const waitIndex = enumerateLegalWorldActions(state, zeroAgentId).findIndex(
+      (action) => action.type === 'wait',
+    );
+    if (waitIndex < 0)
+      throw new Error('The engine must provide a legal wait action.');
+    return swarmPlanSchema.parse({
+      strategySummary:
+        'Maintain legal local positions while strategic planning is unavailable.',
+      directives,
+      zeroActionCandidateId: `zero_action_${waitIndex}`,
+    });
+  }
+
+  #providerFailure(error: unknown, model: string): ProviderFailure {
+    if (error && typeof error === 'object' && 'failure' in error)
+      return (error as { failure: ProviderFailure }).failure;
+    return {
+      code: 'provider-http',
+      message: 'Agent Zero planning failed.',
+      retryable: false,
+      model,
+    };
+  }
+
   #experimentSource(): ExperimentSource {
     return {
       id: this.#experimentId,
@@ -2110,6 +2639,7 @@ export class SimulationService {
         entries: structuredClone(this.#agentMemories.get(agentId) ?? []),
       })),
       simulatedPlayerEvents: structuredClone(this.#simulatedPlayerEvents),
+      swarmTicks: structuredClone(this.#experimentSwarmTicks),
     };
   }
 

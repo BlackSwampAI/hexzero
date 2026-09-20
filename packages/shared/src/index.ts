@@ -596,6 +596,137 @@ export const reflexObservationSchema = z
   });
 export type ReflexObservation = z.infer<typeof reflexObservationSchema>;
 
+/** A server-compiled action Zero may select by opaque identifier. */
+export const zeroActionCandidateSchema = z
+  .object({
+    id: z
+      .string()
+      .regex(/^zero_action_[0-9]+$/)
+      .max(40),
+    action: worldActionSchema,
+    description: z.string().trim().min(1).max(320),
+  })
+  .strict();
+export type ZeroActionCandidate = z.infer<typeof zeroActionCandidateSchema>;
+
+export const swarmPlanSchema = z
+  .object({
+    strategySummary: z.string().trim().min(1).max(500),
+    directives: z
+      .array(swarmDirectiveSchema)
+      .max(WORLD_SCENARIO_LIMITS.maximumAgents),
+    zeroActionCandidateId: z
+      .string()
+      .regex(/^zero_action_[0-9]+$/)
+      .max(40),
+  })
+  .strict()
+  .superRefine((plan, context) => {
+    const directiveIds = plan.directives.map(({ id }) => id);
+    const agentIds = plan.directives.map(({ agentId }) => agentId);
+    if (new Set(directiveIds).size !== directiveIds.length)
+      context.addIssue({
+        code: 'custom',
+        path: ['directives'],
+        message: 'Swarm directive IDs must be unique.',
+      });
+    if (new Set(agentIds).size !== agentIds.length)
+      context.addIssue({
+        code: 'custom',
+        path: ['directives'],
+        message: 'A swarm plan may contain at most one directive per worker.',
+      });
+  });
+export type SwarmPlan = z.infer<typeof swarmPlanSchema>;
+
+/**
+ * Strategic input for Agent Zero. This deliberately carries only authoritative
+ * world facts and bounded choices; it contains no social or prose-memory data.
+ */
+export const zeroStrategicObservationSchema = z
+  .object({
+    zeroAgentId: agentIdSchema,
+    tickNumber: z.number().int().nonnegative(),
+    virtualTime: z.iso.datetime(),
+    cells: z
+      .array(
+        z
+          .object({
+            cell: h3CellSchema,
+            state: z.enum(['open', 'infected']),
+            controllerAgentId: agentIdSchema.nullable(),
+          })
+          .strict(),
+      )
+      .min(1),
+    agents: z
+      .array(
+        z
+          .object({
+            agentId: agentIdSchema,
+            position: h3CellSchema,
+            controlledCellCount: z.number().int().nonnegative(),
+            territoryDelta: z.number().int(),
+            workerStatus: z
+              .enum(['advancing', 'stalled', 'blocked', 'unknown'])
+              .optional(),
+            directive: swarmDirectiveSchema.nullable().optional(),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(WORLD_SCENARIO_LIMITS.maximumAgents),
+    recentPlayerPressure: z.array(z.string().trim().min(1).max(180)).max(12),
+    legalZeroActions: z.array(zeroActionCandidateSchema).min(1).max(9),
+    strategicTargetCells: z.array(h3CellSchema).max(80),
+  })
+  .strict()
+  .superRefine((observation, context) => {
+    const cells = observation.cells.map(({ cell }) => cell);
+    const agents = observation.agents.map(({ agentId }) => agentId);
+    const actionIds = observation.legalZeroActions.map(({ id }) => id);
+    if (new Set(cells).size !== cells.length)
+      context.addIssue({
+        code: 'custom',
+        path: ['cells'],
+        message: 'Strategic cell facts must be unique.',
+      });
+    if (new Set(agents).size !== agents.length)
+      context.addIssue({
+        code: 'custom',
+        path: ['agents'],
+        message: 'Strategic agent facts must be unique.',
+      });
+    if (!agents.includes(observation.zeroAgentId))
+      context.addIssue({
+        code: 'custom',
+        path: ['zeroAgentId'],
+        message: 'Agent Zero must appear in strategic agent facts.',
+      });
+    if (new Set(actionIds).size !== actionIds.length)
+      context.addIssue({
+        code: 'custom',
+        path: ['legalZeroActions'],
+        message: 'Zero action candidate IDs must be unique.',
+      });
+    const targets = new Set(observation.strategicTargetCells);
+    if (
+      observation.agents.some(
+        ({ directive }) =>
+          directive?.targetCell && !targets.has(directive.targetCell),
+      )
+    )
+      context.addIssue({
+        code: 'custom',
+        path: ['agents'],
+        message:
+          'Active directive targets must be in the strategic target allowlist.',
+      });
+  });
+export type ZeroStrategicObservation = z.infer<
+  typeof zeroStrategicObservationSchema
+>;
+
 export const cognitionSourceSchema = z.enum([
   'zero-llm',
   'jev-reflex',
@@ -2498,6 +2629,7 @@ export const providerAttemptRecordSchema = z
     provider: providerMetadataSchema.optional(),
     failure: providerFailureSchema.optional(),
     reflexDecision: reflexDecisionSchema.optional(),
+    swarmPlan: swarmPlanSchema.optional(),
     reservedCredits: z.string().regex(/^(?:0|[1-9]\d*)(?:\.\d+)?$/),
     actualCostCredits: z
       .string()
@@ -2533,6 +2665,12 @@ export const providerAttemptRecordSchema = z
         path: ['reflexDecision'],
         message:
           'Reflex decision telemetry belongs only to completed attempts.',
+      });
+    if (attempt.swarmPlan && attempt.outcome !== 'completed')
+      context.addIssue({
+        code: 'custom',
+        path: ['swarmPlan'],
+        message: 'Swarm plan telemetry belongs only to completed attempts.',
       });
     if (
       ['provider-error', 'cancelled', 'timeout'].includes(attempt.outcome) &&
@@ -2570,6 +2708,53 @@ export const providerAttemptRecordSchema = z
       });
   });
 export type ProviderAttemptRecord = z.infer<typeof providerAttemptRecordSchema>;
+
+export const swarmWorkerTickRecordSchema = z
+  .object({
+    agentId: agentIdSchema,
+    directive: swarmDirectiveSchema,
+    action: worldActionSchema.optional(),
+    actionResult: worldActionResultSchema.optional(),
+    reflexDecision: reflexDecisionSchema.optional(),
+    source: cognitionSourceSchema,
+    failure: providerFailureSchema.optional(),
+  })
+  .strict();
+export type SwarmWorkerTickRecord = z.infer<typeof swarmWorkerTickRecordSchema>;
+
+/** Safe committed-tick telemetry for zero-swarm experiments. */
+export const swarmTickRecordSchema = z
+  .object({
+    tickNumber: z.number().int().positive(),
+    virtualTime: z.iso.datetime(),
+    tickIntervalMinutes: z.number().int().positive(),
+    plan: swarmPlanSchema,
+    planSource: z.enum(['zero-llm', 'deterministic-fallback']),
+    plannerFailure: providerFailureSchema.optional(),
+    plannerMetadata: providerMetadataSchema.optional(),
+    zeroAction: worldActionSchema.optional(),
+    zeroActionResult: worldActionResultSchema.optional(),
+    workers: z
+      .array(swarmWorkerTickRecordSchema)
+      .max(WORLD_SCENARIO_LIMITS.maximumAgents),
+  })
+  .strict()
+  .superRefine((record, context) => {
+    const agentIds = record.workers.map(({ agentId }) => agentId);
+    if (new Set(agentIds).size !== agentIds.length)
+      context.addIssue({
+        code: 'custom',
+        path: ['workers'],
+        message: 'Each worker may have one swarm tick record.',
+      });
+    if (record.planSource === 'zero-llm' && record.plannerFailure)
+      context.addIssue({
+        code: 'custom',
+        path: ['plannerFailure'],
+        message: 'A successful Zero plan cannot include a planner failure.',
+      });
+  });
+export type SwarmTickRecord = z.infer<typeof swarmTickRecordSchema>;
 
 export const providerAttemptRetentionSchema = z
   .object({
@@ -3205,6 +3390,7 @@ export const simulationSnapshotSchema = z
       )
       .default([]),
     turns: z.array(agentTurnRecordSchema).max(120),
+    swarmTicks: z.array(swarmTickRecordSchema).max(120).optional(),
     experiment: z.object({
       id: z.uuid().brand<'ExperimentId'>(),
       startedAt: z.iso.datetime(),
@@ -3471,9 +3657,29 @@ export const singleTickResponseSchema = z
   .object({
     snapshot: simulationSnapshotSchema,
     tickNumber: z.number().int().positive(),
-    records: z.array(agentTurnRecordSchema).min(1),
+    records: z.array(agentTurnRecordSchema).min(0),
+    swarmTick: swarmTickRecordSchema.optional(),
   })
   .superRefine((response, context) => {
+    const zeroSwarmResponse =
+      response.snapshot.scenario.cognitionMode === 'zero-swarm-v1' &&
+      response.records.length === 0 &&
+      response.swarmTick !== undefined;
+    if (zeroSwarmResponse) {
+      const swarmTick = response.swarmTick!;
+      if (
+        response.snapshot.tickNumber !== response.tickNumber ||
+        swarmTick.tickNumber !== response.tickNumber ||
+        response.snapshot.virtualTime !== swarmTick.virtualTime ||
+        response.snapshot.lastTickIntervalMinutes !==
+          swarmTick.tickIntervalMinutes
+      )
+        context.addIssue({
+          code: 'custom',
+          message: 'Swarm tick telemetry must match the committed snapshot.',
+        });
+      return;
+    }
     const roster = response.snapshot.world.agents.map(({ id }) => id);
     const positions = response.records.map(({ tickPosition }) => tickPosition);
     const agents = response.records.map(({ agentId }) => agentId);
@@ -3500,6 +3706,13 @@ export const singleTickResponseSchema = z
         code: 'custom',
         message:
           'Tick response records must exactly match the committed snapshot and roster.',
+      });
+    if (response.records.length === 0)
+      context.addIssue({
+        code: 'custom',
+        path: ['records'],
+        message:
+          'Empty tick records require zero-swarm mode with swarm tick telemetry.',
       });
   });
 export type SingleTickResponse = z.infer<typeof singleTickResponseSchema>;
@@ -4063,6 +4276,7 @@ export const experimentExportPreviewSchema = z.object({
   experimentId: experimentIdSchema,
   matchingTurnCount: z.number().int().nonnegative(),
   matchingTickCount: z.number().int().nonnegative().optional(),
+  matchingSwarmTickCount: z.number().int().nonnegative().optional(),
   matchingCommunicationCount: z.number().int().nonnegative(),
   matchingControlChangeCount: z.number().int().nonnegative(),
   matchingDiplomacyEventCount: z.number().int().nonnegative(),
@@ -4248,6 +4462,7 @@ const experimentExportDocumentObjectSchema = z
         .max(WORLD_SCENARIO_LIMITS.maximumAgents),
       matchingTurnCount: z.number().int().nonnegative(),
       matchingTickCount: z.number().int().nonnegative().optional(),
+      matchingSwarmTickCount: z.number().int().nonnegative().optional(),
       matchingCommunicationCount: z.number().int().nonnegative(),
       matchingControlChangeCount: z.number().int().nonnegative(),
       matchingDiplomacyEventCount: z.number().int().nonnegative(),
@@ -4302,12 +4517,49 @@ const experimentExportDocumentObjectSchema = z
     controlChanges: z.array(exportedControlChangeSchema).optional(),
     allianceEvents: z.array(allianceEventSchema).optional(),
     tickSummaries: z.array(experimentTickSummarySchema).optional(),
+    swarmTicks: z.array(swarmTickRecordSchema).optional(),
     providerAttempts: z.array(providerAttemptRecordSchema).optional(),
     attemptRetention: providerAttemptRetentionSchema.optional(),
     attemptAccounting: experimentAttemptAccountingSchema.optional(),
     turns: z.array(experimentExportTurnSchema),
   })
   .superRefine((document, context) => {
+    if (document.swarmTicks !== undefined) {
+      if (document.experiment.scenario?.cognitionMode !== 'zero-swarm-v1')
+        context.addIssue({
+          code: 'custom',
+          path: ['swarmTicks'],
+          message:
+            'Swarm tick telemetry requires zero-swarm-v1 cognition mode.',
+        });
+      const tickNumbers = document.swarmTicks.map(
+        ({ tickNumber }) => tickNumber,
+      );
+      if (new Set(tickNumbers).size !== tickNumbers.length)
+        context.addIssue({
+          code: 'custom',
+          path: ['swarmTicks'],
+          message: 'Exported swarm tick numbers must be unique.',
+        });
+      if (
+        document.selection.matchingSwarmTickCount !== document.swarmTicks.length
+      )
+        context.addIssue({
+          code: 'custom',
+          path: ['selection', 'matchingSwarmTickCount'],
+          message: 'Swarm tick count must match exported swarm telemetry.',
+        });
+      if (
+        document.turns.length === 0 &&
+        document.selection.matchingTickCount !== undefined &&
+        document.selection.matchingTickCount !== document.swarmTicks.length
+      )
+        context.addIssue({
+          code: 'custom',
+          path: ['selection', 'matchingTickCount'],
+          message: 'Zero-swarm tick count must match exported swarm telemetry.',
+        });
+    }
     if (document.currentGoals) {
       const selectedIds = new Set(document.selection.selectedAgentIds);
       const agentIds = new Set(document.agents.map(({ id }) => id));

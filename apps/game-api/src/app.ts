@@ -6,7 +6,11 @@ import {
   AgentProviderError,
   OpenRouterModelCatalog,
   OpenRouterAgentProvider,
+  OpenRouterSwarmPlanner,
+  TypeSafeJevReflexProvider,
   type AgentProvider,
+  type ReflexProvider,
+  type SwarmPlanner,
 } from '@hexzero/agent-runtime';
 import {
   archiveExperimentExportRequestSchema,
@@ -74,6 +78,8 @@ export { healthResponseSchema };
 export interface AppOptions {
   service?: SimulationService;
   provider?: AgentProvider;
+  swarmPlanner?: SwarmPlanner;
+  reflexProvider?: ReflexProvider;
   catalog?: Pick<OpenRouterModelCatalog, 'getCatalog'>;
   geocoder?: Geocoder;
   archiveExperimentExport?: (
@@ -134,6 +140,8 @@ export function createApp(options: AppOptions = {}) {
     options.service ??
     new SimulationService({
       provider: options.provider ?? providerFromEnvironment(),
+      swarmPlanner: options.swarmPlanner ?? new OpenRouterSwarmPlanner(),
+      reflexProvider: options.reflexProvider ?? new TypeSafeJevReflexProvider(),
     });
   const catalog =
     options.catalog ??
@@ -545,10 +553,14 @@ export function createApp(options: AppOptions = {}) {
     try {
       const response = await mutationPromise(context, 'tick', async () => {
         const records = await service.executeNextTick();
+        const snapshot = service.getSnapshot();
         return singleTickResponseSchema.parse({
-          snapshot: service.getSnapshot(),
-          tickNumber: records[0]!.tickNumber,
+          snapshot,
+          tickNumber: snapshot.tickNumber,
           records,
+          ...(snapshot.scenario.cognitionMode === 'zero-swarm-v1'
+            ? { swarmTick: snapshot.swarmTicks?.at(-1) }
+            : {}),
         });
       });
       return context.json(response);

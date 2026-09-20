@@ -495,6 +495,54 @@ describe('experiment archive', () => {
     archive.close();
   });
 
+  it('archives safe committed swarm tick records idempotently', async () => {
+    const base = await currentExport();
+    const document = experimentExportDocumentSchema.parse({
+      ...base,
+      experiment: {
+        ...base.experiment,
+        scenario: {
+          ...base.experiment.scenario,
+          cognitionMode: 'zero-swarm-v1',
+        },
+      },
+      selection: {
+        ...base.selection,
+        matchingSwarmTickCount: 1,
+      },
+      swarmTicks: [
+        {
+          tickNumber: 1,
+          virtualTime: NOW,
+          tickIntervalMinutes: 60,
+          plan: {
+            strategySummary: 'Hold current territory.',
+            directives: [],
+            zeroActionCandidateId: 'zero_action_0',
+          },
+          planSource: 'deterministic-fallback',
+          zeroAction: { type: 'wait' },
+          workers: [],
+        },
+      ],
+    });
+    const archive = new ArchiveDatabase({ path: ':memory:' });
+    importExperimentExport(archive, document);
+    importExperimentExport(archive, document);
+    const row = archive.database
+      .prepare(
+        'SELECT source_json FROM swarm_ticks WHERE experiment_id = ? AND tick_number = 1',
+      )
+      .get(document.experiment.id) as { source_json: string } | undefined;
+    expect(JSON.parse(row!.source_json)).toEqual(document.swarmTicks![0]);
+    expect(
+      archive.database
+        .prepare('SELECT COUNT(*) AS count FROM swarm_ticks')
+        .get(),
+    ).toEqual({ count: 1 });
+    archive.close();
+  });
+
   it('imports an existing schema-v9 export with the legacy download filename', async () => {
     const path = temporaryPath(
       'agentborne-experiment-existing-full-entire.json',

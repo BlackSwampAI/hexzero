@@ -52,7 +52,7 @@ describe('zero-swarm reflex execution seam', () => {
     });
     expect(snapshot.scenario.cognitionMode).toBe('zero-swarm-v1');
     await expect(service.executeNextTick()).rejects.toThrow(
-      'Zero-swarm ticks require the Agent Zero planner',
+      'Zero-swarm execution requires a planner and reflex provider',
     );
     expect(service.getSnapshot().tickNumber).toBe(0);
   });
