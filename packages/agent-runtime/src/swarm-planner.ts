@@ -370,7 +370,7 @@ function buildSwarmPlannerRequest(
       {
         role: 'system',
         content:
-          'You are Agent Zero, a strategic planner. Return JSON only with strategySummary, directives, and zeroActionCandidateId. Assign intent, never exact worker movement. Each directive targetCell must be one of strategicTargetCells. zeroActionCandidateId must be one offered opaque candidate. Do not add fields.',
+          'You are Agent Zero, a strategic planner. Return JSON only with strategySummary, directives, and zeroActionCandidateId. Assign intent, never exact worker movement. Each directive targetCell must be one of strategicTargetCells. Issue each directive at the current tick and set expiresAtTick between the current tick and current tick plus 9; normally cover at least five ticks so workers can operate between reviews. Use replanReasons and workerReplanRequests when present. zeroActionCandidateId must be one offered opaque candidate. Do not add fields.',
       },
       { role: 'user', content: JSON.stringify(observation) },
     ],
@@ -397,6 +397,7 @@ function validPlan(
         workers.has(directive.agentId) &&
         directive.issuedAtTick === observation.tickNumber &&
         directive.expiresAtTick >= observation.tickNumber &&
+        directive.expiresAtTick <= observation.tickNumber + 9 &&
         (!directive.targetCell || targets.has(directive.targetCell)),
     )
   );

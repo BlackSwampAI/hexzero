@@ -156,4 +156,41 @@ describe('swarm telemetry panels', () => {
     expect(screen.getByText('deterministic-fallback')).toBeInTheDocument();
     expect(screen.getByText(/Reflex timed out/)).toBeInTheDocument();
   });
+
+  it('distinguishes reused directives and shows a structured worker replan request', () => {
+    const value = snapshot();
+    const tick = value.swarmTicks![0]!;
+    tick.planSource = 'directive-reuse';
+    tick.replanReasons = [];
+    tick.workers[0]!.reflexDecision!.replanProbability = 0.91;
+    tick.signals = [
+      {
+        type: 'worker-replan-requested',
+        agentId: value.world.agents[1]!.id,
+        directiveId: 'directive-1',
+        probability: 0.91,
+      },
+    ];
+    render(
+      <>
+        <SwarmStrategyPanel snapshot={value} />
+        <SwarmAgentInspector
+          snapshot={value}
+          agent={value.world.agents[1]!}
+          cellState="infected"
+          controlledCellCount={1}
+        />
+        <SwarmRunPanel snapshot={value} status="paused" runTarget={10} />
+      </>,
+    );
+    expect(screen.getByText('Active directives reused')).toBeInTheDocument();
+    expect(screen.getByText(/91% · request sent to Zero/)).toBeInTheDocument();
+    expect(
+      screen.getByText('Retained Zero plans / reused ticks'),
+    ).toBeInTheDocument();
+    expect(screen.getByText('0 / 1')).toBeInTheDocument();
+    expect(
+      screen.getByText('Retained worker replan requests'),
+    ).toBeInTheDocument();
+  });
 });

@@ -34,6 +34,10 @@ const typesafeResponseSchema = z.object({
       ),
       confidence: z.number().finite().min(0).max(1),
     }),
+    request_replan: z.object({
+      type: z.literal('noul'),
+      noul: z.number().finite().min(0).max(1),
+    }),
   }),
   usage: z.object({
     input_tokens: z.number().int().nonnegative(),
@@ -213,6 +217,7 @@ export class TypeSafeJevReflexProvider implements ReflexProvider {
             this.#metadata(Date.now() - startedAtMs, response.status),
           );
         const answer = parsed.data.answers.choose_action;
+        const replanAnswer = parsed.data.answers.request_replan;
         if (
           !candidateIds.has(answer.choice) ||
           Object.keys(answer.probabilities).some(
@@ -237,6 +242,7 @@ export class TypeSafeJevReflexProvider implements ReflexProvider {
           chosenCandidateId: answer.choice,
           confidence: answer.confidence,
           probabilities: answer.probabilities,
+          replanProbability: replanAnswer.noul,
           model: parsed.data.model,
           latencyMs: Date.now() - startedAtMs,
           inputTokens: parsed.data.usage.input_tokens,
@@ -360,6 +366,16 @@ export function buildTypeSafeJevRequest(observationInput: ReflexObservation) {
             description,
           ]),
         ),
+      },
+      request_replan: {
+        type: 'noul' as const,
+        instructions:
+          'Do currently observed local conditions materially undermine or prevent successful execution of the assigned directive?',
+        criteria: {
+          false:
+            'Observed local conditions leave the assigned directive materially achievable with one of the currently legal actions.',
+          true: 'Observed local conditions materially undermine or prevent the assigned directive, such as when its target, route, required local state, or expected progress is unavailable or contradicted.',
+        },
       },
     },
   };

@@ -71,6 +71,7 @@ import {
   type AllianceProposalId,
   type SimulatedPlayerEvent,
   type SwarmPlan,
+  type SwarmReplanReason,
   type SwarmTickRecord,
   type ZeroStrategicObservation,
   type PatientZeroPressureContext,
@@ -1499,14 +1500,6 @@ export class SimulationService {
         'models_unavailable',
         'Agent Zero requires an available compatible model.',
       );
-    // One reserved admission for Zero and one for every worker’s initial Jev call.
-    if (!this.#attemptAccounting.reserve(agents.length)) {
-      this.#status = 'budget-exhausted';
-      throw new SimulationValidationError(
-        'experiment_budget_exhausted',
-        'The experiment does not have enough provider-attempt or credit-admission capacity for a complete tick.',
-      );
-    }
     const tickNumber = this.#completedTickCount + 1;
     const tickTurnBase = (tickNumber - 1) * agents.length;
     const preTickState = this.#state;
@@ -1531,6 +1524,19 @@ export class SimulationService {
       { createEventId: this.#createEventId, now: () => virtualTime },
     );
     const candidate = playerAdvance.state;
+    const replanReasons = this.#swarmReplanReasons(
+      tickNumber,
+      playerAdvance.events,
+    );
+    const replan = replanReasons.length > 0;
+    // Planning ticks reserve Zero plus workers; directive reuse only reserves workers.
+    if (!this.#attemptAccounting.reserve(agents.length - (replan ? 0 : 1))) {
+      this.#status = 'budget-exhausted';
+      throw new SimulationValidationError(
+        'experiment_budget_exhausted',
+        'The experiment does not have enough provider-attempt or credit-admission capacity for a complete tick.',
+      );
+    }
     const controller = new AbortController();
     this.#busy = true;
     this.#activeRequestController = controller;
@@ -1546,61 +1552,69 @@ export class SimulationService {
         tickNumber,
         virtualTime,
         playerAdvance.events,
+        replanReasons,
       );
       let plan: SwarmPlan;
-      let planSource: 'zero-llm' | 'deterministic-fallback' = 'zero-llm';
+      let planSource:
+        'zero-llm' | 'deterministic-fallback' | 'directive-reuse' = 'zero-llm';
       let plannerMetadata: ProviderMetadata | undefined;
       let plannerAttempts = 0;
       try {
-        const planned = await this.#swarmPlanner.plan(
-          observation,
-          resolvedZero.modelId,
-          {
-            signal: controller.signal,
-            deadlineAtMs,
-            beginAttempt: (kind) => {
-              const startedAt = this.#now();
-              const permit =
-                kind === 'initial'
-                  ? this.#attemptAccounting.startReserved({
-                      agentId: zero.id,
-                      intendedTurnNumber:
-                        tickTurnBase + order.indexOf(zero.id) + 1,
-                      intendedTickNumber: tickNumber,
-                      kind,
-                      startedAt,
-                      modelId: resolvedZero.modelId!,
-                      reasoningProfile: resolvedZero.reasoningProfile,
-                    })
-                  : this.#attemptAccounting.startAdditional({
-                      agentId: zero.id,
-                      intendedTurnNumber:
-                        tickTurnBase + order.indexOf(zero.id) + 1,
-                      intendedTickNumber: tickNumber,
-                      kind,
-                      startedAt,
-                      modelId: resolvedZero.modelId!,
-                      reasoningProfile: resolvedZero.reasoningProfile,
-                    });
-              if (permit !== null) plannerAttempts += 1;
-              return permit === null
-                ? null
-                : (completion) =>
-                    this.#attemptAccounting.finalize(permit, {
-                      ...completion,
-                      completedAt: this.#now(),
-                    });
+        if (!replan) {
+          planSource = 'directive-reuse';
+          plan = this.#reusedSwarmPlan(candidate, zero.id);
+        } else {
+          const planned = await this.#swarmPlanner.plan(
+            observation,
+            resolvedZero.modelId,
+            {
+              signal: controller.signal,
+              deadlineAtMs,
+              beginAttempt: (kind) => {
+                const startedAt = this.#now();
+                const permit =
+                  kind === 'initial'
+                    ? this.#attemptAccounting.startReserved({
+                        agentId: zero.id,
+                        intendedTurnNumber:
+                          tickTurnBase + order.indexOf(zero.id) + 1,
+                        intendedTickNumber: tickNumber,
+                        kind,
+                        startedAt,
+                        modelId: resolvedZero.modelId!,
+                        reasoningProfile: resolvedZero.reasoningProfile,
+                      })
+                    : this.#attemptAccounting.startAdditional({
+                        agentId: zero.id,
+                        intendedTurnNumber:
+                          tickTurnBase + order.indexOf(zero.id) + 1,
+                        intendedTickNumber: tickNumber,
+                        kind,
+                        startedAt,
+                        modelId: resolvedZero.modelId!,
+                        reasoningProfile: resolvedZero.reasoningProfile,
+                      });
+                if (permit !== null) plannerAttempts += 1;
+                return permit === null
+                  ? null
+                  : (completion) =>
+                      this.#attemptAccounting.finalize(permit, {
+                        ...completion,
+                        completedAt: this.#now(),
+                      });
+              },
             },
-          },
-        );
-        if (plannerAttempts === 0)
-          throw new Error(
-            'The planner returned without provider-attempt accounting.',
           );
-        if (controller.signal.aborted) throw new SimulationTurnCancelledError();
-        plan = swarmPlanSchema.parse(planned.plan);
-        plannerMetadata = planned.metadata;
-        this.#assertSwarmPlan(plan, observation, zero.id, tickNumber);
+          if (plannerAttempts === 0)
+            throw new Error(
+              'The planner returned without provider-attempt accounting.',
+            );
+          if (controller.signal.aborted)
+            throw new SimulationTurnCancelledError();
+          plan = swarmPlanSchema.parse(planned.plan);
+          plannerMetadata = planned.metadata;
+          this.#assertSwarmPlan(plan, observation, zero.id, tickNumber);
+        }
       } catch (error) {
         if (
           controller.signal.aborted ||
@@ -1682,12 +1696,27 @@ export class SimulationService {
         applied.set(agentId, result.result);
       }
       if (controller.signal.aborted) throw new SimulationTurnCancelledError();
+      const signals = workers.flatMap((worker) => {
+        const selection = selected.get(worker.id)!;
+        const probability = selection.decision?.replanProbability;
+        return probability !== undefined && probability >= 0.8
+          ? [
+              {
+                type: 'worker-replan-requested' as const,
+                agentId: worker.id,
+                directiveId: selection.observation.directive.id,
+                probability,
+              },
+            ]
+          : [];
+      });
       const tick = swarmTickRecordSchema.parse({
         tickNumber,
         virtualTime,
         tickIntervalMinutes: interval,
         plan,
         planSource,
+        ...(replanReasons.length ? { replanReasons } : {}),
         ...(plannerFailure ? { plannerFailure } : {}),
         ...(plannerMetadata ? { plannerMetadata } : {}),
         zeroAction,
@@ -1709,6 +1738,7 @@ export class SimulationService {
             ...(selection.failure ? { failure: selection.failure } : {}),
           };
         }),
+        ...(signals.length ? { signals } : {}),
       });
       const observationEvents = state.events.slice(preTickState.events.length);
       this.#state = {
@@ -2474,6 +2504,7 @@ export class SimulationService {
     tickNumber: number,
     virtualTime: string,
     playerEvents: readonly SimulatedPlayerEvent[],
+    replanReasons: readonly SwarmReplanReason[] = [],
   ): ZeroStrategicObservation {
     const counts = new Map<AgentId, number>(
       [...state.agents.keys()].map((id) => [id, 0]),
@@ -2508,6 +2539,7 @@ export class SimulationService {
                 : 'Wait on the current cell.',
       }),
     );
+    const workerReplanRequests = this.#swarmWorkerReplanRequests();
     return {
       zeroAgentId,
       tickNumber,
@@ -2549,9 +2581,105 @@ export class SimulationService {
             ? 'Cleaning pressure was blocked by an occupied infected cell.'
             : 'The simulated player moved this tick.',
       ),
+      ...(replanReasons.length ? { replanReasons: [...replanReasons] } : {}),
+      ...(workerReplanRequests.length ? { workerReplanRequests } : {}),
       legalZeroActions,
       strategicTargetCells,
     };
+  }
+
+  #swarmReplanReasons(
+    tickNumber: number,
+    playerEvents: readonly SimulatedPlayerEvent[],
+  ): SwarmReplanReason[] {
+    if (!this.#lastValidSwarmPlan) return ['initial'];
+    const reasons: SwarmReplanReason[] = [];
+    if ((tickNumber - 1) % 5 === 0) reasons.push('periodic-review');
+    if (
+      this.#lastValidSwarmPlan.directives.some(
+        ({ expiresAtTick }) => expiresAtTick < tickNumber,
+      )
+    )
+      reasons.push('directive-expired');
+    if (this.#swarmWorkerReplanRequests().length)
+      reasons.push('worker-request');
+    const recent = this.#swarmTicks.slice(-2);
+    if (
+      recent.length === 2 &&
+      [...this.#state.agents.keys()].some((agentId) => {
+        if (agentId === this.#scenario.patientZeroAgentId) return false;
+        const [previousTick, latestTick] = recent;
+        const previous = previousTick!.workers.find(
+          ({ agentId: id }) => id === agentId,
+        );
+        const latest = latestTick!.workers.find(
+          ({ agentId: id }) => id === agentId,
+        );
+        if (
+          !previous ||
+          !latest ||
+          previous.directive.id !== latest.directive.id
+        )
+          return false;
+        const stalled = (worker: NonNullable<typeof latest>) =>
+          worker.source === 'deterministic-fallback' ||
+          worker.actionResult?.accepted === false ||
+          (worker.action?.type === 'wait' &&
+            worker.directive.mission !== 'hold');
+        return stalled(previous) && stalled(latest);
+      })
+    )
+      reasons.push('worker-stalled');
+    if ([...this.#lastSwarmTerritoryDeltas.values()].some((delta) => delta < 0))
+      reasons.push('territory-loss');
+    const disinfections = playerEvents.filter(
+      ({ type }) => type === 'hex-disinfected',
+    ).length;
+    if (disinfections) reasons.push('player-disinfection');
+    const [previousTick, latestTick] = this.#swarmTicks.slice(-2);
+    if (
+      latestTick?.workers.some((worker) => {
+        const previous = previousTick?.workers.find(
+          ({ agentId }) => agentId === worker.agentId,
+        );
+        return (
+          worker.situation?.nearbyPressure === 'high' &&
+          previous?.situation?.nearbyPressure !== 'high'
+        );
+      })
+    )
+      reasons.push('high-pressure');
+    return reasons;
+  }
+
+  #swarmWorkerReplanRequests(): Array<{
+    agentId: AgentId;
+    directiveId: string;
+    probability: number;
+  }> {
+    return (this.#swarmTicks.at(-1)?.signals ?? []).map(
+      ({ agentId, directiveId, probability }) => ({
+        agentId,
+        directiveId,
+        probability,
+      }),
+    );
+  }
+
+  #reusedSwarmPlan(state: WorldState, zeroAgentId: AgentId): SwarmPlan {
+    const retained = this.#lastValidSwarmPlan;
+    if (!retained)
+      throw new Error('Cannot reuse a swarm plan before a plan is committed.');
+    const waitIndex = enumerateLegalWorldActions(state, zeroAgentId).findIndex(
+      (action) => action.type === 'wait',
+    );
+    if (waitIndex < 0)
+      throw new Error('The engine must provide a legal wait action.');
+    return swarmPlanSchema.parse({
+      strategySummary: retained.strategySummary,
+      directives: retained.directives,
+      zeroActionCandidateId: `zero_action_${waitIndex}`,
+    });
   }
 
   #assertSwarmPlan(
@@ -2574,6 +2702,7 @@ export class SimulationService {
         (directive) =>
           directive.issuedAtTick !== tickNumber ||
           directive.expiresAtTick < tickNumber ||
+          directive.expiresAtTick > tickNumber + 9 ||
           (directive.targetCell !== null &&
             !observation.strategicTargetCells.includes(directive.targetCell)),
       )

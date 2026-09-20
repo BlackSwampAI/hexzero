@@ -13,6 +13,10 @@ PR C adds mode-specific World Lab component coverage for Zero strategy,
 worker directives and probabilities, provider usage, Zero-only model setup,
 and hiding of legacy social/personality views while retaining legacy UI
 coverage. Browser smoke still exercises the deterministic legacy baseline.
+PR D covers the same-request Jev Choice and Noul response, deterministic
+replan signals, periodic and event-triggered Zero calls, directive expiry,
+current legal Zero actions on reuse ticks, provider-attempt reduction,
+cancellation rollback, and mode-specific World Lab telemetry.
 
 Attempt-budget tests use deterministic providers and cover whole-roster tick
 admission, retry permits, cancellation finalization, and the distinction

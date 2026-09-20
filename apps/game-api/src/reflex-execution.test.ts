@@ -172,6 +172,7 @@ describe('zero-swarm reflex execution seam', () => {
                 probabilities,
                 confidence: 1,
               },
+              request_replan: { type: 'noul', noul: 0 },
             },
             usage: { input_tokens: 24, output_tokens: 0 },
           }),

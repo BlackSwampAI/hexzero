@@ -37,7 +37,10 @@ class InspectingPlanner implements SwarmPlanner {
   readonly mode = 'scripted-swarm-test' as const;
   readonly configured = true;
   readonly observations: ZeroStrategicObservation[] = [];
-  constructor(private readonly failure: boolean | number = false) {}
+  constructor(
+    private readonly failure: boolean | number = false,
+    private readonly directiveLifetime = 5,
+  ) {}
   async plan(
     observation: ZeroStrategicObservation,
     _model: string,
@@ -75,7 +78,7 @@ class InspectingPlanner implements SwarmPlanner {
             priority: 'normal',
             riskTolerance: 'low',
             issuedAtTick: observation.tickNumber,
-            expiresAtTick: observation.tickNumber + 1,
+            expiresAtTick: observation.tickNumber + this.directiveLifetime,
           })),
       },
       metadata: { provider: 'scripted-test', model: 'test/zero', latencyMs: 0 },
@@ -237,20 +240,157 @@ describe('zero-swarm SimulationService tick', () => {
     ).toBe(true);
   });
 
-  it('retains unexpired prior directives when a later Zero plan fails', async () => {
+  it('reuses unexpired directives for four ticks, then replans on the fifth tick', async () => {
     const simulation = setup(
-      new InspectingPlanner(2),
+      new InspectingPlanner(6),
       new ScriptedReflexProvider(
-        Array.from({ length: 14 }, () => ({ chosenCandidateId: 'action_0' })),
+        Array.from({ length: 42 }, () => ({ chosenCandidateId: 'action_0' })),
       ),
     );
     await simulation.executeNextTick();
     const first = simulation.getSnapshot().swarmTicks?.[0];
+    for (let tick = 0; tick < 4; tick += 1) await simulation.executeNextTick();
+    const reused = simulation.getSnapshot().swarmTicks?.slice(1);
+    expect(
+      reused?.every(({ planSource }) => planSource === 'directive-reuse'),
+    ).toBe(true);
+    expect(reused?.map(({ plan }) => plan.directives)).toEqual(
+      Array.from({ length: 4 }, () => first?.plan.directives),
+    );
+    expect(
+      simulation.getSnapshot().experiment.attemptAccounting.attemptsStarted,
+    ).toBe(36);
+    await simulation.executeNextTick();
+    const sixth = simulation.getSnapshot().swarmTicks?.[5];
+    expect(sixth?.planSource).toBe('deterministic-fallback');
+    expect(sixth?.replanReasons).toContain('periodic-review');
+    expect(sixth?.zeroAction).toEqual({ type: 'wait' });
+  });
+
+  it('wakes Zero for a worker replan request and only admits worker attempts on reuse', async () => {
+    const planner = new InspectingPlanner();
+    const simulation = setup(
+      planner,
+      new ScriptedReflexProvider(
+        Array.from({ length: 21 }, () => ({
+          chosenCandidateId: 'action_0',
+          replanProbability: 0.8,
+        })),
+      ),
+    );
+    await simulation.executeNextTick();
+    expect(
+      simulation.getSnapshot().experiment.attemptAccounting.attemptsStarted,
+    ).toBe(8);
     await simulation.executeNextTick();
     const second = simulation.getSnapshot().swarmTicks?.[1];
-    expect(second?.planSource).toBe('deterministic-fallback');
-    expect(second?.zeroAction).toEqual({ type: 'wait' });
-    expect(second?.plan.directives).toEqual(first?.plan.directives);
+    expect(second?.replanReasons).toContain('worker-request');
+    expect(second?.planSource).toBe('zero-llm');
+    expect(
+      simulation.getSnapshot().experiment.attemptAccounting.attemptsStarted,
+    ).toBe(16);
+    expect(planner.observations).toHaveLength(2);
+
+    const reuseSimulation = setup(
+      new InspectingPlanner(),
+      new ScriptedReflexProvider(
+        Array.from({ length: 14 }, () => ({ chosenCandidateId: 'action_0' })),
+      ),
+    );
+    await reuseSimulation.executeNextTick();
+    await reuseSimulation.executeNextTick();
+    expect(reuseSimulation.getSnapshot().swarmTicks?.[1]?.planSource).toBe(
+      'directive-reuse',
+    );
+    expect(
+      reuseSimulation.getSnapshot().experiment.attemptAccounting
+        .attemptsStarted,
+    ).toBe(15);
+  });
+
+  it('wakes Zero when retained directives expire', async () => {
+    const planner = new InspectingPlanner(false, 1);
+    const simulation = setup(
+      planner,
+      new ScriptedReflexProvider(
+        Array.from({ length: 21 }, () => ({ chosenCandidateId: 'action_0' })),
+      ),
+    );
+    await simulation.executeNextTick();
+    await simulation.executeNextTick();
+    await simulation.executeNextTick();
+    const third = simulation.getSnapshot().swarmTicks?.[2];
+    expect(third?.replanReasons).toContain('directive-expired');
+    expect(third?.planSource).toBe('zero-llm');
+    expect(planner.observations).toHaveLength(2);
+  });
+
+  it('releases reuse-tick reservations when a worker request is cancelled', async () => {
+    let calls = 0;
+    const reflex: ReflexProvider = {
+      mode: 'scripted-reflex-test',
+      model: 'test-reflex',
+      configured: true,
+      async decide(observation, options) {
+        calls += 1;
+        const finalize = options?.beginAttempt?.('initial');
+        if (calls > 7)
+          return await new Promise<never>((_, reject) => {
+            options?.signal?.addEventListener(
+              'abort',
+              () => {
+                finalize?.({
+                  outcome: 'cancelled',
+                  failure: {
+                    code: 'cancelled',
+                    message: 'cancelled',
+                    retryable: false,
+                  },
+                });
+                reject(new Error('cancelled'));
+              },
+              { once: true },
+            );
+          });
+        const choice = observation.candidates[0]!;
+        const decision = reflexDecisionSchema.parse({
+          chosenCandidateId: choice.id,
+          confidence: 1,
+          probabilities: Object.fromEntries(
+            observation.candidates.map(({ id }) => [
+              id,
+              id === choice.id ? 1 : 0,
+            ]),
+          ),
+          model: 'test-reflex',
+          latencyMs: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          directiveId: observation.directive.id,
+          cognitionSource: 'jev-reflex',
+        });
+        finalize?.({ outcome: 'completed', reflexDecision: decision });
+        return decision;
+      },
+    };
+    const simulation = setup(new InspectingPlanner(), reflex);
+    await simulation.executeNextTick();
+    const execution = simulation.executeNextTick();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    simulation.cancelCurrentRequest();
+    await expect(execution).rejects.toBeInstanceOf(
+      SimulationTurnCancelledError,
+    );
+    expect(simulation.getSnapshot().tickNumber).toBe(1);
+    expect(
+      simulation.getSnapshot().experiment.attemptAccounting.attemptsStarted,
+    ).toBe(9);
+    expect(
+      simulation.getSnapshot().experiment.attemptAccounting.attemptsInFlight,
+    ).toBe(0);
+    expect(
+      simulation.getSnapshot().experiment.attemptAccounting.reservedPermits,
+    ).toBe(0);
   });
 
   it('exports simulated-player events under swarm tick selection', async () => {
