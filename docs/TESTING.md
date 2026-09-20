@@ -29,6 +29,12 @@ aggregate metrics, and has no provider, credential, or archive-write path.
 Run `pnpm compare:offline` (or bounded `--ticks` and `--seeds` options) to
 produce its JSON report. See [Zero-swarm offline comparison](ZERO_SWARM_COMPARISON.md).
 
+The live comparison command is a separate paid experiment. Its tests inject
+scripted providers and verify the acknowledgement gate, input parity, bounded
+attempt admission, safe metrics, and a no-network Markdown summary path.
+`pnpm validate`, Playwright, and GitHub CI never execute a paid run. See
+[Live swarm comparison](LIVE_SWARM_COMPARISON.md).
+
 The pre-live provider audit tests the Jev request's bounded capture-pressure
 projection, omission of hidden hunter state and empty capture noise, and the
 removal of the inert recent-facts field. Planner tests cover provider-reported

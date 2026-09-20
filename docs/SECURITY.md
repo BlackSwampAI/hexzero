@@ -73,6 +73,14 @@ deterministic fallback and remains visible as unavailable to the operator.
 
 The development API has no authentication, rate limiting, or provider-account balance enforcement. It does enforce server-owned per-experiment provider-attempt and conservative credit-admission ceilings configured by World Setup. Credit reservations bound admission exposure but cannot guarantee the upstream bill, especially when reported cost exceeds the operator's reservation. It binds to loopback and its CORS allowlist is limited to the documented local World Lab origins. Do not deploy its cost-incurring tick endpoint to unauthenticated public traffic.
 
+The separate live comparison CLI requires an explicit provider-cost
+acknowledgement and an operator-selected Zero model before it constructs live
+providers. Each run has hard attempt and credit-admission caps. Its JSON report
+contains only allowlisted scenario, world, decision, and usage metrics; no keys,
+raw provider payloads, prompts, or private reasoning. OpenRouter's returned
+cost is factual when present. Missing costs and TypeSafe monetary cost remain
+unknown; the command never launches from default tests or CI.
+
 ## Model-provider isolation
 
 Simultaneous ticks retain the same provider isolation. Every job receives a

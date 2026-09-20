@@ -13,6 +13,11 @@ policies. The first comparison retains legacy mode pending real-provider trials;
 see `docs/ZERO_SWARM_COMPARISON.md`. See ADRs 0028-0032. Historical milestones
 below remain as implementation history.
 
+PR #58 closes the pre-live Jev capture-context and Agent Zero cost-accounting
+gaps. PR #59 adds an explicitly opted-in live comparison of Jev workers against
+deterministic workers while holding the Zero model and scenario inputs constant.
+Legacy retirement remains a later decision after measured live results.
+
 ## Experimental Patient Zero coordinator
 
 The current focused slice requires one normal physical agent, provides a
