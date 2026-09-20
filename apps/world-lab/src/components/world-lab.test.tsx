@@ -1338,7 +1338,7 @@ describe('WorldLab', () => {
       'Spawn assignment seed',
       'Roster generation seed',
       'Behavior assignment seed',
-      'Casual cleaner simulation seed',
+      'Simulated player seed',
     ]) {
       expect(screen.getByLabelText(label)).toHaveAttribute('maxlength', '80');
     }
@@ -1395,11 +1395,11 @@ describe('WorldLab', () => {
         await user.type(input, value);
       }
       await user.click(
-        screen.getByRole('checkbox', { name: 'Enable casual cleaner' }),
+        screen.getByRole('checkbox', {
+          name: 'Enable simulated player pressure',
+        }),
       );
-      const cleanerSeed = screen.getByLabelText(
-        'Casual cleaner simulation seed',
-      );
+      const cleanerSeed = screen.getByLabelText('Simulated player seed');
       await user.clear(cleanerSeed);
       await user.type(cleanerSeed, 'ui-cleaner-seed');
 
@@ -1537,7 +1537,7 @@ describe('WorldLab', () => {
     expect(screen.getByLabelText('Behavior assignment seed')).toHaveValue(
       'reset-behavior-seed',
     );
-    expect(screen.getByLabelText('Casual cleaner simulation seed')).toHaveValue(
+    expect(screen.getByLabelText('Simulated player seed')).toHaveValue(
       'reset-cleaner-seed',
     );
     expect(
@@ -1563,7 +1563,7 @@ describe('WorldLab', () => {
     await user.click(await screen.findByLabelText('More World Lab actions'));
     await user.click(screen.getByRole('button', { name: 'World setup' }));
     const enabled = screen.getByRole('checkbox', {
-      name: 'Enable casual cleaner',
+      name: 'Enable simulated player pressure',
     });
     expect(enabled).not.toBeChecked();
     const objective = screen.getByLabelText(
@@ -1571,7 +1571,7 @@ describe('WorldLab', () => {
     );
     expect(objective).toHaveValue('durable-influence-v2');
     await user.click(enabled);
-    const seed = screen.getByLabelText('Casual cleaner simulation seed');
+    const seed = screen.getByLabelText('Simulated player seed');
     await user.clear(seed);
     await user.type(seed, 'ui-pressure-a');
     expect(objective).toHaveValue('durable-influence-v3');
@@ -1595,6 +1595,40 @@ describe('WorldLab', () => {
     });
     expect(objective).toHaveValue('durable-influence-v2');
     expect(await screen.findByText(/player pressure disabled/)).toBeVisible();
+  });
+
+  it('selects the seeded trail-hunter-v1 profile for a pressure experiment', async () => {
+    let previewBody: ReturnType<typeof defaultWorldSetupRequest> | undefined;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input).endsWith('/setup/preview')) {
+          previewBody = JSON.parse(String(init?.body));
+          return jsonResponse(previewWorldSetup(previewBody!));
+        }
+        return jsonResponse(initial);
+      }),
+    );
+    const user = userEvent.setup();
+    render(<WorldLab />);
+    await openOverflow(user);
+    await user.click(screen.getByRole('button', { name: 'World setup' }));
+    await user.click(
+      screen.getByRole('checkbox', {
+        name: 'Enable simulated player pressure',
+      }),
+    );
+    await user.selectOptions(
+      screen.getByLabelText('Simulated player profile'),
+      'trail-hunter-v1',
+    );
+    await user.click(screen.getByRole('button', { name: 'Preview' }));
+
+    expect(previewBody?.simulatedPlayer).toMatchObject({
+      enabled: true,
+      profile: 'trail-hunter-v1',
+    });
+    expect(await screen.findByText(/1 seeded trail hunter/)).toBeVisible();
   });
 
   it('shows omniscient casual-cleaner position identity and activity', async () => {
@@ -4059,6 +4093,38 @@ describe('WorldLab', () => {
     expect(screen.getByRole('button', { name: 'Single tick' })).toBeEnabled();
     fireEvent.click(screen.getByLabelText('More World Lab actions'));
     expect(screen.getByRole('button', { name: 'Reset world' })).toBeEnabled();
+  });
+
+  it('stops all tick controls after infection is eliminated', async () => {
+    const eliminated = simulationSnapshotSchema.parse({
+      ...initial,
+      status: 'infection-eliminated',
+      tickNumber: 1,
+      lastTickIntervalMinutes: 5,
+      resolutionOrder: [],
+      nextAgentId: null,
+      world: { ...initial.world, agents: [] },
+      resolvedModels: [],
+      behaviorConfiguration: undefined,
+      agentGoals: [],
+      agentMemories: [],
+      experiment: { ...initial.experiment, currentTerritory: [] },
+    });
+    expect(
+      simulationSnapshotSchema.safeParse(JSON.parse(JSON.stringify(eliminated)))
+        .success,
+    ).toBe(true);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => jsonResponse(eliminated)),
+    );
+    render(<WorldLab />);
+
+    expect(
+      await screen.findByText(/All infection has been eliminated/),
+    ).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Start' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Single tick' })).toBeDisabled();
   });
 });
 

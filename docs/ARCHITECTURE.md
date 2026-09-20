@@ -33,12 +33,15 @@ they do not enforce the upstream account balance. See ADRs 0025 and 0026.
 
 ## Simultaneous tick authority
 
-Before the frozen agent snapshot, the optional seeded `casual-cleaner` advances
-one deterministic virtual interval in the world engine. Its movement and
-disinfection/block events remain an uncommitted candidate until the complete
-agent tick commits, so cancellation cannot partially advance player pressure.
-The engine targets visible infection rather than hidden agent positions;
-positions are consulted only for authoritative co-located clean blocking.
+Before the frozen agent snapshot, the optional seeded simulated-player profile
+advances one deterministic virtual interval in the world engine. The baseline
+`casual-cleaner` retains its movement and blocked-clean behavior. The optional
+`trail-hunter-v1` routes from visible infection and can capture an agent only
+when they share a cell. Capture removes the agent, leaves its infected cells
+abandoned, and changes the active roster before provider dispatch. If no agents
+remain, or Patient Zero is captured in zero-swarm mode, the player-only tick
+commits a terminal outcome. Player events remain an uncommitted candidate until
+the tick commits, so cancellation cannot partially advance pressure.
 Ordinary agents retain bounded own/nearby successful-clean evidence. The one
 configured Patient Zero additionally receives a deterministic, current-interval
 feed of successful cleans and occupied-cell blocks, capped at 128 entries with

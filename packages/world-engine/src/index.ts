@@ -196,9 +196,196 @@ export function advanceCasualCleaner(
   return { state: nextState, events };
 }
 
+/**
+ * Advance the stronger deterministic pressure profile for one virtual
+ * interval. The hunter routes only from visible infected cells, which are the
+ * observable infection trail. It deliberately never ranks or routes toward
+ * agent positions. Agent positions are consulted only once the player shares
+ * a cell, where the engine authoritatively resolves a capture.
+ */
+export function advanceTrailHunter(
+  state: WorldState,
+  seed: string,
+  tickNumber: number,
+  context: Pick<EngineContext, 'createEventId' | 'now'>,
+): AdvancedSimulatedPlayer {
+  const player = state.simulatedPlayer;
+  if (!player) return { state, events: [] };
+
+  let currentCell = player.currentCell;
+  const infected = [...state.hexes]
+    .filter(
+      (entry): entry is [H3Cell, Extract<HexControl, { state: 'infected' }>] =>
+        entry[1].state === 'infected',
+    )
+    .map(([cell]) => cell);
+  const events: SimulatedPlayerEvent[] = [];
+  const eventBase = () => ({
+    id: context.createEventId() as SimulatedPlayerEvent['id'],
+    occurredAt: context.now(),
+    profile: 'trail-hunter-v1' as const,
+    originatingTick: tickNumber,
+  });
+
+  if (infected.length && state.hexes.get(currentCell)?.state !== 'infected') {
+    const target = infected
+      .map((cell) => ({
+        cell,
+        distance:
+          safeGridDistance(currentCell, cell) ?? Number.MAX_SAFE_INTEGER,
+        rank: seededNumber(
+          `${seed}:trail-hunter:target:${tickNumber}:${cell}`,
+        )(),
+      }))
+      .sort(
+        (a, b) =>
+          a.distance - b.distance ||
+          a.rank - b.rank ||
+          a.cell.localeCompare(b.cell),
+      )[0]?.cell;
+    if (target) {
+      const currentDistance =
+        safeGridDistance(currentCell, target) ?? Number.MAX_SAFE_INTEGER;
+      const next = gridDisk(currentCell, 1)
+        .filter(
+          (cell) => cell !== currentCell && state.hexes.has(cell as H3Cell),
+        )
+        .map((cell) => ({
+          cell: h3CellSchema.parse(cell),
+          distance:
+            safeGridDistance(h3CellSchema.parse(cell), target) ??
+            Number.MAX_SAFE_INTEGER,
+          rank: seededNumber(
+            `${seed}:trail-hunter:step:${tickNumber}:${cell}`,
+          )(),
+        }))
+        .sort(
+          (a, b) =>
+            a.distance - b.distance ||
+            a.rank - b.rank ||
+            a.cell.localeCompare(b.cell),
+        )[0];
+      if (next && next.distance < currentDistance) {
+        events.push({
+          ...eventBase(),
+          type: 'simulated-player-moved',
+          fromCell: currentCell,
+          toCell: next.cell,
+        });
+        currentCell = next.cell;
+      }
+    }
+  }
+
+  let hexes = state.hexes;
+  let agents = state.agents;
+  let alliances = state.alliances;
+  let pendingAllianceProposals = state.pendingAllianceProposals;
+  let metrics = {
+    ...player.metrics,
+    movements:
+      player.metrics.movements +
+      events.filter(({ type }) => type === 'simulated-player-moved').length,
+  };
+  const captured = [...state.agents.values()]
+    .filter(({ currentCell: agentCell }) => agentCell === currentCell)
+    .sort((a, b) => a.id.localeCompare(b.id))[0];
+  if (captured) {
+    agents = new Map(state.agents);
+    (agents as Map<AgentId, Agent>).delete(captured.id);
+    const capturedAllianceIds = new Set<AllianceId>();
+    alliances = new Map(
+      [...(state.alliances?.entries() ?? [])].flatMap(([id, alliance]) => {
+        if (!alliance.memberAgentIds.includes(captured.id))
+          return [[id, alliance] as const];
+        const survivors = alliance.memberAgentIds.filter(
+          (memberId) => memberId !== captured.id,
+        );
+        if (survivors.length < 2) {
+          capturedAllianceIds.add(id);
+          return [];
+        }
+        return [[id, { ...alliance, memberAgentIds: survivors }] as const];
+      }),
+    );
+    pendingAllianceProposals = new Map(
+      [...(state.pendingAllianceProposals?.entries() ?? [])].filter(
+        ([, proposal]) =>
+          proposal.proposerAgentId !== captured.id &&
+          proposal.recipientAgentId !== captured.id &&
+          (proposal.proposerAllianceId === null ||
+            !capturedAllianceIds.has(proposal.proposerAllianceId)) &&
+          (proposal.recipientAllianceId === null ||
+            !capturedAllianceIds.has(proposal.recipientAllianceId)),
+      ),
+    );
+    const abandonedCells = [...state.hexes].filter(
+      ([, hex]) =>
+        hex.state === 'infected' && hex.controllerAgentId === captured.id,
+    );
+    if (abandonedCells.length) {
+      hexes = new Map(state.hexes);
+      for (const [cell, hex] of abandonedCells)
+        (hexes as Map<H3Cell, HexControl>).set(cell, {
+          ...hex,
+          controllerAgentId: null,
+        });
+    }
+    events.push({
+      ...eventBase(),
+      type: 'simulated-player-agent-captured',
+      cell: currentCell,
+      capturedAgentId: captured.id,
+      abandonedCellCount: abandonedCells.length,
+    });
+  } else {
+    const current = state.hexes.get(currentCell);
+    if (current?.state === 'infected') {
+      events.push({
+        ...eventBase(),
+        type: 'hex-disinfected',
+        cell: currentCell,
+        previousControllerAgentId: current.controllerAgentId,
+      });
+      hexes = new Map(state.hexes);
+      (hexes as Map<H3Cell, HexControl>).set(currentCell, {
+        state: 'open',
+        controllerAgentId: null,
+      });
+      metrics = {
+        ...metrics,
+        cellsDisinfected: metrics.cellsDisinfected + 1,
+      };
+    }
+  }
+
+  const nextState: WorldState = {
+    ...state,
+    hexes,
+    agents,
+    alliances,
+    pendingAllianceProposals,
+    simulatedPlayer: { ...player, currentCell, metrics },
+    events: [...state.events, ...events],
+  };
+  return { state: nextState, events };
+}
+
+/** Dispatches the configured deterministic simulated-player profile. */
+export function advanceSimulatedPlayer(
+  state: WorldState,
+  seed: string,
+  tickNumber: number,
+  context: Pick<EngineContext, 'createEventId' | 'now'>,
+): AdvancedSimulatedPlayer {
+  if (state.simulatedPlayer?.profile === 'trail-hunter-v1')
+    return advanceTrailHunter(state, seed, tickNumber, context);
+  return advanceCasualCleaner(state, seed, tickNumber, context);
+}
+
 export type HexControl =
   | { readonly state: 'open'; readonly controllerAgentId: null }
-  | { readonly state: 'infected'; readonly controllerAgentId: AgentId };
+  | { readonly state: 'infected'; readonly controllerAgentId: AgentId | null };
 
 export interface EngineContext {
   createEventId: () => string;
@@ -314,13 +501,14 @@ export function getCaptureEligibility(
   if (currentHex.controllerAgentId === agentId)
     return { eligible: false, blockedReason: 'already-controller' };
   const actingAlliance = getAgentAlliance(state, agentId);
-  const controllerAlliance = getAgentAlliance(
-    state,
-    currentHex.controllerAgentId,
-  );
+  const controllerAlliance = currentHex.controllerAgentId
+    ? getAgentAlliance(state, currentHex.controllerAgentId)
+    : undefined;
   if (actingAlliance && controllerAlliance?.id === actingAlliance.id)
     return { eligible: false, blockedReason: 'allied-controller' };
-  const controller = state.agents.get(currentHex.controllerAgentId);
+  const controller = currentHex.controllerAgentId
+    ? state.agents.get(currentHex.controllerAgentId)
+    : undefined;
   if (controller?.currentCell === agent.currentCell)
     return { eligible: false, blockedReason: 'controller-present' };
   return { eligible: true };

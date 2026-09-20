@@ -17,6 +17,10 @@ PR D covers the same-request Jev Choice and Noul response, deterministic
 replan signals, periodic and event-triggered Zero calls, directive expiry,
 current legal Zero actions on reuse ticks, provider-attempt reduction,
 cancellation rollback, and mode-specific World Lab telemetry.
+PR E covers seeded trail-hunter routing from visible infection, co-located
+capture, abandoned territory, active-roster dispatch after player pressure,
+terminal capture outcomes, cancellation rollback, and safe export/UI handling.
+The casual-cleaner baseline remains covered by its existing offline tests.
 
 Attempt-budget tests use deterministic providers and cover whole-roster tick
 admission, retry permits, cancellation finalization, and the distinction

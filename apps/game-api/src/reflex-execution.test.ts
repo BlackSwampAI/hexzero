@@ -81,6 +81,29 @@ describe('zero-swarm reflex execution seam', () => {
     expect(applied.state.agents.get(agent.id)?.currentCell).toBe(targetCell);
   });
 
+  it('passes bounded authoritative capture facts to Jev without player route data', () => {
+    const { state, directive } = fixture();
+    const compiled = compileReflexObservation(state, directive, {
+      captureAlerts: [
+        {
+          capturedAgentId: [...state.agents.keys()][0]!,
+          cell: directive.targetCell!,
+          originatingTick: 4,
+          abandonedCellCount: 2,
+        },
+      ],
+    });
+    expect(compiled.observation.captureAlerts).toEqual([
+      {
+        capturedAgentId: [...state.agents.keys()][0]!,
+        cell: directive.targetCell,
+        originatingTick: 4,
+        abandonedCellCount: 2,
+      },
+    ]);
+    expect(compiled.observation).not.toHaveProperty('simulatedPlayer');
+  });
+
   it('retains a completed provider attempt even when no world state is committed', async () => {
     const { state, directive } = fixture();
     const accounting = new AttemptAccounting(10);

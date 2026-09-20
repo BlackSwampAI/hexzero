@@ -12,6 +12,8 @@ import {
   applyDiplomacy,
   applyWorldAction,
   advanceCasualCleaner,
+  advanceSimulatedPlayer,
+  advanceTrailHunter,
   areAdjacent,
   createDevelopmentWorld,
   deterministicAllianceColor,
@@ -134,6 +136,126 @@ describe('D1 casual cleaner authority', () => {
       { type: 'simulated-player-clean-blocked', blockingAgentId: agentId },
     ]);
     expect(result.state.simulatedPlayer?.metrics.blockedDisinfections).toBe(1);
+  });
+});
+
+describe('trail hunter deterministic pressure', () => {
+  it('routes from infection evidence with stable seeded tie-breaking', () => {
+    const before = stateWithAgent();
+    const target = h3CellSchema.parse(
+      gridDisk(center, 2).find((cell) => gridDistance(center, cell) === 2),
+    );
+    const pressured = {
+      ...before,
+      hexes: new Map(before.hexes).set(target, {
+        state: 'infected' as const,
+        controllerAgentId: agentId,
+      }),
+      agents: new Map(),
+      simulatedPlayer: {
+        profile: 'trail-hunter-v1' as const,
+        currentCell: center,
+        metrics: { movements: 0, cellsDisinfected: 0, blockedDisinfections: 0 },
+      },
+    };
+
+    const first = advanceTrailHunter(pressured, 'hunter-route', 1, context);
+    const second = advanceTrailHunter(pressured, 'hunter-route', 1, context);
+
+    expect(first).toEqual(second);
+    expect(first.events).toMatchObject([{ type: 'simulated-player-moved' }]);
+    expect(gridDistance(center, first.state.simulatedPlayer!.currentCell)).toBe(
+      1,
+    );
+  });
+
+  it('does not route toward hidden agent positions', () => {
+    const before = stateWithAgent();
+    const target = h3CellSchema.parse(
+      gridDisk(center, 2).find((cell) => gridDistance(center, cell) === 2),
+    );
+    const shared = {
+      ...before,
+      hexes: new Map(before.hexes).set(target, {
+        state: 'infected' as const,
+        controllerAgentId: agentId,
+      }),
+      simulatedPlayer: {
+        profile: 'trail-hunter-v1' as const,
+        currentCell: center,
+        metrics: { movements: 0, cellsDisinfected: 0, blockedDisinfections: 0 },
+      },
+    };
+    const withoutOtherAgent = { ...shared, agents: new Map() };
+    const withDistantAgent = {
+      ...shared,
+      agents: new Map([
+        [recipientId, { ...agent, id: recipientId, currentCell: distant }],
+      ]),
+    };
+
+    const without = advanceTrailHunter(
+      withoutOtherAgent,
+      'hunter-evidence',
+      2,
+      context,
+    );
+    const withAgent = advanceTrailHunter(
+      withDistantAgent,
+      'hunter-evidence',
+      2,
+      context,
+    );
+
+    expect(withAgent.events).toEqual(without.events);
+    expect(withAgent.state.simulatedPlayer).toEqual(
+      without.state.simulatedPlayer,
+    );
+  });
+
+  it('captures a co-located agent and abandons its infected territory', () => {
+    const before = stateWithAgent();
+    const pressured = {
+      ...before,
+      hexes: new Map(before.hexes)
+        .set(center, {
+          state: 'infected' as const,
+          controllerAgentId: agentId,
+        })
+        .set(adjacent, {
+          state: 'infected' as const,
+          controllerAgentId: agentId,
+        }),
+      simulatedPlayer: {
+        profile: 'trail-hunter-v1' as const,
+        currentCell: center,
+        metrics: { movements: 0, cellsDisinfected: 0, blockedDisinfections: 0 },
+      },
+    };
+
+    const result = advanceSimulatedPlayer(
+      pressured,
+      'hunter-capture',
+      3,
+      context,
+    );
+
+    expect(result.state.agents.has(agentId)).toBe(false);
+    expect(result.state.hexes.get(center)).toEqual({
+      state: 'infected',
+      controllerAgentId: null,
+    });
+    expect(result.state.hexes.get(adjacent)).toEqual({
+      state: 'infected',
+      controllerAgentId: null,
+    });
+    expect(result.events).toMatchObject([
+      {
+        type: 'simulated-player-agent-captured',
+        capturedAgentId: agentId,
+        abandonedCellCount: 2,
+      },
+    ]);
   });
 });
 

@@ -73,12 +73,13 @@ export class ObservationHistory {
             event,
             RECENT_CONTROL_CHANGE_LIMIT,
           );
-          appendFor(
-            this.#controlChanges,
-            event.previousControllerAgentId,
-            event,
-            RECENT_CONTROL_CHANGE_LIMIT,
-          );
+          if (event.previousControllerAgentId !== null)
+            appendFor(
+              this.#controlChanges,
+              event.previousControllerAgentId,
+              event,
+              RECENT_CONTROL_CHANGE_LIMIT,
+            );
           break;
         case 'public-message-sent':
           this.#publicMessages = append(
@@ -135,6 +136,7 @@ export class ObservationHistory {
         case 'simulated-player-moved':
         case 'hex-disinfected':
         case 'simulated-player-clean-blocked':
+        case 'simulated-player-agent-captured':
           break;
       }
     }

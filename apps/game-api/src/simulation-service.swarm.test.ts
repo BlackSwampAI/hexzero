@@ -9,14 +9,17 @@ import {
   type SwarmPlanner,
 } from '@hexzero/agent-runtime';
 import {
+  assignBehavior,
   type CompatibleModel,
   type SwarmPlan,
   type ZeroStrategicObservation,
   reflexDecisionSchema,
   singleTickResponseSchema,
 } from '@hexzero/shared';
+import { generateDeterministicRoster } from '@hexzero/world-engine';
 import { createApp } from './app';
 import {
+  SimulationConflictError,
   SimulationService,
   SimulationTurnCancelledError,
 } from './simulation-service';
@@ -134,6 +137,187 @@ function setup(
 }
 
 describe('zero-swarm SimulationService tick', () => {
+  it('commits a player-only terminal tick when trail hunter captures Patient Zero', async () => {
+    const planner = new InspectingPlanner();
+    const simulation = setup(
+      planner,
+      new ScriptedReflexProvider([{ chosenCandidateId: 'action_0' }]),
+    );
+    const request = simulation.getDefaultWorldSetup();
+    const roster = generateDeterministicRoster(1, 'terminal-roster');
+    simulation.applyWorldSetup({
+      ...request,
+      cognitionMode: 'zero-swarm-v1',
+      roster,
+      patientZeroAgentId: roster[0]!.id,
+      spawnSeed: 'terminal-spawn',
+      objectiveVersion: 'durable-influence-v3',
+      capabilities: { ...request.capabilities, simulatedPlayerPressure: true },
+      simulatedPlayer: {
+        enabled: true,
+        profile: 'trail-hunter-v1',
+        seed: 'terminal-spawn',
+      },
+      modelConfiguration: {
+        globalModelId: model.id,
+        globalReasoningProfile: 'low',
+        overrides: [],
+        locked: false,
+      },
+      behaviorConfiguration: {
+        ...request.behaviorConfiguration,
+        assignments: assignBehavior(
+          roster.map(({ id }) => id),
+          request.behaviorConfiguration.seed,
+          'balanced-random',
+        ),
+      },
+    });
+
+    await expect(simulation.executeNextTick()).resolves.toEqual([]);
+    const snapshot = simulation.getSnapshot();
+    expect(snapshot.status).toBe('infection-eliminated');
+    expect(snapshot.tickNumber).toBe(1);
+    expect(snapshot.resolutionOrder).toEqual([]);
+    expect(snapshot.nextAgentId).toBeNull();
+    expect(snapshot.world.agents).toEqual([]);
+    expect(snapshot.world.events).toContainEqual(
+      expect.objectContaining({ type: 'simulated-player-agent-captured' }),
+    );
+    expect(snapshot.experiment.attemptAccounting.attemptsStarted).toBe(0);
+    expect(planner.observations).toEqual([]);
+    const exported = simulation.generateExperimentExport({
+      agents: { mode: 'all' },
+      turns: { mode: 'entire-retained' },
+      outcomes: ['accepted', 'rejected', 'provider-error', 'operator-skipped'],
+      actions: ['move', 'infect', 'capture', 'wait'],
+      communications: { channel: 'all', status: 'all' },
+      level: 'full-safe',
+      serialization: 'compact',
+    });
+    expect(exported.selection.selectedAgentIds).toEqual([roster[0]!.id]);
+    expect(exported.agents).toEqual([
+      expect.objectContaining({ id: roster[0]!.id }),
+    ]);
+    expect(exported.worldEvents).toContainEqual(
+      expect.objectContaining({
+        type: 'simulated-player-agent-captured',
+        capturedAgentId: roster[0]!.id,
+      }),
+    );
+    await expect(simulation.executeNextTick()).rejects.toBeInstanceOf(
+      SimulationConflictError,
+    );
+  });
+
+  it('removes a captured worker before Zero plans or any worker reflex runs', async () => {
+    const planner = new InspectingPlanner();
+    const simulation = setup(
+      planner,
+      new ScriptedReflexProvider([{ chosenCandidateId: 'action_0' }]),
+    );
+    const request = simulation.getDefaultWorldSetup();
+    const roster = generateDeterministicRoster(2, 'worker-capture-roster');
+    simulation.applyWorldSetup({
+      ...request,
+      cognitionMode: 'zero-swarm-v1',
+      roster,
+      patientZeroAgentId: roster[1]!.id,
+      spawnSeed: 'worker-capture-spawn',
+      objectiveVersion: 'durable-influence-v3',
+      capabilities: { ...request.capabilities, simulatedPlayerPressure: true },
+      simulatedPlayer: {
+        enabled: true,
+        profile: 'trail-hunter-v1',
+        seed: 'worker-capture-spawn',
+      },
+      modelConfiguration: {
+        globalModelId: model.id,
+        globalReasoningProfile: 'low',
+        overrides: [],
+        locked: false,
+      },
+      behaviorConfiguration: {
+        ...request.behaviorConfiguration,
+        assignments: assignBehavior(
+          roster.map(({ id }) => id),
+          request.behaviorConfiguration.seed,
+          'balanced-random',
+        ),
+      },
+    });
+
+    await simulation.executeNextTick();
+    const snapshot = simulation.getSnapshot();
+    expect(snapshot.status).toBe('paused');
+    expect(snapshot.world.agents.map(({ id }) => id)).toEqual([roster[1]!.id]);
+    expect(snapshot.swarmTicks?.[0]?.workers).toEqual([]);
+    expect(
+      planner.observations[0]?.agents.map(({ agentId }) => agentId),
+    ).toEqual([roster[1]!.id]);
+    expect(planner.observations[0]?.recentPlayerPressure).toEqual(
+      expect.arrayContaining([expect.stringContaining(roster[0]!.id)]),
+    );
+    expect(snapshot.experiment.attemptAccounting.attemptsStarted).toBe(1);
+  });
+
+  it('keeps provider attempt turn numbers unique after a worker capture', async () => {
+    const simulation = setup(
+      new InspectingPlanner(),
+      new ScriptedReflexProvider(
+        Array.from({ length: 2 }, () => ({ chosenCandidateId: 'action_0' })),
+      ),
+    );
+    const request = simulation.getDefaultWorldSetup();
+    const roster = generateDeterministicRoster(3, 'attempt-capture-roster');
+    simulation.applyWorldSetup({
+      ...request,
+      cognitionMode: 'zero-swarm-v1',
+      roster,
+      patientZeroAgentId: roster[1]!.id,
+      spawnSeed: 'attempt-capture-spawn',
+      objectiveVersion: 'durable-influence-v3',
+      capabilities: { ...request.capabilities, simulatedPlayerPressure: true },
+      simulatedPlayer: {
+        enabled: true,
+        profile: 'trail-hunter-v1',
+        seed: 'attempt-capture-spawn',
+      },
+      modelConfiguration: {
+        globalModelId: model.id,
+        globalReasoningProfile: 'low',
+        overrides: [],
+        locked: false,
+      },
+      behaviorConfiguration: {
+        ...request.behaviorConfiguration,
+        assignments: assignBehavior(
+          roster.map(({ id }) => id),
+          request.behaviorConfiguration.seed,
+          'balanced-random',
+        ),
+      },
+    });
+
+    await simulation.executeNextTick();
+    await simulation.executeNextTick();
+    const exported = simulation.generateExperimentExport({
+      agents: { mode: 'all' },
+      turns: { mode: 'entire-retained' },
+      outcomes: ['accepted', 'rejected', 'provider-error', 'operator-skipped'],
+      actions: ['move', 'infect', 'capture', 'wait'],
+      communications: { channel: 'all', status: 'all' },
+      level: 'full-safe',
+      serialization: 'compact',
+    });
+    const attempts = exported.providerAttempts ?? [];
+    const intendedTurns = attempts.map(
+      ({ intendedTurnNumber }) => intendedTurnNumber,
+    );
+    expect(new Set(intendedTurns).size).toBe(intendedTurns.length);
+    expect(attempts.map(({ agentId }) => agentId)).not.toContain(roster[0]!.id);
+  });
+
   it('reports swarm providers without requiring the unused legacy provider', () => {
     const legacy: AgentProvider = {
       mode: 'openrouter',

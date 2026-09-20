@@ -75,6 +75,7 @@ import {
   type SwarmTickRecord,
   type ZeroStrategicObservation,
   type PatientZeroPressureContext,
+  type CaptureAlert,
   worldSetupRequestSchema,
   type AppliedScenario,
   type WorldSetupPreviewResponse,
@@ -98,7 +99,7 @@ import {
   expireAllianceProposals,
   seededTickIntervalMinutes,
   seededTickOrder,
-  advanceCasualCleaner,
+  advanceSimulatedPlayer,
   enumerateLegalWorldActions,
   toWorldState,
   type WorldState,
@@ -165,10 +166,12 @@ export function calculatePatientZeroPressureContext(
     > =>
       (event.type === 'hex-disinfected' ||
         event.type === 'simulated-player-clean-blocked') &&
+      (event.type !== 'hex-disinfected' ||
+        event.previousControllerAgentId !== null) &&
       event.originatingTick >= startTick &&
       event.originatingTick <= currentTick,
   );
-  const eventSubject = (event: (typeof relevant)[number]): AgentId =>
+  const eventSubject = (event: (typeof relevant)[number]): AgentId | null =>
     event.type === 'hex-disinfected'
       ? event.previousControllerAgentId
       : event.blockingAgentId;
@@ -212,10 +215,34 @@ export function calculatePatientZeroPressureContext(
     },
     currentAlliance: memberIds
       ? countsFor(
-          relevant.filter((event) => memberIds.has(eventSubject(event))),
+          relevant.filter((event) => {
+            const subject = eventSubject(event);
+            return subject !== null && memberIds.has(subject);
+          }),
         )
       : null,
   };
+}
+
+function captureAlertsFrom(
+  events: readonly SimulatedPlayerEvent[],
+): CaptureAlert[] {
+  return events
+    .filter(
+      (
+        event,
+      ): event is Extract<
+        SimulatedPlayerEvent,
+        { type: 'simulated-player-agent-captured' }
+      > => event.type === 'simulated-player-agent-captured',
+    )
+    .slice(-4)
+    .map(({ capturedAgentId, cell, originatingTick, abandonedCellCount }) => ({
+      capturedAgentId,
+      cell,
+      originatingTick,
+      abandonedCellCount,
+    }));
 }
 
 interface PendingFailedTurn {
@@ -286,6 +313,7 @@ export class SimulationService {
   #state: WorldState;
   #turns: AgentTurnRecord[] = [];
   #completedTurnCount = 0;
+  #completedSwarmDecisionCount = 0;
   #completedTickCount = 0;
   #virtualTime = RESET_GENERATED_AT;
   #lastTickIntervalMinutes: number | null = null;
@@ -398,7 +426,6 @@ export class SimulationService {
   getSnapshot(): SimulationSnapshot {
     const agents = [...this.#state.agents.values()];
     const next = agents[this.#cursor % agents.length];
-    if (!next) throw new Error('The development world has no agents.');
     const droppedRecords =
       this.#completedTurnCount - this.#experimentTurns.length;
     return simulationSnapshotSchema.parse({
@@ -409,7 +436,7 @@ export class SimulationService {
       virtualTime: this.#virtualTime,
       lastTickIntervalMinutes: this.#lastTickIntervalMinutes,
       resolutionOrder: this.#resolutionOrder,
-      nextAgentId: next.id,
+      nextAgentId: next?.id ?? null,
       activeAgentId: this.#activeAgentId,
       cancellationRequested: this.#cancellationRequested,
       pendingFailedTurn: this.#pendingFailedTurn
@@ -439,7 +466,9 @@ export class SimulationService {
           }
         : {}),
       modelConfiguration: this.#modelConfiguration,
-      behaviorConfiguration: this.#behaviorConfiguration,
+      ...(agents.length > 0
+        ? { behaviorConfiguration: this.#behaviorConfiguration }
+        : {}),
       resolvedModels: agents.map(({ id }) => this.#resolvedModel(id)),
       agentGoals: agents.map(({ id }) => ({
         agentId: id,
@@ -487,6 +516,7 @@ export class SimulationService {
     );
     this.#turns = [];
     this.#completedTurnCount = 0;
+    this.#completedSwarmDecisionCount = 0;
     this.#completedTickCount = 0;
     this.#virtualTime = RESET_GENERATED_AT;
     this.#lastTickIntervalMinutes = null;
@@ -645,6 +675,7 @@ export class SimulationService {
     this.#behaviorConfiguration = nextBehavior;
     this.#turns = [];
     this.#completedTurnCount = 0;
+    this.#completedSwarmDecisionCount = 0;
     this.#completedTickCount = 0;
     this.#virtualTime = RESET_GENERATED_AT;
     this.#lastTickIntervalMinutes = null;
@@ -1136,7 +1167,37 @@ export class SimulationService {
       throw new SimulationConflictError(
         'A simultaneous tick cannot start inside a legacy sequential experiment. Reset first.',
       );
-    const agents = [...this.#state.agents.values()];
+    if (this.#isTerminal())
+      throw new SimulationConflictError(
+        'This simulation has reached a terminal infection outcome. Reset before running another tick.',
+      );
+    const tickNumber = this.#completedTickCount + 1;
+    const preTickState = this.#state;
+    const interval = seededTickIntervalMinutes(
+      this.#scenario.worldSeed,
+      tickNumber,
+      this.#scenario.minimumTickIntervalMinutes,
+      this.#scenario.maximumTickIntervalMinutes,
+    );
+    const virtualTime = new Date(
+      new Date(this.#virtualTime).getTime() + interval * 60_000,
+    ).toISOString();
+    const playerAdvance = advanceSimulatedPlayer(
+      preTickState,
+      this.#scenario.simulatedPlayer.seed,
+      tickNumber,
+      { createEventId: this.#createEventId, now: () => virtualTime },
+    );
+    const agents = [...playerAdvance.state.agents.values()];
+    if (!agents.length) {
+      this.#commitTerminalPlayerTick(
+        playerAdvance,
+        tickNumber,
+        virtualTime,
+        interval,
+      );
+      return [];
+    }
     const unresolved = agents
       .map(({ id }) => this.#resolvedModel(id))
       .filter(({ available }) => !available);
@@ -1153,27 +1214,10 @@ export class SimulationService {
       );
     }
 
-    const tickNumber = this.#completedTickCount + 1;
-    const preTickState = this.#state;
     const order = seededTickOrder(
       agents.map(({ id }) => id),
       this.#scenario.worldSeed,
       tickNumber,
-    );
-    const interval = seededTickIntervalMinutes(
-      this.#scenario.worldSeed,
-      tickNumber,
-      this.#scenario.minimumTickIntervalMinutes,
-      this.#scenario.maximumTickIntervalMinutes,
-    );
-    const virtualTime = new Date(
-      new Date(this.#virtualTime).getTime() + interval * 60_000,
-    ).toISOString();
-    const playerAdvance = advanceCasualCleaner(
-      preTickState,
-      this.#scenario.simulatedPlayer.seed,
-      tickNumber,
-      { createEventId: this.#createEventId, now: () => virtualTime },
     );
     // Observation construction is synchronous. Temporarily point it at the
     // uncommitted candidate so cancellation cannot expose or persist a partial
@@ -1486,28 +1530,13 @@ export class SimulationService {
       throw new SimulationConflictError(
         'Zero-swarm execution requires a planner and reflex provider.',
       );
+    if (this.#isTerminal())
+      throw new SimulationConflictError(
+        'This simulation has reached a terminal infection outcome. Reset before running another tick.',
+      );
     const zeroAgentId = this.#scenario.patientZeroAgentId;
-    const agents = [...this.#state.agents.values()];
-    const zero = zeroAgentId ? this.#state.agents.get(zeroAgentId) : undefined;
-    if (!zero)
-      throw new SimulationValidationError(
-        'invalid_model_configuration',
-        'Zero-swarm requires the designated Patient Zero.',
-      );
-    const resolvedZero = this.#resolvedModel(zero.id);
-    if (!resolvedZero.available || !resolvedZero.modelId)
-      throw new SimulationValidationError(
-        'models_unavailable',
-        'Agent Zero requires an available compatible model.',
-      );
     const tickNumber = this.#completedTickCount + 1;
-    const tickTurnBase = (tickNumber - 1) * agents.length;
     const preTickState = this.#state;
-    const order = seededTickOrder(
-      agents.map(({ id }) => id),
-      this.#scenario.worldSeed,
-      tickNumber,
-    );
     const interval = seededTickIntervalMinutes(
       this.#scenario.worldSeed,
       tickNumber,
@@ -1517,17 +1546,46 @@ export class SimulationService {
     const virtualTime = new Date(
       new Date(this.#virtualTime).getTime() + interval * 60_000,
     ).toISOString();
-    const playerAdvance = advanceCasualCleaner(
+    const playerAdvance = advanceSimulatedPlayer(
       preTickState,
       this.#scenario.simulatedPlayer.seed,
       tickNumber,
       { createEventId: this.#createEventId, now: () => virtualTime },
     );
     const candidate = playerAdvance.state;
+    const agents = [...candidate.agents.values()];
+    const zero = zeroAgentId ? candidate.agents.get(zeroAgentId) : undefined;
+    if (!agents.length || !zero) {
+      this.#commitTerminalPlayerTick(
+        playerAdvance,
+        tickNumber,
+        virtualTime,
+        interval,
+      );
+      return [];
+    }
+    const resolvedZero = this.#resolvedModel(zero.id);
+    if (!resolvedZero.available || !resolvedZero.modelId)
+      throw new SimulationValidationError(
+        'models_unavailable',
+        'Agent Zero requires an available compatible model.',
+      );
+    const tickTurnBase = this.#completedSwarmDecisionCount;
+    const order = seededTickOrder(
+      agents.map(({ id }) => id),
+      this.#scenario.worldSeed,
+      tickNumber,
+    );
     const replanReasons = this.#swarmReplanReasons(
       tickNumber,
       playerAdvance.events,
+      candidate,
     );
+    if (
+      agents.length !== preTickState.agents.size &&
+      !replanReasons.includes('roster-changed')
+    )
+      replanReasons.push('roster-changed');
     const replan = replanReasons.length > 0;
     // Planning ticks reserve Zero plus workers; directive reuse only reserves workers.
     if (!this.#attemptAccounting.reserve(agents.length - (replan ? 0 : 1))) {
@@ -1656,6 +1714,7 @@ export class SimulationService {
                 )
                 .slice(-6)
                 .map(({ cell }) => cell),
+              captureAlerts: captureAlertsFrom(playerAdvance.events),
               territoryDelta:
                 this.#lastSwarmTerritoryDeltas.get(worker.id) ?? 0,
               recentActionOutcome: this.#swarmTicks
@@ -1745,8 +1804,10 @@ export class SimulationService {
         ...state,
         events: state.events.slice(-MAX_WORLD_EVENT_HISTORY),
       };
+      this.#pruneCapturedRosterState();
       this.#observationHistory.ingest(observationEvents);
       this.#completedTickCount = tickNumber;
+      this.#completedSwarmDecisionCount += order.length;
       this.#virtualTime = virtualTime;
       this.#lastTickIntervalMinutes = interval;
       this.#resolutionOrder = order;
@@ -1832,18 +1893,24 @@ export class SimulationService {
     observationEvents: WorldEvent[],
   ): void {
     this.#state = state;
+    this.#pruneCapturedRosterState();
     this.#observationHistory.ingest(observationEvents);
     this.#completedTickCount = tickNumber;
     this.#virtualTime = virtualTime;
     this.#lastTickIntervalMinutes = interval;
     this.#resolutionOrder = [...order];
-    this.#agentGoals = goals;
-    this.#agentMemories = memories;
+    this.#agentGoals = new Map(
+      [...goals].filter(([agentId]) => this.#state.agents.has(agentId)),
+    );
+    this.#agentMemories = new Map(
+      [...memories].filter(([agentId]) => this.#state.agents.has(agentId)),
+    );
     this.#simulatedPlayerEvents = [
       ...this.#simulatedPlayerEvents,
       ...structuredClone(playerEvents),
     ].slice(-this.#experimentRetentionLimit * 2);
-    this.#completedTurnCount = records.at(-1)!.turnNumber;
+    this.#completedTurnCount =
+      records.at(-1)?.turnNumber ?? this.#completedTurnCount;
     this.#turns = retainCompleteTickGroups(
       [...this.#turns, ...records],
       MAX_TURN_HISTORY,
@@ -1858,6 +1925,77 @@ export class SimulationService {
       locked: true,
     };
     this.#modelConfiguration = { ...this.#modelConfiguration, locked: false };
+  }
+
+  #isTerminal(): boolean {
+    return (
+      this.#status === 'patient-zero-captured' ||
+      this.#status === 'infection-eliminated'
+    );
+  }
+
+  /** Commit a deterministic player interval that removed the active swarm. */
+  #commitTerminalPlayerTick(
+    playerAdvance: ReturnType<typeof advanceSimulatedPlayer>,
+    tickNumber: number,
+    virtualTime: string,
+    interval: number,
+  ): void {
+    const patientZeroCaptured = playerAdvance.events.some(
+      (event) =>
+        event.type === 'simulated-player-agent-captured' &&
+        event.capturedAgentId === this.#scenario.patientZeroAgentId,
+    );
+    this.#state = {
+      ...playerAdvance.state,
+      events: playerAdvance.state.events.slice(-MAX_WORLD_EVENT_HISTORY),
+    };
+    this.#pruneCapturedRosterState();
+    this.#observationHistory.ingest(playerAdvance.events);
+    this.#completedTickCount = tickNumber;
+    this.#virtualTime = virtualTime;
+    this.#lastTickIntervalMinutes = interval;
+    this.#resolutionOrder = [];
+    this.#activeAgentId = null;
+    this.#pendingFailedTurn = null;
+    this.#simulatedPlayerEvents = [
+      ...this.#simulatedPlayerEvents,
+      ...structuredClone(playerAdvance.events),
+    ].slice(-this.#experimentRetentionLimit * 2);
+    this.#lastValidSwarmPlan = null;
+    this.#lastSwarmTerritoryCounts = new Map();
+    this.#lastSwarmTerritoryDeltas = new Map();
+    this.#lastSwarmPositions = new Map();
+    this.#status =
+      this.#state.agents.size === 0
+        ? 'infection-eliminated'
+        : patientZeroCaptured
+          ? 'patient-zero-captured'
+          : 'infection-eliminated';
+  }
+
+  /** Remove cognition state that belongs to agents captured by the engine. */
+  #pruneCapturedRosterState(): void {
+    const active = new Set(this.#state.agents.keys());
+    this.#agentGoals = new Map(
+      [...this.#agentGoals].filter(([agentId]) => active.has(agentId)),
+    );
+    this.#agentMemories = new Map(
+      [...this.#agentMemories].filter(([agentId]) => active.has(agentId)),
+    );
+    const assignments = this.#behaviorConfiguration.assignments.filter(
+      ({ agentId }) => active.has(agentId),
+    );
+    this.#behaviorConfiguration = {
+      ...this.#behaviorConfiguration,
+      assignments,
+    };
+    this.#modelConfiguration = {
+      ...this.#modelConfiguration,
+      overrides: this.#modelConfiguration.overrides.filter(({ agentId }) =>
+        active.has(agentId),
+      ),
+    };
   }
 
   async retryFailedTurn(
@@ -2510,7 +2648,7 @@ export class SimulationService {
       [...state.agents.keys()].map((id) => [id, 0]),
     );
     for (const hex of state.hexes.values())
-      if (hex.state === 'infected')
+      if (hex.state === 'infected' && hex.controllerAgentId !== null)
         counts.set(
           hex.controllerAgentId,
           (counts.get(hex.controllerAgentId) ?? 0) + 1,
@@ -2579,7 +2717,9 @@ export class SimulationService {
           ? 'A nearby infected cell was cleaned this tick.'
           : event.type === 'simulated-player-clean-blocked'
             ? 'Cleaning pressure was blocked by an occupied infected cell.'
-            : 'The simulated player moved this tick.',
+            : event.type === 'simulated-player-agent-captured'
+              ? `Worker ${event.capturedAgentId} was captured at ${event.cell}; ${event.abandonedCellCount} controlled cells became abandoned.`
+              : 'The simulated player moved this tick.',
       ),
       ...(replanReasons.length ? { replanReasons: [...replanReasons] } : {}),
       ...(workerReplanRequests.length ? { workerReplanRequests } : {}),
@@ -2591,9 +2731,21 @@ export class SimulationService {
   #swarmReplanReasons(
     tickNumber: number,
     playerEvents: readonly SimulatedPlayerEvent[],
+    state: WorldState = this.#state,
   ): SwarmReplanReason[] {
     if (!this.#lastValidSwarmPlan) return ['initial'];
     const reasons: SwarmReplanReason[] = [];
+    const currentWorkers = [...state.agents.keys()]
+      .filter((agentId) => agentId !== this.#scenario.patientZeroAgentId)
+      .toSorted();
+    const plannedWorkers = this.#lastValidSwarmPlan.directives
+      .map(({ agentId }) => agentId)
+      .toSorted();
+    if (
+      currentWorkers.length !== plannedWorkers.length ||
+      currentWorkers.some((agentId, index) => agentId !== plannedWorkers[index])
+    )
+      reasons.push('roster-changed');
     if ((tickNumber - 1) % 5 === 0) reasons.push('periodic-review');
     if (
       this.#lastValidSwarmPlan.directives.some(
@@ -2783,7 +2935,10 @@ export class SimulationService {
       initialWorld: this.#initialExperimentWorld,
       currentWorld: this.#worldSnapshot(),
       modelConfiguration: this.#modelConfiguration,
-      behaviorConfiguration: this.#behaviorConfiguration,
+      behaviorConfiguration:
+        this.#state.agents.size > 0
+          ? this.#behaviorConfiguration
+          : this.#scenario.behaviorConfiguration,
       scenario: this.#scenario,
       schemaVersion: 11,
       providerAttempts: this.#attemptAccounting.ledger(),
@@ -2864,15 +3019,18 @@ export class SimulationService {
           controllerAllianceId: null,
           effectiveColor: null,
         } as const;
+      const controller = state.controllerAgentId;
       return {
         cell,
         ...state,
         controllerAllianceId:
-          getAgentAlliance(this.#state, state.controllerAgentId)?.id ?? null,
-        effectiveColor: getEffectiveAgentColor(
-          this.#state,
-          state.controllerAgentId,
-        ),
+          controller === null
+            ? null
+            : (getAgentAlliance(this.#state, controller)?.id ?? null),
+        effectiveColor:
+          controller === null
+            ? null
+            : getEffectiveAgentColor(this.#state, controller),
       } as const;
     };
     const adjacentCells = gridDisk(agent.currentCell, 1)
@@ -3011,22 +3169,25 @@ export class SimulationService {
       });
     const recentControlChanges = this.#observationHistory
       .controlChanges(agent.id)
-      .map((event) => {
+      .flatMap((event) => {
         const gained = event.controllerAgentId === agent.id;
         const otherAgentId = gained
           ? event.previousControllerAgentId
           : event.controllerAgentId;
+        if (otherAgentId === null) return [];
         const otherAgent = this.#state.agents.get(otherAgentId);
         if (!otherAgent)
           throw new Error('A control-change participant does not exist.');
-        return {
-          eventId: event.id,
-          direction: gained ? ('gained' as const) : ('lost' as const),
-          otherAgentId,
-          otherAgentName: otherAgent.name,
-          cell: event.cell,
-          occurredAt: event.occurredAt,
-        };
+        return [
+          {
+            eventId: event.id,
+            direction: gained ? ('gained' as const) : ('lost' as const),
+            otherAgentId,
+            otherAgentName: otherAgent.name,
+            cell: event.cell,
+            occurredAt: event.occurredAt,
+          },
+        ];
       });
     const completePlayerPressureEvents = [
       ...this.#simulatedPlayerEvents,
@@ -3081,11 +3242,12 @@ export class SimulationService {
               left.occurredAt.localeCompare(right.occurredAt) ||
               left.id.localeCompare(right.id),
           )
-          .map((event) => {
+          .flatMap((event) => {
             const referencedAgentId =
               event.type === 'hex-disinfected'
                 ? event.previousControllerAgentId
                 : event.blockingAgentId;
+            if (referencedAgentId === null) return [];
             const referencedAgent = this.#state.agents.get(referencedAgentId);
             if (!referencedAgent)
               throw new Error(
@@ -3098,31 +3260,34 @@ export class SimulationService {
               alliance?.memberAgentIds ?? null,
               this.#completedTickCount + 1,
             );
-            return event.type === 'hex-disinfected'
-              ? {
-                  eventId: event.id,
-                  kind: 'territory-disinfected' as const,
-                  cell: event.cell,
-                  occurredAt: event.occurredAt,
-                  affectedAgentId: referencedAgent.id,
-                  affectedAgentName: referencedAgent.name,
-                  affectedAllianceId: alliance?.id ?? null,
-                  affectedAllianceColor: alliance?.color ?? null,
-                  pressureContext,
-                }
-              : {
-                  eventId: event.id,
-                  kind: 'occupied-clean-blocked' as const,
-                  cell: event.cell,
-                  occurredAt: event.occurredAt,
-                  blockingAgentId: referencedAgent.id,
-                  blockingAgentName: referencedAgent.name,
-                  blockingAllianceId: alliance?.id ?? null,
-                  blockingAllianceColor: alliance?.color ?? null,
-                  pressureContext,
-                };
+            return [
+              event.type === 'hex-disinfected'
+                ? {
+                    eventId: event.id,
+                    kind: 'territory-disinfected' as const,
+                    cell: event.cell,
+                    occurredAt: event.occurredAt,
+                    affectedAgentId: referencedAgent.id,
+                    affectedAgentName: referencedAgent.name,
+                    affectedAllianceId: alliance?.id ?? null,
+                    affectedAllianceColor: alliance?.color ?? null,
+                    pressureContext,
+                  }
+                : {
+                    eventId: event.id,
+                    kind: 'occupied-clean-blocked' as const,
+                    cell: event.cell,
+                    occurredAt: event.occurredAt,
+                    blockingAgentId: referencedAgent.id,
+                    blockingAgentName: referencedAgent.name,
+                    blockingAllianceId: alliance?.id ?? null,
+                    blockingAllianceColor: alliance?.color ?? null,
+                    pressureContext,
+                  },
+            ];
           })
       : [];
+    const captureAlerts = captureAlertsFrom(currentCandidatePlayerEvents);
     return agentObservationSchema.parse({
       agentId: agent.id,
       agentName: agent.name,
@@ -3283,6 +3448,7 @@ export class SimulationService {
         enabled: this.#scenario.capabilities.simulatedPlayerPressure,
         recentThreats: recentPlayerThreats,
       },
+      ...(captureAlerts.length ? { captureAlerts } : {}),
       recentMovements,
     });
   }
@@ -3519,7 +3685,7 @@ export class SimulationService {
       [...this.#state.agents.keys()].map((id) => [id, 0]),
     );
     for (const hex of this.#state.hexes.values()) {
-      if (hex.state === 'infected')
+      if (hex.state === 'infected' && hex.controllerAgentId !== null)
         counts.set(
           hex.controllerAgentId,
           (counts.get(hex.controllerAgentId) ?? 0) + 1,
@@ -3638,7 +3804,9 @@ function summarizeEvent(
   if (event.type === 'hex-infected') return `${name} infected ${event.cell}.`;
   if (event.type === 'hex-captured') {
     const previous =
-      state.agents.get(event.previousControllerAgentId)?.name ??
+      (event.previousControllerAgentId === null
+        ? undefined
+        : state.agents.get(event.previousControllerAgentId)?.name) ??
       'another agent';
     return `${name} captured ${event.cell} from ${previous}.`;
   }

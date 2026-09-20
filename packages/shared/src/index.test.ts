@@ -21,6 +21,7 @@ import {
   experimentExportWorldStateSchema,
   experimentExportTurnSchema,
   hexCapturedWorldEventSchema,
+  simulatedPlayerAgentCapturedEventSchema,
   hexSchema,
   invalidActionReasonSchema,
   experimentExportRequestSchema,
@@ -938,7 +939,7 @@ describe('agent observation and decision schemas', () => {
     expect(
       hexSchema.safeParse({ cell, state: 'infected', controllerAgentId: null })
         .success,
-    ).toBe(false);
+    ).toBe(true);
     expect(
       hexCapturedWorldEventSchema.safeParse({
         id: '67aa21b9-fc78-4b04-9f92-9862bf346f96',
@@ -948,6 +949,29 @@ describe('agent observation and decision schemas', () => {
         previousControllerAgentId: '2507bb46-7ae4-45ca-8dda-644c4f85ca14',
         cell,
         occurredAt: '2026-08-13T12:00:01.000Z',
+      }).success,
+    ).toBe(true);
+    expect(
+      hexCapturedWorldEventSchema.safeParse({
+        id: '67aa21b9-fc78-4b04-9f92-9862bf346f96',
+        type: 'hex-captured',
+        agentId,
+        controllerAgentId: agentId,
+        previousControllerAgentId: null,
+        cell,
+        occurredAt: '2026-08-13T12:00:01.000Z',
+      }).success,
+    ).toBe(true);
+    expect(
+      simulatedPlayerAgentCapturedEventSchema.safeParse({
+        id: '67aa21b9-fc78-4b04-9f92-9862bf346f96',
+        type: 'simulated-player-agent-captured',
+        profile: 'trail-hunter-v1',
+        originatingTick: 2,
+        occurredAt: '2026-08-13T12:00:01.000Z',
+        cell,
+        capturedAgentId: agentId,
+        abandonedCellCount: 3,
       }).success,
     ).toBe(true);
     expect(invalidActionReasonSchema.parse('capture-open-cell')).toBe(
@@ -1311,6 +1335,47 @@ describe('turn and snapshot schemas', () => {
         },
       }).success,
     ).toBe(false);
+  });
+
+  it('accepts terminal player-only ticks after trail-hunter captures', () => {
+    const terminalBase = {
+      ...snapshot,
+      tickNumber: 1,
+      lastTickIntervalMinutes: 5,
+      resolutionOrder: [],
+      activeAgentId: null,
+      turns: [],
+    };
+    expect(
+      simulationSnapshotSchema.safeParse({
+        ...terminalBase,
+        status: 'infection-eliminated',
+        nextAgentId: null,
+        world: { ...snapshot.world, agents: [] },
+        resolvedModels: [],
+        experiment: { ...snapshot.experiment, currentTerritory: [] },
+      }).success,
+    ).toBe(true);
+
+    const survivingAgents = snapshot.world.agents.slice(1);
+    const survivingIds = new Set(survivingAgents.map(({ id }) => id));
+    expect(
+      simulationSnapshotSchema.safeParse({
+        ...terminalBase,
+        status: 'patient-zero-captured',
+        nextAgentId: survivingAgents[0]!.id,
+        world: { ...snapshot.world, agents: survivingAgents },
+        resolvedModels: snapshot.resolvedModels.filter(({ agentId }) =>
+          survivingIds.has(agentId),
+        ),
+        experiment: {
+          ...snapshot.experiment,
+          currentTerritory: snapshot.experiment.currentTerritory.filter(
+            ({ agentId }) => survivingIds.has(agentId),
+          ),
+        },
+      }).success,
+    ).toBe(true);
   });
 
   it('requires tick attribution as one complete metadata group', () => {
