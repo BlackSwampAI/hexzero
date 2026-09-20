@@ -119,3 +119,11 @@ directives, physical action results, and worker choice telemetry. Full
 all-agent exports carry these records separately from legacy `turns`.
 Provider attempts remain in the independent v4 ledger, including attempts
 from cancelled or rolled-back swarm ticks.
+
+## Zero-swarm comparisons
+
+The archive can preserve safe schema-v11 swarm tick records and independent
+provider attempts, but its `compare` command remains centered on normalized
+legacy turns. Use `pnpm compare:offline` for PR F's reproducible three-variant
+same-scenario fixture report. The runner does not import, write, or modify this
+archive. See [Zero-swarm offline comparison](ZERO_SWARM_COMPARISON.md).

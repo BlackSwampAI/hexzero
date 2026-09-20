@@ -31,6 +31,15 @@ unknown or cancelled calls retain exposure, and a reported reservation overage
 stops future admission when a credit ceiling is enabled. These decimal-string totals are server authority, but
 they do not enforce the upstream account balance. See ADRs 0025 and 0026.
 
+PR F supplies a separate offline comparison harness. It runs legacy,
+zero-swarm, and deterministic-worker fixtures against the same seeded scenario
+and player pressure, then emits JSON per-tick samples and aggregates. It is a
+read-only research runner: it creates no live providers, reads no provider key,
+and does not write to the experiment archive. Archive comparison remains useful
+for safe completed exports, but is legacy-turn-centric and does not substitute
+for the same-scenario swarm harness. See
+[Zero-swarm offline comparison](ZERO_SWARM_COMPARISON.md).
+
 ## Simultaneous tick authority
 
 Before the frozen agent snapshot, the optional seeded simulated-player profile

@@ -22,6 +22,13 @@ capture, abandoned territory, active-roster dispatch after player pressure,
 terminal capture outcomes, cancellation rollback, and safe export/UI handling.
 The casual-cleaner baseline remains covered by its existing offline tests.
 
+PR F adds a deterministic comparison harness for `legacy-multi-agent`,
+`zero-swarm-v1`, and `deterministic-worker-baseline`. It uses the same seeded
+scenario and `trail-hunter-v1` pressure for all variants, retains per-tick and
+aggregate metrics, and has no provider, credential, or archive-write path.
+Run `pnpm compare:offline` (or bounded `--ticks` and `--seeds` options) to
+produce its JSON report. See [Zero-swarm offline comparison](ZERO_SWARM_COMPARISON.md).
+
 Attempt-budget tests use deterministic providers and cover whole-roster tick
 admission, retry permits, cancellation finalization, and the distinction
 between known zero cost and missing/unknown cost. Provider catalog probes are
