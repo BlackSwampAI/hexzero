@@ -2,6 +2,7 @@ import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import type { SimulationSnapshot } from '@hexzero/shared';
 import {
+  SwarmActivityPanel,
   SwarmAgentInspector,
   SwarmRunPanel,
   SwarmStrategyPanel,
@@ -86,6 +87,8 @@ function snapshot(withTick = true): SimulationSnapshot {
         attemptsFinalized: 2,
         attemptsWithUnknownCost: 1,
         knownFinalizedCostCredits: '0.02',
+        committedCreditExposure: '0.03',
+        reservationCreditsPerAttempt: '0.01',
       },
     },
     swarmProviderStatus: {
@@ -99,6 +102,29 @@ function snapshot(withTick = true): SimulationSnapshot {
 }
 
 describe('swarm telemetry panels', () => {
+  it('summarizes inactive player pressure, actions, and provider failures', () => {
+    const value = snapshot();
+    value.swarmTicks![0]!.workers[0]!.failure = {
+      code: 'invalid-decision',
+      message:
+        'TypeSafe Jev returned an incomplete or inconsistent probability distribution.',
+      retryable: false,
+    };
+    render(<SwarmActivityPanel snapshot={value} />);
+    expect(
+      screen.getByRole('tabpanel', { name: 'Swarm activity' }),
+    ).toHaveAttribute('tabindex', '0');
+    const diagnostic = screen.getByRole('status');
+    expect(diagnostic).toHaveTextContent('0 moves');
+    expect(diagnostic).toHaveTextContent('1 infections');
+    expect(diagnostic).toHaveTextContent('1 Zero fallbacks');
+    expect(diagnostic).toHaveTextContent('Simulated player pressure is off');
+    expect(diagnostic).toHaveTextContent('Zero planner failure: timeout');
+    expect(diagnostic).toHaveTextContent(
+      'Worker: invalid-decision · TypeSafe Jev returned an incomplete or inconsistent probability distribution.',
+    );
+  });
+
   it('shows Zero fallback and worker reflex telemetry without social labels', () => {
     const value = snapshot();
     render(
@@ -117,10 +143,23 @@ describe('swarm telemetry panels', () => {
     expect(screen.getByText(/Planner timed out/)).toBeInTheDocument();
     expect(screen.getAllByText('action_1')).toHaveLength(2);
     expect(screen.getAllByText('72%')).toHaveLength(2);
-    expect(screen.getByText(/TypeSafe cost unknown/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/TypeSafe Jev reports tokens, no monetary cost/),
+    ).toBeInTheDocument();
     expect(
       screen.queryByText(/alliance|chat|personality|memory/i),
     ).not.toBeInTheDocument();
+  });
+
+  it('separates reported provider cost from admission exposure', () => {
+    const value = snapshot();
+    render(<SwarmRunPanel snapshot={value} status="paused" runTarget={10} />);
+    expect(screen.getByText('Provider-reported cost')).toBeInTheDocument();
+    expect(screen.getByText('0.02 credits')).toBeInTheDocument();
+    expect(
+      screen.getByText('Admission exposure (not spend)'),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/0.03 credits · includes/)).toBeInTheDocument();
   });
 
   it('shows the telemetry empty state before the first committed tick', () => {

@@ -34,12 +34,27 @@ scripted providers and verify the acknowledgement gate, input parity, bounded
 attempt admission, safe metrics, and a no-network Markdown summary path.
 `pnpm validate`, Playwright, and GitHub CI never execute a paid run. See
 [Live swarm comparison](LIVE_SWARM_COMPARISON.md).
+The read-only `pnpm diagnose:swarm` command summarizes a running local Game API
+snapshot without provider calls, keys, prompts, or raw responses. World Lab's
+swarm activity summary shows pressure state, physical action counts, and
+fallbacks for immediate diagnosis of apparently stationary ticks.
 
 The pre-live provider audit tests the Jev request's bounded capture-pressure
 projection, omission of hidden hunter state and empty capture noise, and the
 removal of the inert recent-facts field. Planner tests cover provider-reported
 OpenRouter cost and detailed tokens for valid, rejected, and non-success Zero
 responses, plus sanitized response IDs/models; missing cost stays unknown.
+Planner tests also cover compact opaque worker/target choices, server-issued
+directive IDs and lifetimes, Zero reasoning-profile dispatch, and safe
+classification of unknown or missing choices. Scripted service tests verify
+that a first-plan failure uses legal deterministic local expansion with only
+the Zero provider attempt billed. Jev provider tests distinguish unknown
+choices from inconsistent probability distributions and retain factual token
+usage for rejected decisions; World Lab and the read-only diagnostic show
+these safe worker failure reasons. Cost display tests separate provider-reported
+cost from admission exposure and show that TypeSafe Jev monetary cost remains
+unknown without provider billing data. The browser suite checks that a long
+swarm activity log scrolls inside the fixed-height bottom dock.
 
 Attempt-budget tests use deterministic providers and cover whole-roster tick
 admission, retry permits, cancellation finalization, and the distinction

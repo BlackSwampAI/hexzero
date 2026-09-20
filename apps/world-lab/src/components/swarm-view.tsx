@@ -348,13 +348,68 @@ export function SwarmActivityPanel({
 }) {
   const ticks = snapshot.swarmTicks ?? [];
   const latest = ticks.at(-1);
+  const workers = ticks.flatMap((tick) => tick.workers);
+  const actions = [
+    ...ticks.map((tick) => tick.zeroAction),
+    ...workers.map((worker) => worker.action),
+  ];
+  const countAction = (type: WorldAction['type']) =>
+    actions.filter((action) => action?.type === type).length;
+  const fallbackPlans = ticks.filter(
+    (tick) => tick.planSource === 'deterministic-fallback',
+  ).length;
+  const fallbackWorkers = workers.filter(
+    (worker) => worker.source === 'deterministic-fallback',
+  ).length;
+  const player = snapshot.world.simulatedPlayer;
+  const infectedCells = snapshot.world.hexes?.filter(
+    ({ state }) => state === 'infected',
+  ).length;
+  const attempts = snapshot.experiment.attemptAccounting;
   return (
     <section
       className="panel swarm-panel swarm-activity"
       aria-label="Swarm activity"
+      id="activity-swarm"
+      role="tabpanel"
+      tabIndex={0}
     >
       <p className="panel-kicker">Swarm activity</p>
       <h2>Agent Zero strategy</h2>
+      <div className="swarm-diagnostic" role="status">
+        <p>
+          <strong>{ticks.length} committed ticks</strong> ·{' '}
+          {countAction('move')} moves · {countAction('infect')} infections ·{' '}
+          {countAction('wait')} waits · {fallbackPlans} Zero fallbacks ·{' '}
+          {fallbackWorkers} worker fallbacks · {attempts.attemptsStarted}{' '}
+          provider attempts
+        </p>
+        <p>
+          {player
+            ? `${player.profile} pressure: ${player.metrics.movements} moves, ${player.metrics.cellsDisinfected} cleans, ${player.metrics.blockedDisinfections} blocked cleans${infectedCells === 0 ? ' · no infected cells to pursue' : ''}`
+            : 'Simulated player pressure is off. Enable it in World Setup to test cleaner or hunter behavior.'}
+        </p>
+        {latest?.plannerFailure && (
+          <p>
+            Zero planner failure: {latest.plannerFailure.code} ·{' '}
+            {latest.plannerFailure.message}
+          </p>
+        )}
+        {latest?.workers.some((worker) => worker.failure) && (
+          <p>
+            Worker failures:{' '}
+            {latest.workers
+              .flatMap((worker) =>
+                worker.failure
+                  ? [
+                      `${agentName(snapshot, worker.agentId)}: ${worker.failure.code} · ${worker.failure.message}`,
+                    ]
+                  : [],
+              )
+              .join(', ')}
+          </p>
+        )}
+      </div>
       {!latest ? (
         <EmptyTelemetry />
       ) : (
@@ -481,12 +536,23 @@ export function SwarmRunPanel({
           </dd>
         </div>
         <div>
-          <dt>Known finalized cost</dt>
+          <dt>Provider-reported cost</dt>
           <dd>{accounting.knownFinalizedCostCredits} credits</dd>
         </div>
         <div>
-          <dt>Unknown provider costs</dt>
-          <dd>{accounting.attemptsWithUnknownCost} · TypeSafe cost unknown</dd>
+          <dt>Unknown-cost attempts</dt>
+          <dd>
+            {accounting.attemptsWithUnknownCost} · TypeSafe Jev reports tokens,
+            no monetary cost
+          </dd>
+        </div>
+        <div>
+          <dt>Admission exposure (not spend)</dt>
+          <dd>
+            {accounting.committedCreditExposure} credits · includes{' '}
+            {accounting.reservationCreditsPerAttempt} credit reserve per
+            unknown-cost attempt
+          </dd>
         </div>
         <div>
           <dt>Zero retained reported usage</dt>

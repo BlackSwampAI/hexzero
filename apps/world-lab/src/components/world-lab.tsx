@@ -164,7 +164,9 @@ export function WorldLab() {
   const configurationPendingRef = useRef(false);
   const exportInitializedRef = useRef(false);
   const exportTriggerRef = useRef<HTMLButtonElement>(null);
+  const modeTriggerRef = useRef<HTMLButtonElement>(null);
   const setupTriggerRef = useRef<HTMLElement>(null);
+  const [setupOpenedFromMode, setSetupOpenedFromMode] = useState(false);
   const overflowMenuRef = useRef<HTMLDetailsElement>(null);
 
   useEffect(() => {
@@ -843,7 +845,9 @@ export function WorldLab() {
             WL
           </span>
           <div>
-            <p className="eyebrow">Developer simulation</p>
+            <p className="eyebrow">
+              {swarmMode ? 'Zero swarm v1' : 'Legacy multi-agent'} experiment
+            </p>
             <h1>World Lab</h1>
           </div>
           <nav className="workspace-switcher" aria-label="World Lab workspaces">
@@ -939,7 +943,7 @@ export function WorldLab() {
                 </dd>
               </div>
               <div>
-                <dt>Committed exposure</dt>
+                <dt>Admission exposure (not spend)</dt>
                 <dd>
                   {formatCost(
                     snapshot.experiment.attemptAccounting
@@ -963,7 +967,7 @@ export function WorldLab() {
                 </dd>
               </div>
               <div>
-                <dt>Known finalized cost</dt>
+                <dt>Provider-reported cost</dt>
                 <dd>
                   {formatCost(
                     snapshot.experiment.attemptAccounting
@@ -1012,16 +1016,39 @@ export function WorldLab() {
                 </div>
               )}
             </dl>
+            {swarmMode && (
+              <p className="field-help">
+                Jev reports tokens but no monetary cost. Its unknown-cost
+                attempts retain the configured admission reserve in exposure;
+                that reserve is not a provider bill. The reported cost above
+                includes OpenRouter amounts only when returned by the provider.
+              </p>
+            )}
             {!swarmMode && <ExperimentUsageMeter snapshot={snapshot} />}
           </div>
         </div>
-        <p className="test-provider-summary">
-          {swarmMode
-            ? `Zero: ${zeroModel?.modelId ?? 'model required'} · Jev: ${snapshot.swarmProviderStatus?.reflexModel ?? 'deterministic reflex'}`
-            : snapshot.providerMode === 'openrouter'
-              ? `${new Set(snapshot.resolvedModels.map(({ modelId }) => modelId ?? 'unassigned')).size} active model assignment${snapshot.resolvedModels.length === 1 ? '' : 's'}`
-              : 'Deterministic test model'}
-        </p>
+        <button
+          className="execution-mode-button"
+          ref={modeTriggerRef}
+          type="button"
+          disabled={inFlight || activeTick || resetting || running}
+          aria-label={`Current execution mode: ${swarmMode ? 'Zero swarm v1' : 'Legacy multi-agent'}. Change in World Setup`}
+          onClick={() => {
+            setSetupOpenedFromMode(true);
+            setSetupOpen(true);
+          }}
+        >
+          <strong>
+            Mode: {swarmMode ? 'Zero swarm v1' : 'Legacy multi-agent'}
+          </strong>
+          <span className="test-provider-summary">
+            {swarmMode
+              ? `Zero: ${zeroModel?.modelId ?? 'model required'} · Jev: ${snapshot.swarmProviderStatus?.reflexModel ?? 'deterministic reflex'}`
+              : snapshot.providerMode === 'openrouter'
+                ? `${new Set(snapshot.resolvedModels.map(({ modelId }) => modelId ?? 'unassigned')).size} active model assignment${snapshot.resolvedModels.length === 1 ? '' : 's'}`
+                : 'Deterministic test model'}
+          </span>
+        </button>
         <nav
           className="command-controls"
           aria-label="Simulation execution controls"
@@ -1215,6 +1242,7 @@ export function WorldLab() {
               onClick={() => {
                 if (overflowMenuRef.current)
                   overflowMenuRef.current.open = false;
+                setSetupOpenedFromMode(false);
                 setSetupOpen(true);
               }}
             >
@@ -1339,7 +1367,9 @@ export function WorldLab() {
           open
           snapshot={snapshot}
           apiBase={apiBase}
-          returnFocusRef={setupTriggerRef}
+          returnFocusRef={
+            setupOpenedFromMode ? modeTriggerRef : setupTriggerRef
+          }
           onClose={() => setSetupOpen(false)}
           onApplied={(next) => {
             setSnapshot(next);
@@ -1880,11 +1910,25 @@ function RunHealthSummary({
           <dd>{elapsedMinutes} min</dd>
         </div>
         <div>
-          <dt>Committed credit exposure</dt>
+          <dt>Admission exposure (not spend)</dt>
           <dd>
             {formatCost(
               snapshot.experiment.attemptAccounting.committedCreditExposure,
             )}
+          </dd>
+        </div>
+        <div>
+          <dt>Provider-reported cost</dt>
+          <dd>
+            {formatCost(
+              snapshot.experiment.attemptAccounting.knownFinalizedCostCredits,
+            )}
+          </dd>
+        </div>
+        <div>
+          <dt>Unknown-cost attempts</dt>
+          <dd>
+            {snapshot.experiment.attemptAccounting.attemptsWithUnknownCost}
           </dd>
         </div>
         <div>
@@ -2267,6 +2311,32 @@ function WorldSetupPanel({
         </>
       }
     >
+      <section className="setup-section">
+        <h3>Execution mode</h3>
+        <label>
+          Cognition mode
+          <select
+            value={draft.cognitionMode}
+            onChange={(event) =>
+              setDraft({
+                ...draft,
+                cognitionMode: event.target
+                  .value as WorldSetupRequest['cognitionMode'],
+              })
+            }
+          >
+            <option value="legacy-multi-agent">Legacy multi-agent</option>
+            <option value="zero-swarm-v1">
+              Zero swarm v1 (Agent Zero + Jev)
+            </option>
+          </select>
+        </label>
+        <p className="field-help">
+          Choose Zero swarm v1 to run one Agent Zero planner with Jev workers.
+          Preview and apply to create a new experiment. The live comparison
+          report is a separate command-line experiment.
+        </p>
+      </section>
       <section className="setup-section">
         <h3>World</h3>
         <button

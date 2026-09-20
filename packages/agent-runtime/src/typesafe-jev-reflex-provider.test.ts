@@ -174,7 +174,43 @@ describe('TypeSafeJevReflexProvider', () => {
         .mockResolvedValue(choiceResponse('action_99')),
     });
     await expect(unknown.decide(observation)).rejects.toMatchObject({
-      failure: { code: 'invalid-decision' },
+      failure: {
+        code: 'invalid-decision',
+        message:
+          'TypeSafe Jev selected a candidate outside the supplied choices.',
+      },
+      metadata: { promptTokens: 45, completionTokens: 8, totalTokens: 53 },
+    });
+
+    const inconsistentProbabilities = new TypeSafeJevReflexProvider({
+      apiKey: 'test-key',
+      fetchImplementation: vi.fn<typeof fetch>().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            model: TYPESAFE_JEV_MODEL,
+            answers: {
+              choose_action: {
+                type: 'choice',
+                choice: 'action_0',
+                probabilities: { action_0: 1 },
+                confidence: 0.7,
+              },
+              request_replan: { type: 'noul', noul: 0.25 },
+            },
+            usage: { input_tokens: 45, output_tokens: 8 },
+          }),
+        ),
+      ),
+    });
+    await expect(
+      inconsistentProbabilities.decide(observation),
+    ).rejects.toMatchObject({
+      failure: {
+        code: 'invalid-decision',
+        message:
+          'TypeSafe Jev returned an incomplete or inconsistent probability distribution.',
+      },
+      metadata: { promptTokens: 45, completionTokens: 8, totalTokens: 53 },
     });
 
     const wrongModel = new TypeSafeJevReflexProvider({

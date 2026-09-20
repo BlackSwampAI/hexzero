@@ -151,6 +151,21 @@ function chooseDeterministicWorkerAction(
   };
 }
 
+function selectNeutralFallbackCandidate(
+  compiled: CompiledReflexObservation,
+  state: WorldState,
+): string {
+  const choices = [...compiled.actions];
+  return (choices.find(([, action]) => action.type === 'infect') ??
+    choices.find(([, action]) => action.type === 'capture') ??
+    choices.find(
+      ([, action]) =>
+        action.type === 'move' &&
+        state.hexes.get(action.targetCell)?.state === 'open',
+    ) ??
+    choices.find(([, action]) => action.type === 'wait'))![0];
+}
+
 export function selectMostRecentPatientZeroThreats<
   T extends { eventId: string; occurredAt: string },
 >(events: readonly T[]): T[] {
@@ -1666,6 +1681,7 @@ export class SimulationService {
             {
               signal: controller.signal,
               deadlineAtMs,
+              reasoningProfile: resolvedZero.reasoningProfile,
               beginAttempt: (kind) => {
                 const startedAt = this.#now();
                 const permit =
@@ -1756,26 +1772,39 @@ export class SimulationService {
             ? ('success' as const)
             : ('unknown' as const),
         };
-        const choice = this.#deterministicWorkerCandidateSelector
-          ? chooseDeterministicWorkerAction(
-              compileReflexObservation(candidate, directive, history),
-              this.#deterministicWorkerCandidateSelector,
-            )
-          : await chooseReflexWorldAction(
-              candidate,
-              directive,
-              this.#reflexProvider,
-              {
-                history,
-                signal: controller.signal,
-                deadlineAtMs,
-                accounting: this.#attemptAccounting,
-                initialPermitReserved: true,
-                intendedTickNumber: tickNumber,
-                intendedTurnNumber: tickTurnBase + order.indexOf(worker.id) + 1,
-                now: this.#now,
-              },
-            );
+        const retainedDirective = this.#lastValidSwarmPlan?.directives.some(
+          (previous) =>
+            previous.agentId === worker.id &&
+            previous.expiresAtTick >= tickNumber,
+        );
+        const choice =
+          planSource === 'deterministic-fallback' && !retainedDirective
+            ? chooseDeterministicWorkerAction(
+                compileReflexObservation(candidate, directive, history),
+                (compiled) =>
+                  selectNeutralFallbackCandidate(compiled, candidate),
+              )
+            : this.#deterministicWorkerCandidateSelector
+              ? chooseDeterministicWorkerAction(
+                  compileReflexObservation(candidate, directive, history),
+                  this.#deterministicWorkerCandidateSelector,
+                )
+              : await chooseReflexWorldAction(
+                  candidate,
+                  directive,
+                  this.#reflexProvider,
+                  {
+                    history,
+                    signal: controller.signal,
+                    deadlineAtMs,
+                    accounting: this.#attemptAccounting,
+                    initialPermitReserved: true,
+                    intendedTickNumber: tickNumber,
+                    intendedTurnNumber:
+                      tickTurnBase + order.indexOf(worker.id) + 1,
+                    now: this.#now,
+                  },
+                );
         selected.set(worker.id, choice);
       }
       if (controller.signal.aborted) throw new SimulationTurnCancelledError();
@@ -2932,8 +2961,8 @@ export class SimulationService {
         ) ?? {
           id: `neutral-${tickNumber}-${worker.id}`,
           agentId: worker.id,
-          mission: 'hold' as const,
-          targetCell: state.agents.get(worker.id)!.currentCell,
+          mission: 'expand' as const,
+          targetCell: null,
           priority: 'normal' as const,
           riskTolerance: 'low' as const,
           issuedAtTick: tickNumber,
@@ -2946,8 +2975,9 @@ export class SimulationService {
     if (waitIndex < 0)
       throw new Error('The engine must provide a legal wait action.');
     return swarmPlanSchema.parse({
-      strategySummary:
-        'Maintain legal local positions while strategic planning is unavailable.',
+      strategySummary: this.#lastValidSwarmPlan
+        ? 'Continue prior valid directives while strategic planning is unavailable.'
+        : 'Use deterministic local expansion while strategic planning is unavailable.',
       directives,
       zeroActionCandidateId: `zero_action_${waitIndex}`,
     });

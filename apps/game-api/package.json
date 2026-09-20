@@ -7,6 +7,7 @@
     "build": "esbuild src/server.ts --bundle --platform=node --format=esm --outfile=dist/server.js",
     "compare:offline": "node --import tsx src/swarm-comparison-cli.ts",
     "compare:live": "node --import tsx src/live-swarm-comparison-cli.ts",
+    "diagnose:swarm": "node --import tsx src/swarm-diagnostics-cli.ts",
     "dev": "tsx watch src/server.ts",
     "lint": "eslint .",
     "start": "node dist/server.js",

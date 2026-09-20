@@ -2,9 +2,12 @@ import { z } from 'zod';
 import {
   providerMetadataSchema,
   swarmPlanSchema,
+  OPENROUTER_MAX_OUTPUT_TOKENS,
+  WORLD_SCENARIO_LIMITS,
   zeroStrategicObservationSchema,
   type ProviderFailure,
   type ProviderMetadata,
+  type ReasoningProfile,
   type SwarmPlan,
   type ZeroStrategicObservation,
 } from '@hexzero/shared';
@@ -28,6 +31,7 @@ export interface SwarmPlanner {
 export interface PlannerOptions {
   signal?: AbortSignal;
   deadlineAtMs?: number;
+  reasoningProfile?: ReasoningProfile;
   beginAttempt?: SwarmAttemptStarter;
 }
 
@@ -79,6 +83,35 @@ const openRouterResponseSchema = z.object({
     .min(1),
 });
 
+const compactPlanSchema = z
+  .object({
+    strategySummary: z.string().trim().min(1).max(500),
+    directives: z
+      .array(
+        z
+          .object({
+            workerId: z.string().regex(/^worker_[0-9]+$/),
+            mission: z.enum([
+              'expand',
+              'hold',
+              'relocate',
+              'reinforce',
+              'evade',
+            ]),
+            targetId: z
+              .string()
+              .regex(/^target_[0-9]+$/)
+              .nullable(),
+            priority: z.enum(['low', 'normal', 'high']),
+            riskTolerance: z.enum(['low', 'medium', 'high']),
+          })
+          .strict(),
+      )
+      .max(WORLD_SCENARIO_LIMITS.maximumAgents),
+    zeroActionCandidateId: z.string().regex(/^zero_action_[0-9]+$/),
+  })
+  .strict();
+
 export interface OpenRouterSwarmPlannerOptions {
   apiKey?: string;
   timeoutMs?: number;
@@ -121,7 +154,11 @@ export class OpenRouterSwarmPlanner implements SwarmPlanner {
       startedAt + this.#timeoutMs,
     );
     const requestBody = JSON.stringify(
-      buildSwarmPlannerRequest(observation, model),
+      buildSwarmPlannerRequest(
+        observation,
+        model,
+        options.reasoningProfile ?? 'provider-default',
+      ),
     );
     const sensitiveValues = collectSensitiveValues(
       this.#apiKey,
@@ -284,13 +321,12 @@ export class OpenRouterSwarmPlanner implements SwarmPlanner {
             responseMetadata,
           );
         }
-        const plan = swarmPlanSchema.safeParse(planRaw);
-        if (!plan.success || !validPlan(plan.data, observation))
+        const decoded = decodePlanChoice(planRaw, observation);
+        if (!decoded.plan)
           throw new SwarmPlannerError(
             {
               ...failure('invalid-decision', false, model, startedAt),
-              message:
-                'Agent Zero returned a plan outside the authoritative choices.',
+              message: `Agent Zero plan rejected: ${decoded.reason}.`,
             },
             responseMetadata,
           );
@@ -298,9 +334,9 @@ export class OpenRouterSwarmPlanner implements SwarmPlanner {
         complete({
           outcome: 'completed',
           provider: safeMetadata,
-          swarmPlan: plan.data,
+          swarmPlan: decoded.plan,
         });
-        return { plan: plan.data, metadata: safeMetadata };
+        return { plan: decoded.plan, metadata: safeMetadata };
       } catch (error) {
         const plannerError =
           error instanceof SwarmPlannerError
@@ -371,46 +407,205 @@ export class ScriptedSwarmPlanner implements SwarmPlanner {
 function buildSwarmPlannerRequest(
   observation: ZeroStrategicObservation,
   model: string,
+  reasoningProfile: ReasoningProfile,
 ) {
+  const targetChoices = observation.strategicTargetCells.map((cell, index) => ({
+    targetId: `target_${index}`,
+    cell,
+  }));
+  const targetIdByCell = new Map(
+    targetChoices.map(({ targetId, cell }) => [cell, targetId]),
+  );
+  const workers = observation.agents
+    .filter(({ agentId }) => agentId !== observation.zeroAgentId)
+    .map((agent, index) => ({
+      workerId: `worker_${index}`,
+      position: agent.position,
+      controlledCellCount: agent.controlledCellCount,
+      territoryDelta: agent.territoryDelta,
+      workerStatus: agent.workerStatus ?? 'unknown',
+      activeDirective: agent.directive
+        ? {
+            mission: agent.directive.mission,
+            targetId: agent.directive.targetCell
+              ? (targetIdByCell.get(agent.directive.targetCell) ?? null)
+              : null,
+            priority: agent.directive.priority,
+            riskTolerance: agent.directive.riskTolerance,
+            ticksRemaining: Math.max(
+              0,
+              agent.directive.expiresAtTick - observation.tickNumber,
+            ),
+          }
+        : null,
+    }));
+  const workerIdByAgent = new Map(
+    observation.agents
+      .filter(({ agentId }) => agentId !== observation.zeroAgentId)
+      .map(({ agentId }, index) => [agentId, `worker_${index}`]),
+  );
+  const zero = observation.agents.find(
+    ({ agentId }) => agentId === observation.zeroAgentId,
+  )!;
   return {
     model,
     temperature: 0,
+    max_tokens: OPENROUTER_MAX_OUTPUT_TOKENS,
+    ...(reasoningProfile === 'provider-default'
+      ? {}
+      : reasoningProfile === 'off'
+        ? { reasoning: { enabled: false, exclude: true } }
+        : {
+            reasoning: {
+              enabled: true,
+              effort: reasoningProfile,
+              exclude: true,
+            },
+          }),
     response_format: { type: 'json_object' },
     messages: [
       {
         role: 'system',
         content:
-          'You are Agent Zero, a strategic planner. Return JSON only with strategySummary, directives, and zeroActionCandidateId. Assign intent, never exact worker movement. Each directive targetCell must be one of strategicTargetCells. Issue each directive at the current tick and set expiresAtTick between the current tick and current tick plus 9; normally cover at least five ticks so workers can operate between reviews. Use replanReasons and workerReplanRequests when present. zeroActionCandidateId must be one offered opaque candidate. Do not add fields.',
+          'You are Agent Zero, a strategic planner. Return only a JSON object with strategySummary, zeroActionCandidateId, and directives. Return exactly one directive per offered worker, using each workerId once. Each directive has only workerId, mission (expand|hold|relocate|reinforce|evade), targetId (one offered targetId or null), priority (low|normal|high), and riskTolerance (low|medium|high). Select zeroActionCandidateId from legalZeroActions. Assign intent, never exact worker movement. Code supplies directive IDs, agent IDs, target cells, and tick lifetimes; do not output those fields. Use replanReasons and workerReplanRequests when present.',
       },
-      { role: 'user', content: JSON.stringify(observation) },
+      {
+        role: 'user',
+        content: JSON.stringify({
+          tickNumber: observation.tickNumber,
+          virtualTime: observation.virtualTime,
+          cells: observation.cells,
+          zero: {
+            position: zero.position,
+            controlledCellCount: zero.controlledCellCount,
+            territoryDelta: zero.territoryDelta,
+          },
+          workers,
+          recentPlayerPressure: observation.recentPlayerPressure,
+          replanReasons: observation.replanReasons ?? [],
+          workerReplanRequests: (
+            observation.workerReplanRequests ?? []
+          ).flatMap(({ agentId, probability }) => {
+            const workerId = workerIdByAgent.get(agentId);
+            return workerId ? [{ workerId, probability }] : [];
+          }),
+          legalZeroActions: observation.legalZeroActions,
+          targetChoices,
+        }),
+      },
     ],
   };
+}
+
+function decodePlanChoice(
+  raw: unknown,
+  observation: ZeroStrategicObservation,
+): { plan: SwarmPlan; reason?: never } | { plan?: never; reason: string } {
+  // Valid full plans remain accepted for compatibility with existing callers.
+  const full = swarmPlanSchema.safeParse(raw);
+  if (full.success) {
+    const issue = planAuthorityIssue(full.data, observation);
+    return issue ? { reason: issue } : { plan: full.data };
+  }
+  const compact = compactPlanSchema.safeParse(raw);
+  if (!compact.success) {
+    const topField = String(compact.error.issues[0]?.path[0] ?? 'object');
+    const field = [
+      'strategySummary',
+      'directives',
+      'zeroActionCandidateId',
+    ].includes(topField)
+      ? topField
+      : 'object';
+    return { reason: `invalid ${field} format` };
+  }
+  const workerIds = observation.agents
+    .filter(({ agentId }) => agentId !== observation.zeroAgentId)
+    .map(({ agentId }, index) => ({ workerId: `worker_${index}`, agentId }));
+  if (compact.data.directives.length !== workerIds.length)
+    return { reason: 'missing or extra worker directives' };
+  const workerMap = new Map(
+    workerIds.map(({ workerId, agentId }) => [workerId, agentId]),
+  );
+  const targetMap = new Map(
+    observation.strategicTargetCells.map((cell, index) => [
+      `target_${index}`,
+      cell,
+    ]),
+  );
+  const seen = new Set<string>();
+  for (const directive of compact.data.directives) {
+    if (!workerMap.has(directive.workerId) || seen.has(directive.workerId))
+      return { reason: 'unknown or repeated worker choice' };
+    seen.add(directive.workerId);
+    if (directive.targetId !== null && !targetMap.has(directive.targetId))
+      return { reason: 'unknown target choice' };
+  }
+  if (
+    !observation.legalZeroActions.some(
+      ({ id }) => id === compact.data.zeroActionCandidateId,
+    )
+  )
+    return { reason: 'unknown Zero action choice' };
+  const plan = swarmPlanSchema.safeParse({
+    strategySummary: compact.data.strategySummary,
+    zeroActionCandidateId: compact.data.zeroActionCandidateId,
+    directives: compact.data.directives.map((directive) => ({
+      id: `directive-${observation.tickNumber}-${directive.workerId}`,
+      agentId: workerMap.get(directive.workerId)!,
+      mission: directive.mission,
+      targetCell:
+        directive.targetId === null ? null : targetMap.get(directive.targetId)!,
+      priority: directive.priority,
+      riskTolerance: directive.riskTolerance,
+      issuedAtTick: observation.tickNumber,
+      expiresAtTick: observation.tickNumber + 4,
+    })),
+  });
+  return plan.success
+    ? { plan: plan.data }
+    : { reason: 'directive materialization failed' };
+}
+
+function planAuthorityIssue(
+  plan: SwarmPlan,
+  observation: ZeroStrategicObservation,
+): string | null {
+  if (
+    !observation.legalZeroActions.some(
+      ({ id }) => id === plan.zeroActionCandidateId,
+    )
+  )
+    return 'unknown Zero action choice';
+  const workers = new Set(
+    observation.agents
+      .filter(({ agentId }) => agentId !== observation.zeroAgentId)
+      .map(({ agentId }) => agentId),
+  );
+  if (plan.directives.length !== workers.size)
+    return 'missing or extra worker directives';
+  const targets = new Set(observation.strategicTargetCells);
+  for (const directive of plan.directives) {
+    if (!workers.delete(directive.agentId))
+      return 'unknown or repeated worker choice';
+    if (directive.issuedAtTick !== observation.tickNumber)
+      return 'invalid directive issue tick';
+    if (
+      directive.expiresAtTick < observation.tickNumber ||
+      directive.expiresAtTick > observation.tickNumber + 9
+    )
+      return 'invalid directive expiry';
+    if (directive.targetCell && !targets.has(directive.targetCell))
+      return 'unknown target choice';
+  }
+  return null;
 }
 
 function validPlan(
   plan: SwarmPlan,
   observation: ZeroStrategicObservation,
 ): boolean {
-  const targets = new Set(observation.strategicTargetCells);
-  const workers = new Set(
-    observation.agents
-      .filter(({ agentId }) => agentId !== observation.zeroAgentId)
-      .map(({ agentId }) => agentId),
-  );
-  return (
-    observation.legalZeroActions.some(
-      ({ id }) => id === plan.zeroActionCandidateId,
-    ) &&
-    plan.directives.length === workers.size &&
-    plan.directives.every(
-      (directive) =>
-        workers.has(directive.agentId) &&
-        directive.issuedAtTick === observation.tickNumber &&
-        directive.expiresAtTick >= observation.tickNumber &&
-        directive.expiresAtTick <= observation.tickNumber + 9 &&
-        (!directive.targetCell || targets.has(directive.targetCell)),
-    )
-  );
+  return planAuthorityIssue(plan, observation) === null;
 }
 
 function responseText(
