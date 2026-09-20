@@ -81,26 +81,23 @@ describe('zero-swarm reflex execution seam', () => {
     expect(applied.state.agents.get(agent.id)?.currentCell).toBe(targetCell);
   });
 
-  it('passes bounded authoritative capture facts to Jev without player route data', () => {
+  it('retains only the four most recent authoritative capture alerts', () => {
     const { state, directive } = fixture();
+    const capturedAgentId = [...state.agents.keys()][0]!;
     const compiled = compileReflexObservation(state, directive, {
-      captureAlerts: [
-        {
-          capturedAgentId: [...state.agents.keys()][0]!,
-          cell: directive.targetCell!,
-          originatingTick: 4,
-          abandonedCellCount: 2,
-        },
-      ],
+      captureAlerts: Array.from({ length: 5 }, (_, index) => ({
+        capturedAgentId,
+        cell: directive.targetCell!,
+        originatingTick: index,
+        abandonedCellCount: index,
+      })),
     });
-    expect(compiled.observation.captureAlerts).toEqual([
-      {
-        capturedAgentId: [...state.agents.keys()][0]!,
-        cell: directive.targetCell,
-        originatingTick: 4,
-        abandonedCellCount: 2,
-      },
-    ]);
+    expect(compiled.observation.captureAlerts).toHaveLength(4);
+    expect(
+      compiled.observation.captureAlerts?.map(
+        ({ abandonedCellCount }) => abandonedCellCount,
+      ),
+    ).toEqual([1, 2, 3, 4]);
     expect(compiled.observation).not.toHaveProperty('simulatedPlayer');
   });
 

@@ -342,6 +342,9 @@ export class TypeSafeJevReflexProvider implements ReflexProvider {
 
 export function buildTypeSafeJevRequest(observationInput: ReflexObservation) {
   const observation = reflexObservationSchema.parse(observationInput);
+  const recentCaptures = observation.captureAlerts?.map(
+    ({ abandonedCellCount }) => ({ abandonedCellCount }),
+  );
   return {
     state: {
       agentId: observation.agentId,
@@ -351,7 +354,14 @@ export function buildTypeSafeJevRequest(observationInput: ReflexObservation) {
         riskTolerance: observation.directive.riskTolerance,
       },
       currentSituation: observation.currentSituation,
-      relevantRecentFacts: observation.relevantRecentFacts,
+      ...(recentCaptures?.length
+        ? {
+            capturePressure: {
+              recentCaptures,
+              recentCaptureCount: recentCaptures.length,
+            },
+          }
+        : {}),
       candidateIds: observation.candidates.map(({ id }) => id),
     },
     model: TYPESAFE_JEV_MODEL,

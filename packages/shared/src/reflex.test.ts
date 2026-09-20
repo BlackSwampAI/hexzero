@@ -33,7 +33,6 @@ describe('zero-swarm reflex contracts', () => {
         recentTerritoryTrend: 'growing',
         recentActionOutcome: 'success',
       },
-      relevantRecentFacts: ['The assigned direction remains accessible.'],
       candidates: [
         { id: 'action_0', description: 'Move toward the assigned target.' },
         { id: 'action_1', description: 'Infect the current open territory.' },
@@ -45,6 +44,24 @@ describe('zero-swarm reflex contracts', () => {
       description: 'Move toward the assigned target.',
     });
     expect('action' in observation.candidates[0]!).toBe(false);
+    expect('relevantRecentFacts' in observation).toBe(false);
+    expect(
+      reflexObservationSchema.safeParse({
+        ...observation,
+        relevantRecentFacts: ['Unused narrative context.'],
+      }).success,
+    ).toBe(false);
+    expect(
+      reflexObservationSchema.safeParse({
+        ...observation,
+        captureAlerts: Array.from({ length: 5 }, () => ({
+          capturedAgentId: agentId,
+          cell: targetCell,
+          originatingTick: 4,
+          abandonedCellCount: 0,
+        })),
+      }).success,
+    ).toBe(false);
   });
 
   it('rejects mismatched directives and malformed choice telemetry', () => {
@@ -62,7 +79,6 @@ describe('zero-swarm reflex contracts', () => {
           recentTerritoryTrend: 'growing',
           recentActionOutcome: 'success',
         },
-        relevantRecentFacts: [],
         candidates: [{ id: 'action_0', description: 'Wait.' }],
       }).success,
     ).toBe(false);

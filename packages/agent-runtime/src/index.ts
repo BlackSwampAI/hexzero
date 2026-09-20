@@ -21,6 +21,7 @@ import {
   type ProviderMetadata,
   type ReasoningProfile,
 } from '@hexzero/shared';
+import { normalizeOpenRouterUsage } from './openrouter-usage';
 
 export { applyProviderEnvironmentFile } from './provider-environment';
 export * from './model-catalog';
@@ -201,24 +202,6 @@ const openRouterResponseSchema = z.object({
     }),
   ),
   usage: z.unknown().optional(),
-});
-
-const openRouterUsageSchema = z.object({
-  prompt_tokens: z.number().int().nonnegative().optional(),
-  completion_tokens: z.number().int().nonnegative().optional(),
-  total_tokens: z.number().int().nonnegative().optional(),
-  cost: z.number().nonnegative().finite().optional(),
-  completion_tokens_details: z
-    .object({ reasoning_tokens: z.number().int().nonnegative().optional() })
-    .passthrough()
-    .optional(),
-  prompt_tokens_details: z
-    .object({
-      cached_tokens: z.number().int().nonnegative().optional(),
-      cache_write_tokens: z.number().int().nonnegative().optional(),
-    })
-    .passthrough()
-    .optional(),
 });
 
 export function normalizeFlatDecision(input: unknown) {
@@ -855,8 +838,6 @@ function providerMetadataFromResponse(
   sensitiveValues: string[],
 ): ProviderMetadata {
   const root = asRecord(raw);
-  const usage = openRouterUsageSchema.safeParse(root?.usage);
-  const parsedUsage = usage.success ? usage.data : undefined;
   const requestId =
     sanitizeDiagnosticCode(root?.id, sensitiveValues, 160) ??
     sanitizeDiagnosticCode(
@@ -876,33 +857,7 @@ function providerMetadataFromResponse(
     latencyMs,
     httpStatus: response.status,
     ...(requestId === undefined ? {} : { requestId }),
-    ...(parsedUsage?.prompt_tokens === undefined
-      ? {}
-      : { promptTokens: parsedUsage.prompt_tokens }),
-    ...(parsedUsage?.completion_tokens === undefined
-      ? {}
-      : { completionTokens: parsedUsage.completion_tokens }),
-    ...(parsedUsage?.total_tokens === undefined
-      ? {}
-      : { totalTokens: parsedUsage.total_tokens }),
-    ...(parsedUsage?.completion_tokens_details?.reasoning_tokens === undefined
-      ? {}
-      : {
-          reasoningTokens:
-            parsedUsage.completion_tokens_details.reasoning_tokens,
-        }),
-    ...(parsedUsage?.prompt_tokens_details?.cached_tokens === undefined
-      ? {}
-      : { cachedReadTokens: parsedUsage.prompt_tokens_details.cached_tokens }),
-    ...(parsedUsage?.prompt_tokens_details?.cache_write_tokens === undefined
-      ? {}
-      : {
-          cacheWriteTokens:
-            parsedUsage.prompt_tokens_details.cache_write_tokens,
-        }),
-    ...(parsedUsage?.cost === undefined
-      ? {}
-      : { costCredits: parsedUsage.cost }),
+    ...normalizeOpenRouterUsage(root?.usage),
   };
 }
 

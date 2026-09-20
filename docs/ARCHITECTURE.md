@@ -14,6 +14,15 @@ service maps to a world action for seeded engine resolution. One complete tick
 commits atomically. Planner and worker failures use explicit deterministic
 fallbacks; provider attempts survive world rollback. See ADRs 0028, 0029, and 0031.
 
+The worker observation includes bounded, current capture alerts. The TypeSafe
+request projects them as structured capture pressure without cell IDs or tick
+numbers. The unused prose `relevantRecentFacts` field is removed; current
+situation and legal candidate descriptions supply the relevant local facts.
+Zero planning uses the same provider-reported OpenRouter usage normalization as
+legacy turns, including actual `usage.cost` when returned, and preserves that
+metadata when a returned plan is rejected or a bounded non-success response
+contains usage. Missing provider cost remains unknown.
+
 Swarm tick records are separate from legacy agent turn records. Full all-agent
 exports and the archive retain safe plans, directives, action choices, and
 factual provider usage; selective legacy turn filters do not export partial

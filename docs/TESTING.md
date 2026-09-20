@@ -29,6 +29,12 @@ aggregate metrics, and has no provider, credential, or archive-write path.
 Run `pnpm compare:offline` (or bounded `--ticks` and `--seeds` options) to
 produce its JSON report. See [Zero-swarm offline comparison](ZERO_SWARM_COMPARISON.md).
 
+The pre-live provider audit tests the Jev request's bounded capture-pressure
+projection, omission of hidden hunter state and empty capture noise, and the
+removal of the inert recent-facts field. Planner tests cover provider-reported
+OpenRouter cost and detailed tokens for valid, rejected, and non-success Zero
+responses, plus sanitized response IDs/models; missing cost stays unknown.
+
 Attempt-budget tests use deterministic providers and cover whole-roster tick
 admission, retry permits, cancellation finalization, and the distinction
 between known zero cost and missing/unknown cost. Provider catalog probes are

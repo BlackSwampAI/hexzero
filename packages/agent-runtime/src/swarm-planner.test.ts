@@ -160,4 +160,210 @@ describe('swarm planners', () => {
     expect(result.metadata.totalTokens).toBe(7);
     expect(attempts).toEqual(['initial', 'automatic-transport-retry']);
   });
+
+  it('preserves complete provider-reported OpenRouter accounting', async () => {
+    const result = await new OpenRouterSwarmPlanner({
+      apiKey: 'test-key',
+      fetchImplementation: vi.fn<typeof fetch>().mockResolvedValue(
+        plannerResponse(plan, {
+          prompt_tokens: 101,
+          completion_tokens: 23,
+          total_tokens: 124,
+          cost: 0.00000017,
+          completion_tokens_details: { reasoning_tokens: 7 },
+          prompt_tokens_details: {
+            cached_tokens: 80,
+            cache_write_tokens: 4,
+          },
+        }),
+      ),
+    }).plan(observation, 'test-model');
+    expect(result.metadata).toMatchObject({
+      promptTokens: 101,
+      completionTokens: 23,
+      totalTokens: 124,
+      reasoningTokens: 7,
+      cachedReadTokens: 80,
+      cacheWriteTokens: 4,
+      costCredits: 0.00000017,
+    });
+  });
+
+  it('retains billable usage when the returned plan is invalid', async () => {
+    const finalized: unknown[] = [];
+    await expect(
+      new OpenRouterSwarmPlanner({
+        apiKey: 'test-key',
+        fetchImplementation: vi.fn<typeof fetch>().mockResolvedValue(
+          plannerResponse(
+            { ...plan, zeroActionCandidateId: 'invented' },
+            {
+              prompt_tokens: 11,
+              completion_tokens: 5,
+              total_tokens: 16,
+              cost: 0.001,
+            },
+          ),
+        ),
+      }).plan(observation, 'test-model', {
+        beginAttempt: () => (completion) => finalized.push(completion),
+      }),
+    ).rejects.toMatchObject({ metadata: { costCredits: 0.001 } });
+    expect(finalized).toMatchObject([
+      {
+        outcome: 'provider-error',
+        provider: { promptTokens: 11, totalTokens: 16, costCredits: 0.001 },
+      },
+    ]);
+  });
+
+  it('retains billable usage when a response cannot be parsed as a plan', async () => {
+    await expect(
+      new OpenRouterSwarmPlanner({
+        apiKey: 'test-key',
+        fetchImplementation: vi.fn<typeof fetch>().mockResolvedValue(
+          new Response(
+            JSON.stringify({
+              choices: [{ message: { content: '{not-json' } }],
+              usage: { prompt_tokens: 12, cost: 0.002 },
+            }),
+            { status: 200 },
+          ),
+        ),
+      }).plan(observation, 'test-model'),
+    ).rejects.toMatchObject({
+      failure: { code: 'malformed-response' },
+      metadata: { promptTokens: 12, costCredits: 0.002 },
+    });
+  });
+
+  it('omits absent or malformed optional provider cost while retaining valid usage', async () => {
+    const withoutUsage = await new OpenRouterSwarmPlanner({
+      apiKey: 'test-key',
+      fetchImplementation: vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(plannerResponse(plan)),
+    }).plan(observation, 'test-model');
+    expect(withoutUsage.metadata).not.toHaveProperty('costCredits');
+    const malformedCost = await new OpenRouterSwarmPlanner({
+      apiKey: 'test-key',
+      fetchImplementation: vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(
+          plannerResponse(plan, { prompt_tokens: 9, cost: 'untrusted' }),
+        ),
+    }).plan(observation, 'test-model');
+    expect(malformedCost.metadata).toMatchObject({ promptTokens: 9 });
+    expect(malformedCost.metadata).not.toHaveProperty('costCredits');
+  });
+
+  it('attributes usage from a retryable non-OK attempt before retrying', async () => {
+    const finalized: unknown[] = [];
+    const result = await new OpenRouterSwarmPlanner({
+      apiKey: 'test-key',
+      fetchImplementation: vi
+        .fn<typeof fetch>()
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({ usage: { prompt_tokens: 4, cost: 0.003 } }),
+            { status: 529 },
+          ),
+        )
+        .mockResolvedValueOnce(plannerResponse(plan)),
+    }).plan(observation, 'test-model', {
+      beginAttempt: () => (completion) => finalized.push(completion),
+    });
+    expect(result.metadata).not.toHaveProperty('costCredits');
+    expect(finalized).toMatchObject([
+      {
+        outcome: 'provider-error',
+        provider: { promptTokens: 4, costCredits: 0.003, httpStatus: 529 },
+      },
+      { outcome: 'completed' },
+    ]);
+  });
+
+  it('attributes usage from a non-retryable non-OK response', async () => {
+    await expect(
+      new OpenRouterSwarmPlanner({
+        apiKey: 'test-key',
+        fetchImplementation: vi
+          .fn<typeof fetch>()
+          .mockResolvedValue(
+            new Response(
+              JSON.stringify({ usage: { completion_tokens: 8, cost: 0.004 } }),
+              { status: 400 },
+            ),
+          ),
+      }).plan(observation, 'test-model'),
+    ).rejects.toMatchObject({
+      metadata: { completionTokens: 8, costCredits: 0.004, httpStatus: 400 },
+    });
+  });
+
+  it('preserves cancellation while reading a non-OK response body', async () => {
+    const cancellation = new AbortController();
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        cancellation.abort();
+        controller.error(new Error('cancelled body'));
+      },
+    });
+    await expect(
+      new OpenRouterSwarmPlanner({
+        apiKey: 'test-key',
+        fetchImplementation: vi
+          .fn<typeof fetch>()
+          .mockResolvedValue(new Response(body, { status: 400 })),
+      }).plan(observation, 'test-model', { signal: cancellation.signal }),
+    ).rejects.toMatchObject({ failure: { code: 'cancelled' } });
+  });
+
+  it('excludes echoed secrets and worker observation data from response metadata', async () => {
+    const echoed = `Bearer test-key ${cell}`;
+    const success = await new OpenRouterSwarmPlanner({
+      apiKey: 'test-key',
+      fetchImplementation: vi.fn<typeof fetch>().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            id: echoed,
+            model: echoed,
+            choices: [{ message: { content: JSON.stringify(plan) } }],
+          }),
+          { status: 200 },
+        ),
+      ),
+    }).plan(observation, 'test-model');
+    expect(success.metadata).not.toHaveProperty('requestId');
+    expect(success.metadata).not.toHaveProperty('resolvedModel');
+    await expect(
+      new OpenRouterSwarmPlanner({
+        apiKey: 'test-key',
+        fetchImplementation: vi.fn<typeof fetch>().mockResolvedValue(
+          new Response(
+            JSON.stringify({
+              id: echoed,
+              model: echoed,
+              usage: { cost: 0.005 },
+            }),
+            { status: 400 },
+          ),
+        ),
+      }).plan(observation, 'test-model'),
+    ).rejects.toMatchObject({
+      metadata: { costCredits: 0.005 },
+    });
+  });
 });
+
+function plannerResponse(planValue: unknown, usage?: unknown): Response {
+  return new Response(
+    JSON.stringify({
+      id: 'safe-request-id',
+      model: 'test-model',
+      choices: [{ message: { content: JSON.stringify(planValue) } }],
+      ...(usage === undefined ? {} : { usage }),
+    }),
+    { status: 200 },
+  );
+}

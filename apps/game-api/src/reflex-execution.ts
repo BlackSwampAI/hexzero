@@ -166,7 +166,6 @@ export function compileReflexObservation(
       recentTerritoryTrend: territoryTrend,
       recentActionOutcome: history.recentActionOutcome ?? 'unknown',
     },
-    relevantRecentFacts: [],
     ...(history.captureAlerts?.length
       ? { captureAlerts: [...history.captureAlerts].slice(-4) }
       : {}),

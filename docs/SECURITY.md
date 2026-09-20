@@ -40,9 +40,11 @@ their nested rollups.
 ## Secrets and deployment
 
 `TYPESAFE_API_KEY` is server-only for the zero-swarm reflex provider. Jev sees
-compact semantic state and opaque candidate IDs. The outbound state omits H3
-cell IDs and tick numbers; the server retains directive targets and the action
-mapping. The key, raw
+compact semantic state and opaque candidate IDs. When current player pressure
+captures a worker, Jev also receives a bounded structured capture-pressure
+count and abandoned-cell counts from the worker's authorized capture alerts.
+The outbound state omits H3 cell IDs, tick numbers, and hidden hunter routing;
+the server retains directive targets and the action mapping. The key, raw
 TypeSafe requests and responses, and provider error bodies never enter safe
 telemetry, World Lab, archives, or exports. TypeSafe token usage is factual;
 no monetary cost is inferred from it.
