@@ -22,6 +22,18 @@ Zero planning uses the same provider-reported OpenRouter usage normalization as
 legacy turns, including actual `usage.cost` when returned, and preserves that
 metadata when a returned plan is rejected or a bounded non-success response
 contains usage. Missing provider cost remains unknown.
+The OpenRouter planner asks Zero for bounded worker IDs, strategic target choice
+IDs, mission, priority, risk, and its own legal action choice. Server code
+materializes agent IDs, H3 targets, directive IDs, and five-tick lifetimes from
+the frozen observation. Full valid plans remain accepted for compatibility,
+but invalid output is classified into safe validation reasons without retaining
+raw provider text. The selected Zero reasoning profile is sent to OpenRouter
+with private reasoning excluded, and output is bounded.
+
+When Zero has no unexpired directive for a worker, a failed planning attempt
+gives that worker engine-legal deterministic local expansion without a Jev
+call. This prevents repeated billed Jev waits under a failed planner while
+retaining planner attempt telemetry.
 
 Swarm tick records are separate from legacy agent turn records. Full all-agent
 exports and the archive retain safe plans, directives, action choices, and

@@ -57,8 +57,105 @@ const plan = swarmPlanSchema.parse({
     },
   ],
 });
+const compactPlan = {
+  strategySummary: 'Expand carefully.',
+  zeroActionCandidateId: 'zero_action_0',
+  directives: [
+    {
+      workerId: 'worker_0',
+      mission: 'expand',
+      targetId: 'target_0',
+      priority: 'normal',
+      riskTolerance: 'medium',
+    },
+  ],
+};
 
 describe('swarm planners', () => {
+  it('turns bounded worker and target choices into authoritative directives', async () => {
+    const fetchImplementation = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(plannerResponse(compactPlan));
+    const result = await new OpenRouterSwarmPlanner({
+      apiKey: 'test-key',
+      fetchImplementation,
+    }).plan(observation, 'test-model', { reasoningProfile: 'low' });
+    expect(result.plan).toEqual({
+      strategySummary: 'Expand carefully.',
+      zeroActionCandidateId: 'zero_action_0',
+      directives: [
+        {
+          id: 'directive-1-worker_0',
+          agentId: worker,
+          mission: 'expand',
+          targetCell: cell,
+          priority: 'normal',
+          riskTolerance: 'medium',
+          issuedAtTick: 1,
+          expiresAtTick: 5,
+        },
+      ],
+    });
+    const body = JSON.parse(
+      String(fetchImplementation.mock.calls[0]?.[1]?.body),
+    ) as {
+      messages: Array<{ content: string }>;
+      reasoning: { enabled: boolean; effort: string; exclude: boolean };
+      max_tokens: number;
+    };
+    expect(body.reasoning).toEqual({
+      enabled: true,
+      effort: 'low',
+      exclude: true,
+    });
+    expect(body.max_tokens).toBe(4_096);
+    expect(body.messages[0]?.content).toContain('Code supplies directive IDs');
+    expect(JSON.parse(body.messages[1]!.content)).toMatchObject({
+      workers: [{ workerId: 'worker_0', position: cell }],
+      targetChoices: [{ targetId: 'target_0', cell }],
+    });
+  });
+
+  it('rejects unknown compact choices with a safe specific reason', async () => {
+    await expect(
+      new OpenRouterSwarmPlanner({
+        apiKey: 'test-key',
+        fetchImplementation: vi.fn<typeof fetch>().mockResolvedValue(
+          plannerResponse({
+            ...compactPlan,
+            directives: [
+              { ...compactPlan.directives[0], targetId: 'target_99' },
+            ],
+          }),
+        ),
+      }).plan(observation, 'test-model'),
+    ).rejects.toMatchObject({
+      failure: {
+        code: 'invalid-decision',
+        message: 'Agent Zero plan rejected: unknown target choice.',
+      },
+    });
+  });
+
+  it('reports missing compact worker directives without exposing raw output', async () => {
+    await expect(
+      new OpenRouterSwarmPlanner({
+        apiKey: 'test-key',
+        fetchImplementation: vi
+          .fn<typeof fetch>()
+          .mockResolvedValue(
+            plannerResponse({ ...compactPlan, directives: [] }),
+          ),
+      }).plan(observation, 'test-model'),
+    ).rejects.toMatchObject({
+      failure: {
+        code: 'invalid-decision',
+        message:
+          'Agent Zero plan rejected: missing or extra worker directives.',
+      },
+    });
+  });
+
   it('uses a deterministic plan only when it stays within authoritative options', async () => {
     const result = await new ScriptedSwarmPlanner([plan]).plan(
       observation,

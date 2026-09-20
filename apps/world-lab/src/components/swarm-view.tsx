@@ -362,6 +362,9 @@ export function SwarmActivityPanel({
     (worker) => worker.source === 'deterministic-fallback',
   ).length;
   const player = snapshot.world.simulatedPlayer;
+  const infectedCells = snapshot.world.hexes?.filter(
+    ({ state }) => state === 'infected',
+  ).length;
   const attempts = snapshot.experiment.attemptAccounting;
   return (
     <section
@@ -380,7 +383,7 @@ export function SwarmActivityPanel({
         </p>
         <p>
           {player
-            ? `${player.profile} pressure: ${player.metrics.movements} moves, ${player.metrics.cellsDisinfected} cleans, ${player.metrics.blockedDisinfections} blocked cleans`
+            ? `${player.profile} pressure: ${player.metrics.movements} moves, ${player.metrics.cellsDisinfected} cleans, ${player.metrics.blockedDisinfections} blocked cleans${infectedCells === 0 ? ' · no infected cells to pursue' : ''}`
             : 'Simulated player pressure is off. Enable it in World Setup to test cleaner or hunter behavior.'}
         </p>
         {latest?.plannerFailure && (

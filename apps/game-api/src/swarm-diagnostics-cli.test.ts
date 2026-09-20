@@ -11,7 +11,7 @@ describe('swarm diagnostic projection', () => {
         patientZeroAgentId: 'zero',
         simulatedPlayer: { enabled: false, profile: 'casual-cleaner' },
       },
-      world: { simulatedPlayer: null },
+      world: { simulatedPlayer: null, hexes: [] },
       resolvedModels: [{ agentId: 'zero', modelId: 'google/gemini-test' }],
       swarmProviderStatus: {
         plannerMode: 'openrouter-swarm',
@@ -45,6 +45,7 @@ describe('swarm diagnostic projection', () => {
     } as unknown as SimulationSnapshot;
     expect(summarizeSwarmSnapshot(snapshot)).toMatchObject({
       tick: 1,
+      infectedCells: 0,
       player: { enabled: false, active: false, movements: 0 },
       attempts: { started: 8, finalized: 8 },
       recentTicks: [

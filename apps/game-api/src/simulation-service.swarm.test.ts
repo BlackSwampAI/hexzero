@@ -408,7 +408,7 @@ describe('zero-swarm SimulationService tick', () => {
     expect(snapshot.experiment.attemptAccounting.attemptsStarted).toBe(8);
   });
 
-  it('uses deterministic neutral directives and Zero wait when planning fails', async () => {
+  it('uses one billed Zero attempt and deterministic legal expansion when the first plan fails', async () => {
     const simulation = setup(
       new InspectingPlanner(true),
       new ScriptedReflexProvider(
@@ -420,8 +420,20 @@ describe('zero-swarm SimulationService tick', () => {
     expect(tick?.planSource).toBe('deterministic-fallback');
     expect(tick?.zeroAction).toEqual({ type: 'wait' });
     expect(
-      tick?.workers.every(({ directive }) => directive.mission === 'hold'),
+      tick?.workers.every(
+        ({ directive, source }) =>
+          directive.mission === 'expand' && source === 'deterministic-fallback',
+      ),
     ).toBe(true);
+    expect(
+      tick?.workers.some(
+        ({ action, actionResult }) =>
+          action?.type === 'infect' && actionResult?.accepted === true,
+      ),
+    ).toBe(true);
+    expect(
+      simulation.getSnapshot().experiment.attemptAccounting.attemptsStarted,
+    ).toBe(1);
   });
 
   it('reuses unexpired directives for four ticks, then replans on the fifth tick', async () => {

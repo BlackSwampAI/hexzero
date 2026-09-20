@@ -62,6 +62,13 @@ it never grants world mutation authority. Safe swarm tick records contain
 structured plans and outcomes, while raw planner messages and responses remain
 server-private. Legacy social and prose-memory cognition does not run in this
 mode.
+The planner's preferred wire response contains only opaque worker, target, and
+Zero-action choices. The server maps them to authorized agent/cell/action IDs
+and issues directive IDs and lifetimes. Invalid outputs record only a bounded
+validation category such as an unknown target choice; they do not retain or
+echo the raw model response. When a worker has no unexpired directive from a
+prior valid Zero plan, it uses deterministic legal local expansion without a
+Jev request until planning recovers.
 
 World Lab receives only configured booleans and adapter/model labels for the
 swarm providers. It displays committed safe plan and reflex telemetry plus

@@ -19,6 +19,9 @@ export function summarizeSwarmSnapshot(snapshot: SimulationSnapshot) {
   return {
     tick: snapshot.tickNumber,
     mode: snapshot.scenario.cognitionMode,
+    infectedCells: snapshot.world.hexes.filter(
+      ({ state }) => state === 'infected',
+    ).length,
     zeroModel:
       snapshot.resolvedModels.find(({ agentId }) => agentId === zeroId)
         ?.modelId ?? null,
