@@ -16,7 +16,10 @@ fallbacks; provider attempts survive world rollback. See ADRs 0028 and 0029.
 Swarm tick records are separate from legacy agent turn records. Full all-agent
 exports and the archive retain safe plans, directives, action choices, and
 factual provider usage; selective legacy turn filters do not export partial
-swarm plans. World Lab's dedicated swarm presentation follows in PR C.
+swarm plans. World Lab selects a dedicated swarm presentation from the
+scenario mode. It shows Zero strategy, worker directives and Jev decisions,
+progress, and provider usage while omitting irrelevant legacy social cognition
+controls. See ADR 0030.
 
 Provider-attempt and credit-exposure admission are owned by `SimulationService`. Its ledger is
 deliberately separate from deterministic world state and committed-turn

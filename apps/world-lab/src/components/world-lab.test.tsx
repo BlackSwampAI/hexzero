@@ -1037,6 +1037,78 @@ async function openAgentsWorkspace(user: ReturnType<typeof userEvent.setup>) {
 }
 
 describe('WorldLab', () => {
+  it('renders the zero swarm workspace without legacy social or personality surfaces', async () => {
+    const swarm = simulationSnapshotSchema.parse({
+      ...initial,
+      scenario: { ...initial.scenario, cognitionMode: 'zero-swarm-v1' },
+      swarmProviderStatus: {
+        plannerMode: 'scripted-swarm-test',
+        plannerConfigured: false,
+        reflexMode: 'scripted-reflex-test',
+        reflexConfigured: false,
+      },
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => jsonResponse(swarm)),
+    );
+    const user = userEvent.setup();
+    render(<WorldLab />);
+
+    expect(await screen.findByText('Swarm planner')).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Swarm' })).toBeInTheDocument();
+    expect(
+      screen.queryByRole('tab', { name: 'Public chat' }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText('Restore default personalities'),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Start' })).toBeEnabled();
+
+    await user.click(screen.getByRole('tab', { name: 'Scoreboard' }));
+    expect(await screen.findByLabelText('Swarm strategy')).toBeInTheDocument();
+    expect(screen.queryByText('Alliance status')).not.toBeInTheDocument();
+
+    await openAgentsWorkspace(user);
+    expect(await screen.findByText(/Agent Zero model/)).toBeInTheDocument();
+    await user.click(
+      screen.getByRole('button', { name: /Open Agent Zero model Controller/ }),
+    );
+    expect(
+      screen.queryByRole('tab', { name: 'Behavior' }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/personality/i)).not.toBeInTheDocument();
+    expect(screen.queryByText('Agent overrides')).not.toBeInTheDocument();
+    expect(
+      screen.queryByText('Import saved experiment model assignments'),
+    ).not.toBeInTheDocument();
+
+    await user.click(screen.getByLabelText('Close model selection'));
+    await openOverflow(user);
+    await user.click(screen.getByRole('button', { name: 'Export' }));
+    expect(
+      await screen.findByText(/Swarm exports include all agents/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('Communication channel')).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('group', { name: 'Agents' }),
+    ).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Preview' }));
+    await waitFor(() => {
+      const request = vi
+        .mocked(fetch)
+        .mock.calls.find(([url]) =>
+          String(url).endsWith('/experiment/export/preview'),
+        );
+      expect(request).toBeDefined();
+      expect(JSON.parse(String(request?.[1]?.body))).toMatchObject({
+        agents: { mode: 'all' },
+        turns: { mode: 'entire-retained' },
+        level: 'full-safe',
+      });
+    });
+  });
+
   it('migrates supported legacy browser preferences and rejects retired targets', async () => {
     window.localStorage.setItem(
       'agentborne.world-lab.activity-dock',

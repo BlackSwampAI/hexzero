@@ -2713,6 +2713,7 @@ export const swarmWorkerTickRecordSchema = z
   .object({
     agentId: agentIdSchema,
     directive: swarmDirectiveSchema,
+    situation: reflexObservationSchema.shape.currentSituation.optional(),
     action: worldActionSchema.optional(),
     actionResult: worldActionResultSchema.optional(),
     reflexDecision: reflexDecisionSchema.optional(),
@@ -3366,6 +3367,16 @@ export const simulationSnapshotSchema = z
     status: simulationStatusSchema,
     providerMode: providerModeSchema,
     providerConfigured: z.boolean(),
+    swarmProviderStatus: z
+      .object({
+        plannerMode: z.enum(['openrouter-swarm', 'scripted-swarm-test']),
+        plannerConfigured: z.boolean(),
+        reflexMode: z.enum(['typesafe-jev', 'scripted-reflex-test']),
+        reflexConfigured: z.boolean(),
+        reflexModel: z.string().trim().min(1).max(200).optional(),
+      })
+      .strict()
+      .optional(),
     modelConfiguration: experimentModelConfigurationSchema,
     behaviorConfiguration: behaviorConfigurationSchema.optional(),
     resolvedModels: z

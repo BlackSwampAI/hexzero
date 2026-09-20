@@ -1044,6 +1044,80 @@ h2 {
   padding: 14px;
   border-bottom: 1px solid #2d3835;
 }
+.swarm-panel h2,
+.swarm-panel h3,
+.swarm-panel h4 {
+  margin-bottom: 8px;
+}
+.swarm-summary,
+.swarm-muted,
+.swarm-progress,
+.swarm-empty {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+.swarm-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  margin: 10px 0;
+  background: var(--line);
+}
+.swarm-facts > div {
+  min-width: 0;
+  padding: 8px;
+  background: var(--surface-raised);
+}
+.swarm-facts dt {
+  color: var(--text-muted);
+  font-size: 0.67rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.swarm-facts dd {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+  font-size: 0.78rem;
+}
+.swarm-directives,
+.swarm-probabilities,
+.swarm-activity ol {
+  display: grid;
+  gap: 5px;
+  margin: 8px 0;
+  padding: 0;
+  list-style: none;
+}
+.swarm-directives li,
+.swarm-activity li {
+  display: grid;
+  gap: 3px;
+  padding: 8px;
+  border-left: 2px solid var(--accent-strong);
+  background: var(--surface-raised);
+  font-size: 0.78rem;
+}
+.swarm-directives button,
+.swarm-cell-link {
+  width: fit-content;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  text-align: left;
+}
+.swarm-probabilities li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 8px;
+  background: var(--surface-raised);
+  font-size: 0.78rem;
+}
 .usage-meter,
 .agent-usage {
   display: flex;

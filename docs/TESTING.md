@@ -9,6 +9,10 @@ PR B adds scripted Agent Zero and Jev providers to test plan validation,
 planning-before-reflex ordering, real engine resolution, deterministic failure
 fallback, cancellation rollback, and independent provider-attempt retention.
 The live provider smoke test remains separately opted into.
+PR C adds mode-specific World Lab component coverage for Zero strategy,
+worker directives and probabilities, provider usage, Zero-only model setup,
+and hiding of legacy social/personality views while retaining legacy UI
+coverage. Browser smoke still exercises the deterministic legacy baseline.
 
 Attempt-budget tests use deterministic providers and cover whole-roster tick
 admission, retry permits, cancellation finalization, and the distinction
