@@ -299,6 +299,7 @@ export function importExperimentExport(
       importAgents(archive, document, report);
       importMap(archive, document, report);
       importTurns(archive, document, report);
+      importSwarmTicks(archive, document, report);
       importProviderAttempts(archive, document, report);
       importCommunications(archive, document, report);
       importAllianceEvents(archive, document, report);
@@ -316,6 +317,30 @@ export function importExperimentExport(
       );
     throw error;
   }
+}
+
+function importSwarmTicks(
+  archive: ArchiveDatabase,
+  document: ExperimentExportDocument,
+  report: ImportReport,
+): void {
+  const statement = archive.database.prepare(`
+    INSERT OR IGNORE INTO swarm_ticks(
+      experiment_id, tick_number, virtual_time, plan_source, source_json
+    ) VALUES (?, ?, ?, ?, ?)
+  `);
+  for (const tick of document.swarmTicks ?? [])
+    runInsert(
+      statement,
+      [
+        document.experiment.id,
+        tick.tickNumber,
+        tick.virtualTime,
+        tick.planSource,
+        json(tick)!,
+      ],
+      report,
+    );
 }
 
 function importAgents(

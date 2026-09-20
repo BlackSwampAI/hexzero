@@ -38,6 +38,7 @@ import {
   type ProviderAttemptRecord,
   type ProviderAttemptRetention,
   type ExperimentAttemptAccounting,
+  type SwarmTickRecord,
 } from '@hexzero/shared';
 
 export interface ExperimentSource {
@@ -48,6 +49,7 @@ export interface ExperimentSource {
   retentionLimit: number;
   totalCompletedTurns: number;
   turns: readonly AgentTurnRecord[];
+  swarmTicks?: readonly SwarmTickRecord[];
   initialAgents: readonly Agent[];
   currentAgents: readonly Agent[];
   configurationEvents: readonly ExperimentConfigurationEvent[];
@@ -745,6 +747,18 @@ export function createExperimentExport(
     requestedRangeExtendsBeyondRetention,
   };
   const include = inclusionsFor(request);
+  const exportedSwarmTicks: SwarmTickRecord[] | undefined =
+    source.scenario.cognitionMode === 'zero-swarm-v1' &&
+    request.agents.mode === 'all' &&
+    request.turns.mode === 'entire-retained'
+      ? [...structuredClone(source.swarmTicks ?? [])]
+      : undefined;
+  const selectedTickNumbers = new Set([
+    ...filtered
+      .map(({ tickNumber }) => tickNumber)
+      .filter((tick): tick is number => tick !== undefined),
+    ...(exportedSwarmTicks ?? []).map(({ tickNumber }) => tickNumber),
+  ]);
   const selectedAgents = source.currentAgents
     .filter(({ id }) => selectedSet.has(id))
     .map((agent) =>
@@ -779,10 +793,15 @@ export function createExperimentExport(
       matchingTurnCount: filtered.length,
       ...(source.schemaVersion === 10 || source.schemaVersion === 11
         ? {
-            matchingTickCount: new Set(
-              filtered.map(({ tickNumber }) => tickNumber).filter(Boolean),
-            ).size,
+            matchingTickCount:
+              exportedSwarmTicks?.length ??
+              new Set(
+                filtered.map(({ tickNumber }) => tickNumber).filter(Boolean),
+              ).size,
           }
+        : {}),
+      ...(exportedSwarmTicks
+        ? { matchingSwarmTickCount: exportedSwarmTicks.length }
         : {}),
       matchingCommunicationCount: communications.length,
       matchingControlChangeCount: controlChanges.length,
@@ -791,10 +810,7 @@ export function createExperimentExport(
         ? { matchingProviderAttemptCount: providerAttempts.length }
         : {}),
       matchingSimulatedPlayerEventCount: source.simulatedPlayerEvents.filter(
-        (event) =>
-          new Set(
-            filtered.map(({ tickNumber }) => tickNumber).filter(Boolean),
-          ).has(event.originatingTick),
+        (event) => selectedTickNumbers.has(event.originatingTick),
       ).length,
       firstMatchingTurn: filtered[0]?.turnNumber,
       lastMatchingTurn: filtered.at(-1)?.turnNumber,
@@ -857,10 +873,7 @@ export function createExperimentExport(
               return [structuredClone(turn.worldActionResult.event)];
             }),
             ...source.simulatedPlayerEvents.filter((event) => {
-              const selectedTicks = new Set(
-                filtered.map(({ tickNumber }) => tickNumber).filter(Boolean),
-              );
-              return selectedTicks.has(event.originatingTick);
+              return selectedTickNumbers.has(event.originatingTick);
             }),
           ],
         }
@@ -873,6 +886,7 @@ export function createExperimentExport(
       : {}),
     allianceEvents: structuredClone(allianceEvents),
     turns: filtered.map((turn) => exportTurn(turn, request)),
+    ...(exportedSwarmTicks ? { swarmTicks: exportedSwarmTicks } : {}),
     ...(source.schemaVersion === 10 || source.schemaVersion === 11
       ? { tickSummaries: summarizeTicks(filtered) }
       : {}),
@@ -995,6 +1009,9 @@ export function createExperimentPreview(
     ...(document.selection.matchingTickCount === undefined
       ? {}
       : { matchingTickCount: document.selection.matchingTickCount }),
+    ...(document.selection.matchingSwarmTickCount === undefined
+      ? {}
+      : { matchingSwarmTickCount: document.selection.matchingSwarmTickCount }),
     matchingCommunicationCount: document.selection.matchingCommunicationCount,
     matchingControlChangeCount: document.selection.matchingControlChangeCount,
     matchingDiplomacyEventCount: document.selection.matchingDiplomacyEventCount,

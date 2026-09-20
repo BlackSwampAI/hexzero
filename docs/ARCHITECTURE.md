@@ -1,14 +1,22 @@
 # Architecture
 
-## Zero-swarm PR A seam
+## Zero-swarm execution
 
 `cognitionMode` distinguishes `legacy-multi-agent` from `zero-swarm-v1` in
-scenarios, snapshots, and exports. The legacy tick remains the active
-production executor. Until the Agent Zero planner is connected in PR B, a
-zero-swarm production tick is rejected explicitly. The separate reflex seam
-compiles engine-legal physical actions from a frozen world, describes them as
-opaque candidates, asks Jev to select one, and maps the chosen ID back to a
-world action for normal engine validation. See ADR 0028.
+scenarios, snapshots, and exports. Legacy ticks retain their original path.
+For a zero-swarm tick, the service first advances deterministic player pressure
+into an uncommitted world candidate, then asks one OpenRouter Agent Zero planner
+for a strategy, worker directives, and one opaque Zero action ID. After plan
+validation, each worker receives a compact local projection and engine-legal
+physical actions as opaque candidates. Jev selects one candidate ID, which the
+service maps to a world action for seeded engine resolution. One complete tick
+commits atomically. Planner and worker failures use explicit deterministic
+fallbacks; provider attempts survive world rollback. See ADRs 0028 and 0029.
+
+Swarm tick records are separate from legacy agent turn records. Full all-agent
+exports and the archive retain safe plans, directives, action choices, and
+factual provider usage; selective legacy turn filters do not export partial
+swarm plans. World Lab's dedicated swarm presentation follows in PR C.
 
 Provider-attempt and credit-exposure admission are owned by `SimulationService`. Its ledger is
 deliberately separate from deterministic world state and committed-turn

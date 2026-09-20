@@ -1,10 +1,14 @@
 # Testing
 
-Zero-swarm PR A tests are offline by default. They cover deterministic legal
+Zero-swarm tests are offline by default. PR A covers deterministic legal
 candidate compilation, a scripted reflex choice through `applyWorldAction`,
 malformed and unknown TypeSafe choices, cancellation and bounded transient
 retry, and provider attempts retained when a candidate world change is not
 committed. `pnpm validate` and `pnpm test:e2e` are the complete local gates.
+PR B adds scripted Agent Zero and Jev providers to test plan validation,
+planning-before-reflex ordering, real engine resolution, deterministic failure
+fallback, cancellation rollback, and independent provider-attempt retention.
+The live provider smoke test remains separately opted into.
 
 Attempt-budget tests use deterministic providers and cover whole-roster tick
 admission, retry permits, cancellation finalization, and the distinction

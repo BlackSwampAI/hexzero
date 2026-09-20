@@ -1,0 +1,361 @@
+import { describe, expect, it } from 'vitest';
+import {
+  BrowserTestAgentProvider,
+  ReflexProviderError,
+  ScriptedReflexProvider,
+  type PlannerOptions,
+  type ReflexProvider,
+  type SwarmPlanner,
+} from '@hexzero/agent-runtime';
+import {
+  type CompatibleModel,
+  type SwarmPlan,
+  type ZeroStrategicObservation,
+  reflexDecisionSchema,
+  singleTickResponseSchema,
+} from '@hexzero/shared';
+import { createApp } from './app';
+import {
+  SimulationService,
+  SimulationTurnCancelledError,
+} from './simulation-service';
+
+const model = {
+  id: 'test/zero',
+  name: 'Zero',
+  author: 'test',
+  contextLength: 4_096,
+  inputPricePerToken: '0',
+  outputPricePerToken: '0',
+  supportedParameters: [],
+  isFree: true,
+  reasoning: { mandatory: false, supportedEfforts: ['low'] },
+} as CompatibleModel;
+
+class InspectingPlanner implements SwarmPlanner {
+  readonly mode = 'scripted-swarm-test' as const;
+  readonly configured = true;
+  readonly observations: ZeroStrategicObservation[] = [];
+  constructor(private readonly failure: boolean | number = false) {}
+  async plan(
+    observation: ZeroStrategicObservation,
+    _model: string,
+    options: PlannerOptions = {},
+  ): Promise<{
+    plan: SwarmPlan;
+    metadata: { provider: 'scripted-test'; model: string; latencyMs: number };
+  }> {
+    this.observations.push(structuredClone(observation));
+    const finalize = options.beginAttempt?.('initial');
+    if (this.failure === true || this.failure === observation.tickNumber) {
+      finalize?.({
+        outcome: 'provider-error',
+        failure: {
+          code: 'provider-http',
+          message: 'planner unavailable',
+          retryable: true,
+        },
+      });
+      throw new Error('planner unavailable');
+    }
+    const result = {
+      plan: {
+        strategySummary: 'Hold the local perimeter.',
+        zeroActionCandidateId: observation.legalZeroActions.find(
+          ({ action }) => action.type === 'wait',
+        )!.id,
+        directives: observation.agents
+          .filter(({ agentId }) => agentId !== observation.zeroAgentId)
+          .map((agent, index) => ({
+            id: `directive-${observation.tickNumber}-${index}`,
+            agentId: agent.agentId,
+            mission: 'hold',
+            targetCell: agent.position,
+            priority: 'normal',
+            riskTolerance: 'low',
+            issuedAtTick: observation.tickNumber,
+            expiresAtTick: observation.tickNumber + 1,
+          })),
+      },
+      metadata: { provider: 'scripted-test', model: 'test/zero', latencyMs: 0 },
+    } satisfies Awaited<ReturnType<SwarmPlanner['plan']>>;
+    finalize?.({
+      outcome: 'completed',
+      provider: result.metadata,
+      swarmPlan: result.plan,
+    });
+    return result;
+  }
+}
+
+function setup(
+  planner: SwarmPlanner,
+  reflex: ReflexProvider,
+  pressure = false,
+) {
+  const simulation = new SimulationService({
+    provider: new BrowserTestAgentProvider(),
+    swarmPlanner: planner,
+    reflexProvider: reflex,
+    now: () => '2026-08-13T12:00:00.000Z',
+  });
+  simulation.setCompatibleModels([model]);
+  const request = simulation.getDefaultWorldSetup();
+  simulation.applyWorldSetup({
+    ...request,
+    cognitionMode: 'zero-swarm-v1',
+    ...(pressure
+      ? {
+          objectiveVersion: 'durable-influence-v3' as const,
+          capabilities: {
+            ...request.capabilities,
+            simulatedPlayerPressure: true,
+          },
+          simulatedPlayer: {
+            enabled: true,
+            profile: 'casual-cleaner' as const,
+            seed: 'swarm-export-pressure',
+          },
+        }
+      : {}),
+    modelConfiguration: {
+      globalModelId: model.id,
+      globalReasoningProfile: 'low',
+      overrides: [],
+      locked: false,
+    },
+  });
+  return simulation;
+}
+
+describe('zero-swarm SimulationService tick', () => {
+  it('returns a schema-valid swarm tick through the API without legacy turn records', async () => {
+    const simulation = setup(
+      new InspectingPlanner(),
+      new ScriptedReflexProvider(
+        Array.from({ length: 7 }, () => ({ chosenCandidateId: 'action_0' })),
+      ),
+    );
+    const response = await createApp({ service: simulation }).request(
+      '/api/simulation/tick',
+      { method: 'POST' },
+    );
+    expect(response.status).toBe(200);
+    const tick = singleTickResponseSchema.parse(await response.json());
+    expect(tick.records).toEqual([]);
+    expect(tick.swarmTick?.tickNumber).toBe(1);
+  });
+
+  it('freezes player-advanced facts for Zero, uses only reflex choices, and resolves physical actions in engine order', async () => {
+    const planner = new InspectingPlanner();
+    const simulation = setup(
+      planner,
+      new ScriptedReflexProvider(
+        Array.from({ length: 7 }, () => ({ chosenCandidateId: 'action_0' })),
+      ),
+    );
+    const startingCells = new Map(
+      simulation
+        .getSnapshot()
+        .world.agents.map(({ id, currentCell }) => [id, currentCell]),
+    );
+    await expect(simulation.executeNextTick()).resolves.toEqual([]);
+    const snapshot = simulation.getSnapshot();
+    expect(snapshot.tickNumber).toBe(1);
+    expect(snapshot.turnNumber).toBe(0);
+    expect(snapshot.turns).toEqual([]);
+    expect(snapshot.swarmTicks).toHaveLength(1);
+    expect(snapshot.swarmTicks?.[0]?.workers).toHaveLength(7);
+    expect(
+      snapshot.swarmTicks?.[0]?.workers.every(
+        ({ source }) => source === 'jev-reflex',
+      ),
+    ).toBe(true);
+    expect(
+      snapshot.swarmTicks?.[0]?.workers.some(
+        ({ agentId, action, actionResult }) =>
+          action?.type === 'move' &&
+          actionResult?.accepted === true &&
+          snapshot.world.agents.find(({ id }) => id === agentId)
+            ?.currentCell !== startingCells.get(agentId),
+      ),
+    ).toBe(true);
+    expect(planner.observations[0]?.tickNumber).toBe(1);
+    expect(planner.observations[0]?.cells).toEqual(expect.any(Array));
+    expect(snapshot.resolutionOrder).toHaveLength(8);
+    expect(snapshot.experiment.attemptAccounting.attemptsStarted).toBe(8);
+  });
+
+  it('uses deterministic neutral directives and Zero wait when planning fails', async () => {
+    const simulation = setup(
+      new InspectingPlanner(true),
+      new ScriptedReflexProvider(
+        Array.from({ length: 7 }, () => ({ chosenCandidateId: 'action_0' })),
+      ),
+    );
+    await simulation.executeNextTick();
+    const tick = simulation.getSnapshot().swarmTicks?.[0];
+    expect(tick?.planSource).toBe('deterministic-fallback');
+    expect(tick?.zeroAction).toEqual({ type: 'wait' });
+    expect(
+      tick?.workers.every(({ directive }) => directive.mission === 'hold'),
+    ).toBe(true);
+  });
+
+  it('retains unexpired prior directives when a later Zero plan fails', async () => {
+    const simulation = setup(
+      new InspectingPlanner(2),
+      new ScriptedReflexProvider(
+        Array.from({ length: 14 }, () => ({ chosenCandidateId: 'action_0' })),
+      ),
+    );
+    await simulation.executeNextTick();
+    const first = simulation.getSnapshot().swarmTicks?.[0];
+    await simulation.executeNextTick();
+    const second = simulation.getSnapshot().swarmTicks?.[1];
+    expect(second?.planSource).toBe('deterministic-fallback');
+    expect(second?.zeroAction).toEqual({ type: 'wait' });
+    expect(second?.plan.directives).toEqual(first?.plan.directives);
+  });
+
+  it('exports simulated-player events under swarm tick selection', async () => {
+    const reflex: ReflexProvider = {
+      mode: 'scripted-reflex-test',
+      model: 'test-reflex',
+      configured: true,
+      async decide(observation, options) {
+        const choice =
+          observation.candidates.find(({ description }) =>
+            description.startsWith('Infect the current open cell'),
+          ) ??
+          observation.candidates.find(({ description }) =>
+            description.startsWith('Remain on the current cell'),
+          )!;
+        const decision = reflexDecisionSchema.parse({
+          chosenCandidateId: choice.id,
+          confidence: 1,
+          probabilities: Object.fromEntries(
+            observation.candidates.map(({ id }) => [
+              id,
+              id === choice.id ? 1 : 0,
+            ]),
+          ),
+          model: 'test-reflex',
+          latencyMs: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          directiveId: observation.directive.id,
+          cognitionSource: 'jev-reflex',
+        });
+        options?.beginAttempt?.('initial')?.({
+          outcome: 'completed',
+          provider: {
+            provider: 'scripted-test',
+            model: 'test-reflex',
+            latencyMs: 0,
+            costCredits: 0,
+          },
+          reflexDecision: decision,
+        });
+        return decision;
+      },
+    };
+    const simulation = setup(new InspectingPlanner(), reflex, true);
+    for (let tick = 0; tick < 12; tick += 1) await simulation.executeNextTick();
+    const exported = simulation.generateExperimentExport({
+      agents: { mode: 'all' },
+      turns: { mode: 'entire-retained' },
+      outcomes: ['accepted', 'rejected', 'provider-error', 'operator-skipped'],
+      actions: ['move', 'infect', 'capture', 'wait'],
+      communications: { channel: 'all', status: 'all' },
+      level: 'full-safe',
+      serialization: 'compact',
+    });
+    expect(exported.swarmTicks).toHaveLength(12);
+    expect(exported.selection.matchingTickCount).toBe(12);
+    expect(
+      exported.selection.matchingSimulatedPlayerEventCount,
+    ).toBeGreaterThan(0);
+    expect(
+      exported.worldEvents?.filter(
+        (event) =>
+          event.type === 'simulated-player-moved' ||
+          event.type === 'hex-disinfected' ||
+          event.type === 'simulated-player-clean-blocked',
+      ),
+    ).toHaveLength(exported.selection.matchingSimulatedPlayerEventCount);
+  });
+
+  it('falls back to wait for one failed Jev request without losing the tick', async () => {
+    const failing: ReflexProvider = {
+      mode: 'scripted-reflex-test',
+      model: 'test-reflex',
+      configured: true,
+      async decide(_observation, options) {
+        const failure = {
+          code: 'provider-http' as const,
+          message: 'down',
+          retryable: true,
+        };
+        options?.beginAttempt?.('initial')?.({
+          outcome: 'provider-error',
+          failure,
+        });
+        throw new ReflexProviderError(failure);
+      },
+    };
+    const simulation = setup(new InspectingPlanner(), failing);
+    await simulation.executeNextTick();
+    const workers = simulation.getSnapshot().swarmTicks?.[0]?.workers ?? [];
+    expect(
+      workers.every(
+        ({ source, action }) =>
+          source === 'deterministic-fallback' && action?.type === 'wait',
+      ),
+    ).toBe(true);
+    expect(
+      simulation.getSnapshot().experiment.attemptAccounting.attemptsStarted,
+    ).toBe(8);
+  });
+
+  it('cancels without committing the candidate world while retaining the started planner attempt', async () => {
+    let abort: (() => void) | undefined;
+    const planner: SwarmPlanner = {
+      mode: 'scripted-swarm-test',
+      configured: true,
+      async plan(_observation, _model, options) {
+        const finalize = options?.beginAttempt?.('initial');
+        return await new Promise((_, reject) => {
+          abort = () => {
+            finalize?.({
+              outcome: 'cancelled',
+              failure: {
+                code: 'cancelled',
+                message: 'cancelled',
+                retryable: false,
+              },
+            });
+            reject(new Error('aborted'));
+          };
+          options?.signal?.addEventListener('abort', abort, { once: true });
+        });
+      },
+    };
+    const simulation = setup(
+      planner,
+      new ScriptedReflexProvider([{ chosenCandidateId: 'action_0' }]),
+    );
+    const execution = simulation.executeNextTick();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    simulation.cancelCurrentRequest();
+    abort?.();
+    await expect(execution).rejects.toBeInstanceOf(
+      SimulationTurnCancelledError,
+    );
+    expect(simulation.getSnapshot().tickNumber).toBe(0);
+    expect(simulation.getSnapshot().swarmTicks).toEqual([]);
+    expect(
+      simulation.getSnapshot().experiment.attemptAccounting.attemptsStarted,
+    ).toBe(1);
+  });
+});

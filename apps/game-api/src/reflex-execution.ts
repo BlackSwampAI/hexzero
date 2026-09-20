@@ -21,6 +21,7 @@ import {
   type WorldState,
 } from '@hexzero/world-engine';
 import { AttemptAccounting } from './attempt-accounting';
+import { geographicDirectionBetweenCells } from './geographic-direction';
 
 export interface ReflexLocalHistory {
   previousCell?: H3Cell;
@@ -88,7 +89,11 @@ function actionDescription(
         : nextDistance > currentDistance
           ? 'This moves away from the assigned target.'
           : 'This maintains the current target distance.';
-  return `Move into adjacent ${terrain}. ${progress}`;
+  const direction = geographicDirectionBetweenCells(
+    agent.currentCell,
+    action.targetCell,
+  );
+  return `Move ${direction} into adjacent ${terrain}. ${progress}`;
 }
 
 /** Compile only engine-legal actions from one frozen world state. */
@@ -185,6 +190,8 @@ export interface ReflexSelectionOptions {
   signal?: AbortSignal;
   deadlineAtMs?: number;
   accounting?: AttemptAccounting;
+  /** First HTTP dispatch consumes a permit reserved for the whole tick. */
+  initialPermitReserved?: boolean;
   intendedTickNumber?: number;
   intendedTurnNumber?: number;
   now?: () => string;
@@ -234,7 +241,7 @@ export async function chooseReflexWorldAction(
       deadlineAtMs: options.deadlineAtMs,
       beginAttempt: options.accounting
         ? (kind) => {
-            const permit = options.accounting!.startAdditional({
+            const details = {
               agentId: compiled.observation.agentId,
               intendedTurnNumber: options.intendedTurnNumber ?? 1,
               ...(options.intendedTickNumber
@@ -244,7 +251,11 @@ export async function chooseReflexWorldAction(
               startedAt: now(),
               modelId: model,
               reasoningProfile: 'provider-default',
-            });
+            } as const;
+            const permit =
+              kind === 'initial' && options.initialPermitReserved
+                ? options.accounting!.startReserved(details)
+                : options.accounting!.startAdditional(details);
             if (permit === null) return null;
             startedAttempts += 1;
             return (completion) =>
