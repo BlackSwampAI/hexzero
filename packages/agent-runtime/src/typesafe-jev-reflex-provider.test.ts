@@ -27,7 +27,6 @@ const observation = reflexObservationSchema.parse({
     recentTerritoryTrend: 'growing',
     recentActionOutcome: 'success',
   },
-  relevantRecentFacts: ['An adjacent open cell is available.'],
   candidates: [
     { id: 'action_0', description: 'Move into adjacent open territory.' },
     { id: 'action_1', description: 'Remain on the current infected cell.' },
@@ -111,6 +110,50 @@ describe('TypeSafeJevReflexProvider', () => {
     expect(JSON.stringify(request.state)).not.toContain('targetCell');
     expect(JSON.stringify(request.state)).not.toContain('issuedAtTick');
     expect(JSON.stringify(request.state)).not.toContain('expiresAtTick');
+  });
+
+  it('projects bounded capture pressure into the outbound Jev request without location or hunter data', async () => {
+    const observationWithCaptures = reflexObservationSchema.parse({
+      ...observation,
+      captureAlerts: [
+        {
+          capturedAgentId: '2507bb46-7ae4-45ca-8dda-644c4f85ca14',
+          cell: '8928308280fffff',
+          originatingTick: 99,
+          abandonedCellCount: 3,
+        },
+      ],
+    });
+    const fetchImplementation = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(choiceResponse());
+    const provider = new TypeSafeJevReflexProvider({
+      apiKey: 'test-key',
+      fetchImplementation,
+    });
+
+    await provider.decide(observationWithCaptures);
+
+    const request = JSON.parse(
+      String(fetchImplementation.mock.calls[0]?.[1]?.body),
+    );
+    expect(request.state).toMatchObject({
+      capturePressure: {
+        recentCaptureCount: 1,
+        recentCaptures: [{ abandonedCellCount: 3 }],
+      },
+    });
+    expect(JSON.stringify(request.state)).not.toContain('capturedAgentId');
+    expect(JSON.stringify(request.state)).not.toContain('originatingTick');
+    expect(JSON.stringify(request.state)).not.toContain('8928308280fffff');
+    expect(JSON.stringify(request.state)).not.toContain('hunter');
+    expect(JSON.stringify(request.state)).not.toContain('player');
+  });
+
+  it('omits capture pressure when no captures were observed', () => {
+    expect(buildTypeSafeJevRequest(observation).state).not.toHaveProperty(
+      'capturePressure',
+    );
   });
 
   it('rejects malformed responses and selections outside its candidates', async () => {

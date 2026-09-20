@@ -8,6 +8,7 @@ import {
   type SwarmPlan,
   type ZeroStrategicObservation,
 } from '@hexzero/shared';
+import { normalizeOpenRouterUsage } from './openrouter-usage';
 
 const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -62,13 +63,7 @@ export class SwarmPlannerError extends Error {
 const openRouterResponseSchema = z.object({
   id: z.string().trim().min(1).max(160).optional(),
   model: z.string().trim().min(1).max(200).optional(),
-  usage: z
-    .object({
-      prompt_tokens: z.number().int().nonnegative().optional(),
-      completion_tokens: z.number().int().nonnegative().optional(),
-      total_tokens: z.number().int().nonnegative().optional(),
-    })
-    .optional(),
+  usage: z.unknown().optional(),
   choices: z
     .array(
       z.object({
@@ -127,6 +122,11 @@ export class OpenRouterSwarmPlanner implements SwarmPlanner {
     );
     const requestBody = JSON.stringify(
       buildSwarmPlannerRequest(observation, model),
+    );
+    const sensitiveValues = collectSensitiveValues(
+      this.#apiKey,
+      observation,
+      requestBody,
     );
     for (let index = 0; index < 2; index += 1) {
       if (Date.now() >= deadlineAt)
@@ -193,6 +193,23 @@ export class OpenRouterSwarmPlanner implements SwarmPlanner {
           Date.now() - startedAt,
           response.status,
         );
+        const errorResponseMetadata = !response.ok
+          ? metadataFromResponse(
+              metadata,
+              await readBoundedJson(response).catch(() => undefined),
+              sensitiveValues,
+            )
+          : undefined;
+        if (options.signal?.aborted || timedOut)
+          throw new SwarmPlannerError(
+            failure(
+              timedOut ? 'timeout' : 'cancelled',
+              false,
+              model,
+              startedAt,
+            ),
+            errorResponseMetadata ?? metadata,
+          );
         if (
           (response.status === 429 || response.status === 529) &&
           index === 0
@@ -202,11 +219,11 @@ export class OpenRouterSwarmPlanner implements SwarmPlanner {
               ...failure('provider-http', true, model, startedAt),
               httpStatus: response.status,
             },
-            metadata,
+            errorResponseMetadata ?? metadata,
           );
           complete({
             outcome: 'provider-error',
-            provider: metadata,
+            provider: errorResponseMetadata ?? metadata,
             failure: retryFailure.failure,
           });
           await delay(
@@ -226,16 +243,11 @@ export class OpenRouterSwarmPlanner implements SwarmPlanner {
               ),
               httpStatus: response.status,
             },
-            metadata,
+            errorResponseMetadata ?? metadata,
           );
         let raw: unknown;
         try {
-          const body = await response.text();
-          if (
-            new TextEncoder().encode(body).byteLength > RESPONSE_BODY_MAX_BYTES
-          )
-            throw new Error('response body limit');
-          raw = JSON.parse(body);
+          raw = await readBoundedJson(response);
         } catch {
           throw new SwarmPlannerError(
             failure('malformed-response', true, model, startedAt),
@@ -246,17 +258,22 @@ export class OpenRouterSwarmPlanner implements SwarmPlanner {
           throw new SwarmPlannerError(
             failure('cancelled', false, model, startedAt),
           );
+        const responseMetadata = metadataFromResponse(
+          metadata,
+          raw,
+          sensitiveValues,
+        );
         const parsed = openRouterResponseSchema.safeParse(raw);
         if (!parsed.success)
           throw new SwarmPlannerError(
             failure('unsupported-response', true, model, startedAt),
-            metadata,
+            responseMetadata,
           );
         const content = responseText(parsed.data.choices[0]?.message.content);
         if (!content)
           throw new SwarmPlannerError(
             failure('unsupported-response', true, model, startedAt),
-            metadata,
+            responseMetadata,
           );
         let planRaw: unknown;
         try {
@@ -264,7 +281,7 @@ export class OpenRouterSwarmPlanner implements SwarmPlanner {
         } catch {
           throw new SwarmPlannerError(
             failure('malformed-response', true, model, startedAt),
-            metadata,
+            responseMetadata,
           );
         }
         const plan = swarmPlanSchema.safeParse(planRaw);
@@ -275,16 +292,9 @@ export class OpenRouterSwarmPlanner implements SwarmPlanner {
               message:
                 'Agent Zero returned a plan outside the authoritative choices.',
             },
-            metadata,
+            responseMetadata,
           );
-        const safeMetadata = providerMetadataSchema.parse({
-          ...metadata,
-          requestId: parsed.data.id,
-          resolvedModel: parsed.data.model,
-          promptTokens: parsed.data.usage?.prompt_tokens,
-          completionTokens: parsed.data.usage?.completion_tokens,
-          totalTokens: parsed.data.usage?.total_tokens,
-        });
+        const safeMetadata = responseMetadata;
         complete({
           outcome: 'completed',
           provider: safeMetadata,
@@ -423,6 +433,109 @@ function metadataFor(
     latencyMs: Math.round(latencyMs),
     ...(httpStatus ? { httpStatus } : {}),
   };
+}
+
+function metadataFromResponse(
+  metadata: ProviderMetadata,
+  raw: unknown,
+  sensitiveValues: string[],
+): ProviderMetadata {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return metadata;
+  const response = raw as Record<string, unknown>;
+  const requestId = safeResponseMetadataValue(
+    response.id,
+    sensitiveValues,
+    160,
+  );
+  const resolvedModel = safeResponseMetadataValue(
+    response.model,
+    sensitiveValues,
+    200,
+  );
+  const candidate = {
+    ...metadata,
+    ...(requestId ? { requestId } : {}),
+    ...(resolvedModel ? { resolvedModel } : {}),
+    ...normalizeOpenRouterUsage(response.usage),
+  };
+  return providerMetadataSchema.safeParse(candidate).success
+    ? providerMetadataSchema.parse(candidate)
+    : providerMetadataSchema.parse({
+        ...metadata,
+        ...normalizeOpenRouterUsage(response.usage),
+      });
+}
+
+async function readBoundedJson(response: Response): Promise<unknown> {
+  const body = await readBoundedText(response, RESPONSE_BODY_MAX_BYTES);
+  return JSON.parse(body);
+}
+
+async function readBoundedText(
+  response: Response,
+  maximumBytes: number,
+): Promise<string> {
+  if (!response.body) return '';
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let remaining = maximumBytes;
+  let output = '';
+  try {
+    while (remaining > 0) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const accepted = value.subarray(0, remaining);
+      output += decoder.decode(accepted, { stream: true });
+      remaining -= accepted.byteLength;
+      if (accepted.byteLength < value.byteLength) {
+        await reader.cancel();
+        throw new Error('response body limit');
+      }
+    }
+    if (remaining === 0) {
+      await reader.cancel();
+      throw new Error('response body limit');
+    }
+    return output + decoder.decode();
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+function collectSensitiveValues(
+  apiKey: string,
+  observation: ZeroStrategicObservation,
+  requestBody: string,
+): string[] {
+  const values = new Set<string>([apiKey, requestBody]);
+  const visit = (value: unknown) => {
+    if (typeof value === 'string') {
+      if (value.length >= 4) values.add(value);
+    } else if (Array.isArray(value)) {
+      value.forEach(visit);
+    } else if (value && typeof value === 'object') {
+      Object.values(value).forEach(visit);
+    }
+  };
+  visit(observation);
+  return [...values].toSorted((left, right) => right.length - left.length);
+}
+
+function safeResponseMetadataValue(
+  value: unknown,
+  sensitiveValues: string[],
+  maximumLength: number,
+): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.replace(/[\u0000-\u001f\u007f]/g, ' ').trim();
+  if (
+    !normalized ||
+    normalized.length > maximumLength ||
+    /Bearer\s+\S+|sk-or-[a-zA-Z0-9_-]+/i.test(normalized) ||
+    sensitiveValues.some((sensitive) => normalized.includes(sensitive))
+  )
+    return undefined;
+  return normalized;
 }
 
 function failure(

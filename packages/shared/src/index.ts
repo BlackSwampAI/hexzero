@@ -588,7 +588,6 @@ export const reflexObservationSchema = z
         recentActionOutcome: z.enum(['success', 'rejected', 'unknown']),
       })
       .strict(),
-    relevantRecentFacts: z.array(z.string().trim().min(1).max(160)).max(6),
     captureAlerts: z.array(captureAlertSchema).max(4).optional(),
     candidates: z.array(reflexCandidateSchema).min(1).max(9),
   })
