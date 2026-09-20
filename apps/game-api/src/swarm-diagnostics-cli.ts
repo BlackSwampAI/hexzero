@@ -46,7 +46,7 @@ export function summarizeSwarmSnapshot(snapshot: SimulationSnapshot) {
       tick: tick.tickNumber,
       planSource: tick.planSource,
       plannerFailureCode: tick.plannerFailure?.code ?? null,
-      zeroAction: tick.zeroAction.type,
+      zeroAction: tick.zeroAction?.type ?? null,
       zeroAccepted: tick.zeroActionResult?.accepted ?? null,
       workerActions: actionCounts(tick.workers.map(({ action }) => action)),
       jevDecisions: tick.workers.filter(({ source }) => source === 'jev-reflex')

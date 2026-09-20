@@ -92,7 +92,7 @@ test('runs the complete deterministic World Lab browser flow', async ({
 
   await expect(page.getByRole('heading', { name: 'World Lab' })).toBeVisible();
   await openActions();
-  await page.getByRole('button', { name: 'World setup' }).click();
+  await page.getByRole('button', { name: 'World setup', exact: true }).click();
   const setupDialog = page.getByRole('dialog', { name: 'World Setup' });
   await setupDialog.getByLabel('Communication range (km)').fill('7.5');
   await setupDialog.getByRole('button', { name: 'Preview' }).click();
