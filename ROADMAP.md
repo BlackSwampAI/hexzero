@@ -1,5 +1,16 @@
 # Roadmap
 
+## Active migration: one intelligence, many bodies
+
+The active zero-swarm sequence supersedes the earlier social-agent direction
+for new experiments while retaining `legacy-multi-agent` as a comparison mode.
+PRs A-C established the Jev reflex seam, Agent Zero planner/tick, and World Lab
+presentation. PR D makes directives persistent across ticks and wakes Zero on
+fixed review and material events. PR E will add a stronger optional deterministic
+human-pressure simulator. PR F will compare zero-swarm, legacy, and deterministic
+worker baselines before deciding which legacy systems to retire. See ADRs
+0028-0031. Historical milestones below remain as implementation history.
+
 ## Experimental Patient Zero coordinator
 
 The current focused slice requires one normal physical agent, provides a

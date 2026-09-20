@@ -639,6 +639,28 @@ export const swarmPlanSchema = z
   });
 export type SwarmPlan = z.infer<typeof swarmPlanSchema>;
 
+export const swarmReplanReasonSchema = z.enum([
+  'initial',
+  'periodic-review',
+  'directive-expired',
+  'worker-request',
+  'worker-stalled',
+  'territory-loss',
+  'high-pressure',
+  'player-disinfection',
+]);
+export type SwarmReplanReason = z.infer<typeof swarmReplanReasonSchema>;
+
+export const swarmSignalSchema = z
+  .object({
+    type: z.literal('worker-replan-requested'),
+    agentId: agentIdSchema,
+    directiveId: z.string().trim().min(1).max(80),
+    probability: z.number().finite().min(0).max(1),
+  })
+  .strict();
+export type SwarmSignal = z.infer<typeof swarmSignalSchema>;
+
 /**
  * Strategic input for Agent Zero. This deliberately carries only authoritative
  * world facts and bounded choices; it contains no social or prose-memory data.
@@ -677,6 +699,11 @@ export const zeroStrategicObservationSchema = z
       .min(1)
       .max(WORLD_SCENARIO_LIMITS.maximumAgents),
     recentPlayerPressure: z.array(z.string().trim().min(1).max(180)).max(12),
+    replanReasons: z.array(swarmReplanReasonSchema).max(8).optional(),
+    workerReplanRequests: z
+      .array(swarmSignalSchema.omit({ type: true }))
+      .max(WORLD_SCENARIO_LIMITS.maximumAgents)
+      .optional(),
     legalZeroActions: z.array(zeroActionCandidateSchema).min(1).max(9),
     strategicTargetCells: z.array(h3CellSchema).max(80),
   })
@@ -2257,6 +2284,8 @@ export const reflexDecisionSchema = z
         message:
           'Reflex probability telemetry may include at most 9 candidates.',
       }),
+    /** Probability that the worker should request a new directive. */
+    replanProbability: z.number().finite().min(0).max(1).optional(),
     model: modelIdSchema,
     latencyMs: z.number().finite().nonnegative(),
     inputTokens: z.number().int().nonnegative(),
@@ -2730,7 +2759,16 @@ export const swarmTickRecordSchema = z
     virtualTime: z.iso.datetime(),
     tickIntervalMinutes: z.number().int().positive(),
     plan: swarmPlanSchema,
-    planSource: z.enum(['zero-llm', 'deterministic-fallback']),
+    planSource: z.enum([
+      'zero-llm',
+      'deterministic-fallback',
+      'directive-reuse',
+    ]),
+    replanReasons: z.array(swarmReplanReasonSchema).max(8).optional(),
+    signals: z
+      .array(swarmSignalSchema)
+      .max(WORLD_SCENARIO_LIMITS.maximumAgents)
+      .optional(),
     plannerFailure: providerFailureSchema.optional(),
     plannerMetadata: providerMetadataSchema.optional(),
     zeroAction: worldActionSchema.optional(),
@@ -2753,6 +2791,23 @@ export const swarmTickRecordSchema = z
         code: 'custom',
         path: ['plannerFailure'],
         message: 'A successful Zero plan cannot include a planner failure.',
+      });
+    const signals = record.signals ?? [];
+    if (
+      new Set(signals.map(({ agentId }) => agentId)).size !== signals.length ||
+      signals.some(
+        (signal) =>
+          !record.workers.some(
+            (worker) =>
+              worker.agentId === signal.agentId &&
+              worker.directive.id === signal.directiveId,
+          ),
+      )
+    )
+      context.addIssue({
+        code: 'custom',
+        path: ['signals'],
+        message: 'Each replan signal must name one current worker directive.',
       });
   });
 export type SwarmTickRecord = z.infer<typeof swarmTickRecordSchema>;

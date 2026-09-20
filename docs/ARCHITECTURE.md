@@ -5,20 +5,21 @@
 `cognitionMode` distinguishes `legacy-multi-agent` from `zero-swarm-v1` in
 scenarios, snapshots, and exports. Legacy ticks retain their original path.
 For a zero-swarm tick, the service first advances deterministic player pressure
-into an uncommitted world candidate, then asks one OpenRouter Agent Zero planner
-for a strategy, worker directives, and one opaque Zero action ID. After plan
-validation, each worker receives a compact local projection and engine-legal
+into an uncommitted world candidate. Agent Zero plans on the first tick, every
+five ticks, and when an expiry or material event requires review. Other ticks
+reuse committed unexpired worker directives and compile a fresh legal Zero wait
+action. After plan validation, each worker receives a compact local projection and engine-legal
 physical actions as opaque candidates. Jev selects one candidate ID, which the
 service maps to a world action for seeded engine resolution. One complete tick
 commits atomically. Planner and worker failures use explicit deterministic
-fallbacks; provider attempts survive world rollback. See ADRs 0028 and 0029.
+fallbacks; provider attempts survive world rollback. See ADRs 0028, 0029, and 0031.
 
 Swarm tick records are separate from legacy agent turn records. Full all-agent
 exports and the archive retain safe plans, directives, action choices, and
 factual provider usage; selective legacy turn filters do not export partial
 swarm plans. World Lab selects a dedicated swarm presentation from the
 scenario mode. It shows Zero strategy, worker directives and Jev decisions,
-progress, and provider usage while omitting irrelevant legacy social cognition
+progress, replanning signals, and provider usage while omitting irrelevant legacy social cognition
 controls. See ADR 0030.
 
 Provider-attempt and credit-exposure admission are owned by `SimulationService`. Its ledger is

@@ -47,6 +47,11 @@ function choiceResponse(choice = 'action_0', model = TYPESAFE_JEV_MODEL) {
           confidence: 0.7,
           future_answer_metadata: 'ignored',
         },
+        request_replan: {
+          type: 'noul',
+          noul: 0.25,
+          future_answer_metadata: 'ignored',
+        },
       },
       usage: { input_tokens: 45, output_tokens: 8, future_usage_metadata: 1 },
     }),
@@ -72,6 +77,7 @@ describe('TypeSafeJevReflexProvider', () => {
       outputTokens: 8,
       directiveId: 'directive-1',
       cognitionSource: 'jev-reflex',
+      replanProbability: 0.25,
     });
     expect(fetchImplementation).toHaveBeenCalledWith(
       TYPESAFE_SYSTEM_ONE_ENDPOINT,
@@ -91,6 +97,16 @@ describe('TypeSafeJevReflexProvider', () => {
     expect(request.questions.choose_action.criteria).toEqual({
       action_0: 'Move into adjacent open territory.',
       action_1: 'Remain on the current infected cell.',
+    });
+    expect(request.questions.request_replan).toEqual({
+      type: 'noul',
+      instructions:
+        'Do currently observed local conditions materially undermine or prevent successful execution of the assigned directive?',
+      criteria: {
+        false:
+          'Observed local conditions leave the assigned directive materially achievable with one of the currently legal actions.',
+        true: 'Observed local conditions materially undermine or prevent the assigned directive, such as when its target, route, required local state, or expected progress is unavailable or contradicted.',
+      },
     });
     expect(JSON.stringify(request.state)).not.toContain('targetCell');
     expect(JSON.stringify(request.state)).not.toContain('issuedAtTick');
@@ -127,6 +143,59 @@ describe('TypeSafeJevReflexProvider', () => {
     await expect(wrongModel.decide(observation)).rejects.toMatchObject({
       failure: { code: 'unsupported-response' },
     });
+  });
+
+  it('rejects a missing or malformed Noul answer without a second request', async () => {
+    const missingFetch = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          model: TYPESAFE_JEV_MODEL,
+          answers: {
+            choose_action: {
+              type: 'choice',
+              choice: 'action_0',
+              probabilities: { action_0: 0.8, action_1: 0.2 },
+              confidence: 0.7,
+            },
+          },
+          usage: { input_tokens: 45, output_tokens: 8 },
+        }),
+      ),
+    );
+    const missingNoul = new TypeSafeJevReflexProvider({
+      apiKey: 'test-key',
+      fetchImplementation: missingFetch,
+    });
+    await expect(missingNoul.decide(observation)).rejects.toMatchObject({
+      failure: { code: 'unsupported-response' },
+    });
+    expect(missingFetch).toHaveBeenCalledTimes(1);
+
+    const malformedFetch = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          model: TYPESAFE_JEV_MODEL,
+          answers: {
+            choose_action: {
+              type: 'choice',
+              choice: 'action_0',
+              probabilities: { action_0: 0.8, action_1: 0.2 },
+              confidence: 0.7,
+            },
+            request_replan: { type: 'noul', noul: 2 },
+          },
+          usage: { input_tokens: 45, output_tokens: 8 },
+        }),
+      ),
+    );
+    const malformedNoul = new TypeSafeJevReflexProvider({
+      apiKey: 'test-key',
+      fetchImplementation: malformedFetch,
+    });
+    await expect(malformedNoul.decide(observation)).rejects.toMatchObject({
+      failure: { code: 'unsupported-response' },
+    });
+    expect(malformedFetch).toHaveBeenCalledTimes(1);
   });
 
   it.each([429, 529])('retries one %s response and no more', async (status) => {
@@ -222,12 +291,42 @@ describe('TypeSafeJevReflexProvider', () => {
 describe('ScriptedReflexProvider', () => {
   it('returns a deterministic opaque candidate selection', async () => {
     const provider = new ScriptedReflexProvider([
-      { chosenCandidateId: 'action_1', confidence: 1 },
+      {
+        chosenCandidateId: 'action_1',
+        confidence: 1,
+        replanProbability: 0.6,
+      },
     ]);
     await expect(provider.decide(observation)).resolves.toMatchObject({
       chosenCandidateId: 'action_1',
       probabilities: { action_0: 0, action_1: 1 },
       cognitionSource: 'jev-reflex',
+      replanProbability: 0.6,
     });
+  });
+
+  it('defaults scripted replan probability to zero', async () => {
+    const provider = new ScriptedReflexProvider([
+      { chosenCandidateId: 'action_1', confidence: 1 },
+    ]);
+    await expect(provider.decide(observation)).resolves.toMatchObject({
+      replanProbability: 0,
+    });
+  });
+
+  it('does not include its API key in the System One request body', async () => {
+    const fetchImplementation = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(choiceResponse());
+    const provider = new TypeSafeJevReflexProvider({
+      apiKey: 'private-test-key',
+      fetchImplementation,
+    });
+
+    await provider.decide(observation);
+
+    expect(String(fetchImplementation.mock.calls[0]?.[1]?.body)).not.toContain(
+      'private-test-key',
+    );
   });
 });

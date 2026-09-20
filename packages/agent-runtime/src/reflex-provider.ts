@@ -58,6 +58,7 @@ export interface ScriptedReflexChoice {
   chosenCandidateId: string;
   confidence?: number;
   probabilities?: Record<string, number>;
+  replanProbability?: number;
 }
 
 /** Deterministic offline provider for reflex-path tests. */
@@ -115,6 +116,7 @@ export class ScriptedReflexProvider implements ReflexProvider {
         chosenCandidateId: choice.chosenCandidateId,
         confidence: choice.confidence ?? 1,
         probabilities,
+        replanProbability: choice.replanProbability ?? 0,
         model: this.model,
         latencyMs: 0,
         inputTokens: 0,

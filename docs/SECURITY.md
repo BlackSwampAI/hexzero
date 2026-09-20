@@ -41,6 +41,11 @@ mapping. The key, raw
 TypeSafe requests and responses, and provider error bodies never enter safe
 telemetry, World Lab, archives, or exports. TypeSafe token usage is factual;
 no monetary cost is inferred from it.
+The second Jev question returns only a bounded yes probability in the same
+request as the action choice. Code applies the replan threshold and stores a
+structured signal; it grants no action or mutation authority. Reused directives
+are checked against expiry, and Zero's physical action comes from current legal
+engine affordances rather than an earlier plan's candidate ID.
 
 In `zero-swarm-v1`, a separate OpenRouter planner receives bounded strategic
 facts, an engine-generated target allowlist, and opaque legal Zero action IDs.

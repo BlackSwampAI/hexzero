@@ -34,6 +34,14 @@ function agentName(snapshot: SimulationSnapshot, id: AgentId): string {
   return snapshot.world.agents.find((agent) => agent.id === id)?.name ?? id;
 }
 
+function planSourceLabel(source: Tick['planSource']): string {
+  return source === 'zero-llm'
+    ? 'Zero provider plan'
+    : source === 'directive-reuse'
+      ? 'Active directives reused'
+      : 'Deterministic fallback';
+}
+
 function EmptyTelemetry() {
   return <p className="swarm-empty">No committed swarm tick telemetry yet.</p>;
 }
@@ -64,11 +72,11 @@ export function SwarmStrategyPanel({
       <dl className="swarm-facts">
         <div>
           <dt>Plan source</dt>
-          <dd>
-            {tick.planSource === 'zero-llm'
-              ? 'Zero provider plan'
-              : 'Deterministic fallback'}
-          </dd>
+          <dd>{planSourceLabel(tick.planSource)}</dd>
+        </div>
+        <div>
+          <dt>Review triggers</dt>
+          <dd>{tick.replanReasons?.join(', ') || 'None this tick'}</dd>
         </div>
         <div>
           <dt>Planner failure</dt>
@@ -160,6 +168,9 @@ export function SwarmAgentInspector({
   const tick = latestTick(snapshot);
   const isZero = agent.id === snapshot.scenario.patientZeroAgentId;
   const worker = tick?.workers.find((entry) => entry.agentId === agent.id);
+  const replanSignal = tick?.signals?.find(
+    (signal) => signal.agentId === agent.id,
+  );
   const directive =
     worker?.directive ??
     tick?.plan.directives.find((entry) => entry.agentId === agent.id);
@@ -280,6 +291,17 @@ export function SwarmAgentInspector({
                         {Math.round(worker.reflexDecision.confidence * 100)}%
                       </dd>
                     </div>
+                    {worker.reflexDecision.replanProbability !== undefined && (
+                      <div>
+                        <dt>Replan probability</dt>
+                        <dd>
+                          {Math.round(
+                            worker.reflexDecision.replanProbability * 100,
+                          )}
+                          %{replanSignal ? ' · request sent to Zero' : ''}
+                        </dd>
+                      </div>
+                    )}
                   </>
                 )}
               </dl>
@@ -338,11 +360,7 @@ export function SwarmActivityPanel({
       ) : (
         <>
           <p className="swarm-summary">{latest.plan.strategySummary}</p>
-          <p className="swarm-muted">
-            {latest.planSource === 'zero-llm'
-              ? 'Zero provider plan'
-              : 'Deterministic fallback plan'}
-          </p>
+          <p className="swarm-muted">{planSourceLabel(latest.planSource)}</p>
           <h3>Committed ticks</h3>
           <ol>
             {ticks
@@ -352,11 +370,11 @@ export function SwarmActivityPanel({
                 <li key={tick.tickNumber}>
                   <strong>Tick {tick.tickNumber}</strong>
                   <span>
-                    {tick.planSource === 'zero-llm'
-                      ? 'Zero plan'
-                      : 'Fallback plan'}{' '}
-                    · {tick.workers.length} worker actions · Zero:{' '}
-                    {resultLabel(tick.zeroActionResult)}
+                    {planSourceLabel(tick.planSource)} · {tick.workers.length}{' '}
+                    worker actions · Zero: {resultLabel(tick.zeroActionResult)}
+                    {tick.signals?.length
+                      ? ` · ${tick.signals.length} worker replan request${tick.signals.length === 1 ? '' : 's'}`
+                      : ''}
                   </span>
                 </li>
               ))}
@@ -401,6 +419,17 @@ export function SwarmRunPanel({
       0,
     );
   const providers = snapshot.swarmProviderStatus;
+  const retainedTicks = snapshot.swarmTicks ?? [];
+  const zeroPlans = retainedTicks.filter(
+    ({ planSource }) => planSource === 'zero-llm',
+  ).length;
+  const reusedTicks = retainedTicks.filter(
+    ({ planSource }) => planSource === 'directive-reuse',
+  ).length;
+  const replanRequests = retainedTicks.reduce(
+    (count, entry) => count + (entry.signals?.length ?? 0),
+    0,
+  );
   return (
     <section className="panel swarm-panel" aria-label="Swarm run">
       <p className="panel-kicker">Swarm run</p>
@@ -417,6 +446,16 @@ export function SwarmRunPanel({
         <div>
           <dt>Committed swarm tick</dt>
           <dd>{tick?.tickNumber ?? 'None'}</dd>
+        </div>
+        <div>
+          <dt>Retained Zero plans / reused ticks</dt>
+          <dd>
+            {zeroPlans} / {reusedTicks}
+          </dd>
+        </div>
+        <div>
+          <dt>Retained worker replan requests</dt>
+          <dd>{replanRequests}</dd>
         </div>
         <div>
           <dt>Planner provider</dt>

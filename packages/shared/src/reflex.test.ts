@@ -84,4 +84,27 @@ describe('zero-swarm reflex contracts', () => {
         .success,
     ).toBe(false);
   });
+
+  it('accepts an optional bounded directive-replan probability', () => {
+    const decision = {
+      chosenCandidateId: 'action_0',
+      confidence: 0.8,
+      probabilities: { action_0: 0.8 },
+      model: 'jev-1.13.0',
+      latencyMs: 12,
+      inputTokens: 6,
+      outputTokens: 1,
+      directiveId: directive.id,
+      cognitionSource: 'jev-reflex' as const,
+    };
+
+    expect(
+      reflexDecisionSchema.safeParse({ ...decision, replanProbability: 0.35 })
+        .success,
+    ).toBe(true);
+    expect(
+      reflexDecisionSchema.safeParse({ ...decision, replanProbability: 1.01 })
+        .success,
+    ).toBe(false);
+  });
 });

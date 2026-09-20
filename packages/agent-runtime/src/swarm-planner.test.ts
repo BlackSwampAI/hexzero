@@ -68,6 +68,16 @@ describe('swarm planners', () => {
     expect(result.metadata.provider).toBe('openrouter');
   });
 
+  it('rejects directives extending beyond the ten-tick lifetime', async () => {
+    const tooLong = swarmPlanSchema.parse({
+      ...plan,
+      directives: [{ ...plan.directives[0]!, expiresAtTick: 11 }],
+    });
+    await expect(
+      new ScriptedSwarmPlanner([tooLong]).plan(observation, 'test-model'),
+    ).rejects.toBeInstanceOf(SwarmPlannerError);
+  });
+
   it('rejects an OpenRouter plan with an invented zero candidate', async () => {
     const fetchImplementation = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(
