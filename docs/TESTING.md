@@ -47,8 +47,13 @@ responses, plus sanitized response IDs/models; missing cost stays unknown.
 Planner tests also cover compact opaque worker/target choices, server-issued
 directive IDs and lifetimes, Zero reasoning-profile dispatch, and safe
 classification of unknown or missing choices. Scripted service tests verify
-that a first-plan failure uses legal
-deterministic local expansion with only the Zero provider attempt billed.
+that a first-plan failure uses legal deterministic local expansion with only
+the Zero provider attempt billed. Jev provider tests distinguish unknown
+choices from inconsistent probability distributions and retain factual token
+usage for rejected decisions; World Lab and the read-only diagnostic show
+these safe worker failure reasons. Cost display tests separate provider-reported
+cost from admission exposure and show that TypeSafe Jev monetary cost remains
+unknown without provider billing data.
 
 Attempt-budget tests use deterministic providers and cover whole-roster tick
 admission, retry permits, cancellation finalization, and the distinction

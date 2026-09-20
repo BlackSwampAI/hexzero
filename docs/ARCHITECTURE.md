@@ -22,6 +22,10 @@ Zero planning uses the same provider-reported OpenRouter usage normalization as
 legacy turns, including actual `usage.cost` when returned, and preserves that
 metadata when a returned plan is rejected or a bounded non-success response
 contains usage. Missing provider cost remains unknown.
+World Lab distinguishes provider-reported cost from admission exposure. Each
+attempt with unknown monetary cost, including TypeSafe Jev, retains its
+configured per-attempt credit reserve in admission exposure. That reserve is
+a conservative execution limit, not a measured charge or Jev cost estimate.
 The OpenRouter planner asks Zero for bounded worker IDs, strategic target choice
 IDs, mission, priority, risk, and its own legal action choice. Server code
 materializes agent IDs, H3 targets, directive IDs, and five-tick lifetimes from

@@ -218,25 +218,30 @@ export class TypeSafeJevReflexProvider implements ReflexProvider {
           );
         const answer = parsed.data.answers.choose_action;
         const replanAnswer = parsed.data.answers.request_replan;
-        if (
-          !candidateIds.has(answer.choice) ||
-          Object.keys(answer.probabilities).some(
-            (id) => !candidateIds.has(id),
-          ) ||
-          candidateIds.size !== Object.keys(answer.probabilities).length ||
-          !approximatelyOne(Object.values(answer.probabilities))
-        )
+        const choiceValid = candidateIds.has(answer.choice);
+        const probabilityIds = Object.keys(answer.probabilities);
+        const probabilitiesValid =
+          probabilityIds.length === candidateIds.size &&
+          probabilityIds.every((id) => candidateIds.has(id)) &&
+          approximatelyOne(Object.values(answer.probabilities));
+        if (!choiceValid || !probabilitiesValid)
           throw new ReflexProviderError(
             {
               code: 'invalid-decision',
-              message:
-                'TypeSafe Jev selected a candidate outside the supplied choices.',
+              message: !choiceValid
+                ? 'TypeSafe Jev selected a candidate outside the supplied choices.'
+                : 'TypeSafe Jev returned an incomplete or inconsistent probability distribution.',
               retryable: false,
               httpStatus: response.status,
               model: this.model,
               latencyMs: Date.now() - startedAtMs,
             },
-            this.#metadata(Date.now() - startedAtMs, response.status),
+            this.#metadata(
+              Date.now() - startedAtMs,
+              response.status,
+              parsed.data.usage.input_tokens,
+              parsed.data.usage.output_tokens,
+            ),
           );
         const decision = reflexDecisionSchema.parse({
           chosenCandidateId: answer.choice,

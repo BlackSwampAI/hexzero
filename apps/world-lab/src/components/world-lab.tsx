@@ -943,7 +943,7 @@ export function WorldLab() {
                 </dd>
               </div>
               <div>
-                <dt>Committed exposure</dt>
+                <dt>Admission exposure (not spend)</dt>
                 <dd>
                   {formatCost(
                     snapshot.experiment.attemptAccounting
@@ -967,7 +967,7 @@ export function WorldLab() {
                 </dd>
               </div>
               <div>
-                <dt>Known finalized cost</dt>
+                <dt>Provider-reported cost</dt>
                 <dd>
                   {formatCost(
                     snapshot.experiment.attemptAccounting
@@ -1016,6 +1016,14 @@ export function WorldLab() {
                 </div>
               )}
             </dl>
+            {swarmMode && (
+              <p className="field-help">
+                Jev reports tokens but no monetary cost. Its unknown-cost
+                attempts retain the configured admission reserve in exposure;
+                that reserve is not a provider bill. The reported cost above
+                includes OpenRouter amounts only when returned by the provider.
+              </p>
+            )}
             {!swarmMode && <ExperimentUsageMeter snapshot={snapshot} />}
           </div>
         </div>
@@ -1902,11 +1910,25 @@ function RunHealthSummary({
           <dd>{elapsedMinutes} min</dd>
         </div>
         <div>
-          <dt>Committed credit exposure</dt>
+          <dt>Admission exposure (not spend)</dt>
           <dd>
             {formatCost(
               snapshot.experiment.attemptAccounting.committedCreditExposure,
             )}
+          </dd>
+        </div>
+        <div>
+          <dt>Provider-reported cost</dt>
+          <dd>
+            {formatCost(
+              snapshot.experiment.attemptAccounting.knownFinalizedCostCredits,
+            )}
+          </dd>
+        </div>
+        <div>
+          <dt>Unknown-cost attempts</dt>
+          <dd>
+            {snapshot.experiment.attemptAccounting.attemptsWithUnknownCost}
           </dd>
         </div>
         <div>

@@ -397,7 +397,11 @@ export function SwarmActivityPanel({
             Worker failures:{' '}
             {latest.workers
               .flatMap((worker) =>
-                worker.failure ? [worker.failure.code] : [],
+                worker.failure
+                  ? [
+                      `${agentName(snapshot, worker.agentId)}: ${worker.failure.code} · ${worker.failure.message}`,
+                    ]
+                  : [],
               )
               .join(', ')}
           </p>
@@ -529,12 +533,23 @@ export function SwarmRunPanel({
           </dd>
         </div>
         <div>
-          <dt>Known finalized cost</dt>
+          <dt>Provider-reported cost</dt>
           <dd>{accounting.knownFinalizedCostCredits} credits</dd>
         </div>
         <div>
-          <dt>Unknown provider costs</dt>
-          <dd>{accounting.attemptsWithUnknownCost} · TypeSafe cost unknown</dd>
+          <dt>Unknown-cost attempts</dt>
+          <dd>
+            {accounting.attemptsWithUnknownCost} · TypeSafe Jev reports tokens,
+            no monetary cost
+          </dd>
+        </div>
+        <div>
+          <dt>Admission exposure (not spend)</dt>
+          <dd>
+            {accounting.committedCreditExposure} credits · includes{' '}
+            {accounting.reservationCreditsPerAttempt} credit reserve per
+            unknown-cost attempt
+          </dd>
         </div>
         <div>
           <dt>Zero retained reported usage</dt>

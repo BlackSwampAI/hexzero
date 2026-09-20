@@ -24,6 +24,9 @@ describe('swarm diagnostic projection', () => {
           attemptsStarted: 8,
           attemptsFinalized: 8,
           attemptsWithUnknownCost: 7,
+          knownFinalizedCostCredits: '0.02',
+          committedCreditExposure: '0.09',
+          reservationCreditsPerAttempt: '0.01',
         },
       },
       swarmTicks: [
@@ -35,9 +38,10 @@ describe('swarm diagnostic projection', () => {
           zeroActionResult: { accepted: true },
           workers: [
             {
+              agentId: 'worker',
               action: { type: 'wait' },
               source: 'deterministic-fallback',
-              failure: { code: 'timeout' },
+              failure: { code: 'timeout', message: 'Jev timed out.' },
             },
           ],
         },
@@ -47,7 +51,14 @@ describe('swarm diagnostic projection', () => {
       tick: 1,
       infectedCells: 0,
       player: { enabled: false, active: false, movements: 0 },
-      attempts: { started: 8, finalized: 8 },
+      attempts: {
+        started: 8,
+        finalized: 8,
+        unknownCost: 7,
+        providerReportedCostCredits: '0.02',
+        admissionExposureCredits: '0.09',
+        reservePerAttemptCredits: '0.01',
+      },
       recentTicks: [
         {
           planSource: 'deterministic-fallback',
@@ -56,6 +67,9 @@ describe('swarm diagnostic projection', () => {
           workerActions: { wait: 1 },
           workerFallbacks: 1,
           workerFailureCodes: ['timeout'],
+          workerFailures: [
+            { agentId: 'worker', code: 'timeout', message: 'Jev timed out.' },
+          ],
         },
       ],
     });

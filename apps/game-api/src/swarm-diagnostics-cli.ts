@@ -38,6 +38,9 @@ export function summarizeSwarmSnapshot(snapshot: SimulationSnapshot) {
       started: attempts.attemptsStarted,
       finalized: attempts.attemptsFinalized,
       unknownCost: attempts.attemptsWithUnknownCost,
+      providerReportedCostCredits: attempts.knownFinalizedCostCredits,
+      admissionExposureCredits: attempts.committedCreditExposure,
+      reservePerAttemptCredits: attempts.reservationCreditsPerAttempt,
     },
     recentTicks: (snapshot.swarmTicks ?? []).slice(-10).map((tick) => ({
       tick: tick.tickNumber,
@@ -53,6 +56,11 @@ export function summarizeSwarmSnapshot(snapshot: SimulationSnapshot) {
       ).length,
       workerFailureCodes: tick.workers.flatMap(({ failure }) =>
         failure ? [failure.code] : [],
+      ),
+      workerFailures: tick.workers.flatMap(({ agentId, failure }) =>
+        failure
+          ? [{ agentId, code: failure.code, message: failure.message }]
+          : [],
       ),
     })),
   };
