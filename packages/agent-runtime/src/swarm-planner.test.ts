@@ -116,6 +116,33 @@ describe('swarm planners', () => {
     });
   });
 
+  it('marks completed worker directives in the compact Zero request', async () => {
+    const completedObservation = zeroStrategicObservationSchema.parse({
+      ...observation,
+      agents: observation.agents.map((agent) =>
+        agent.agentId === worker
+          ? { ...agent, directive: plan.directives[0] }
+          : agent,
+      ),
+      replanReasons: ['directive-complete'],
+      completedDirectives: [{ agentId: worker, directiveId: 'directive-1' }],
+    });
+    const fetchImplementation = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(plannerResponse(compactPlan));
+    await new OpenRouterSwarmPlanner({
+      apiKey: 'test-key',
+      fetchImplementation,
+    }).plan(completedObservation, 'test-model');
+    const body = JSON.parse(
+      String(fetchImplementation.mock.calls[0]?.[1]?.body),
+    ) as { messages: Array<{ content: string }> };
+    expect(JSON.parse(body.messages[1]!.content)).toMatchObject({
+      replanReasons: ['directive-complete'],
+      workers: [{ workerId: 'worker_0', directiveComplete: true }],
+    });
+  });
+
   it('rejects unknown compact choices with a safe specific reason', async () => {
     await expect(
       new OpenRouterSwarmPlanner({

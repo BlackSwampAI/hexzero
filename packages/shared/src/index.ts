@@ -660,6 +660,7 @@ export type SwarmPlan = z.infer<typeof swarmPlanSchema>;
 export const swarmReplanReasonSchema = z.enum([
   'initial',
   'periodic-review',
+  'directive-complete',
   'directive-expired',
   'worker-request',
   'worker-stalled',
@@ -669,6 +670,16 @@ export const swarmReplanReasonSchema = z.enum([
   'roster-changed',
 ]);
 export type SwarmReplanReason = z.infer<typeof swarmReplanReasonSchema>;
+
+export const completedSwarmDirectiveSchema = z
+  .object({
+    agentId: agentIdSchema,
+    directiveId: z.string().trim().min(1).max(80),
+  })
+  .strict();
+export type CompletedSwarmDirective = z.infer<
+  typeof completedSwarmDirectiveSchema
+>;
 
 export const swarmSignalSchema = z
   .object({
@@ -718,7 +729,11 @@ export const zeroStrategicObservationSchema = z
       .min(1)
       .max(WORLD_SCENARIO_LIMITS.maximumAgents),
     recentPlayerPressure: z.array(z.string().trim().min(1).max(180)).max(12),
-    replanReasons: z.array(swarmReplanReasonSchema).max(8).optional(),
+    replanReasons: z.array(swarmReplanReasonSchema).max(10).optional(),
+    completedDirectives: z
+      .array(completedSwarmDirectiveSchema)
+      .max(WORLD_SCENARIO_LIMITS.maximumAgents)
+      .optional(),
     workerReplanRequests: z
       .array(swarmSignalSchema.omit({ type: true }))
       .max(WORLD_SCENARIO_LIMITS.maximumAgents)
@@ -2795,7 +2810,11 @@ export const swarmTickRecordSchema = z
       'deterministic-fallback',
       'directive-reuse',
     ]),
-    replanReasons: z.array(swarmReplanReasonSchema).max(8).optional(),
+    replanReasons: z.array(swarmReplanReasonSchema).max(10).optional(),
+    completedDirectives: z
+      .array(completedSwarmDirectiveSchema)
+      .max(WORLD_SCENARIO_LIMITS.maximumAgents)
+      .optional(),
     signals: z
       .array(swarmSignalSchema)
       .max(WORLD_SCENARIO_LIMITS.maximumAgents)

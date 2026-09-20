@@ -162,6 +162,24 @@ describe('swarm telemetry panels', () => {
     expect(screen.getByText(/0.03 credits · includes/)).toBeInTheDocument();
   });
 
+  it('shows completed worker directives in strategy and activity telemetry', () => {
+    const value = snapshot();
+    value.swarmTicks![0]!.replanReasons = ['directive-complete'];
+    value.swarmTicks![0]!.completedDirectives = [
+      { agentId: value.world.agents[1]!.id, directiveId: 'directive-1' },
+    ];
+    render(
+      <>
+        <SwarmStrategyPanel snapshot={value} />
+        <SwarmActivityPanel snapshot={value} />
+      </>,
+    );
+    expect(screen.getByText('Completed directives')).toBeInTheDocument();
+    // The completion summary and directive list both name this worker.
+    expect(screen.getAllByText('Worker')).toHaveLength(2);
+    expect(screen.getByText(/1 directive completed/)).toBeInTheDocument();
+  });
+
   it('shows the telemetry empty state before the first committed tick', () => {
     render(<SwarmStrategyPanel snapshot={snapshot(false)} />);
     expect(

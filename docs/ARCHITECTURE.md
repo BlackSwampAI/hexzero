@@ -23,6 +23,21 @@ the prior tick's physical action. Reaching the directive target has its own
 `at-target` observation status. Zero's worker status uses the same position
 comparison, rather than treating any accepted world action as progress. The
 existing deterministic replanning trigger for repeated waits is unchanged.
+An `expand` directive completes only after its target is worker-controlled;
+arriving on an open target is not completion. A `relocate` directive completes
+when its worker reaches the target. A `reinforce` directive completes on arrival
+at its target, which must be infected or adjacent to infection when issued. An
+`evade` directive completes on arrival or when a worker that previously faced
+high cleaning pressure leaves that pressure. `hold` persists until expiry or
+another review trigger.
+Completion triggers Zero review on the next tick. The strategic observation
+identifies completed workers by safe `agentId` and server-issued `directiveId`.
+New directives are validated against the authoritative pre-action world after
+simulated-player pressure: non-hold missions need a target, expand cannot target
+a cell already controlled by that worker, relocation/reinforcement/evasion
+cannot target the worker's current cell, and reinforcement needs an infected or
+adjacent frontier target. An invalid plan falls back safely. A completed prior
+directive is not reused during that fallback.
 Zero planning uses the same provider-reported OpenRouter usage normalization as
 legacy turns, including actual `usage.cost` when returned, and preserves that
 metadata when a returned plan is rejected or a bounded non-success response

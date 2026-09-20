@@ -79,6 +79,14 @@ export function SwarmStrategyPanel({
           <dd>{tick.replanReasons?.join(', ') || 'None this tick'}</dd>
         </div>
         <div>
+          <dt>Completed directives</dt>
+          <dd>
+            {tick.completedDirectives
+              ?.map(({ agentId }) => agentName(snapshot, agentId))
+              .join(', ') || 'None this tick'}
+          </dd>
+        </div>
+        <div>
           <dt>Planner failure</dt>
           <dd>
             {tick.plannerFailure
@@ -429,6 +437,9 @@ export function SwarmActivityPanel({
                     worker actions · Zero: {resultLabel(tick.zeroActionResult)}
                     {tick.signals?.length
                       ? ` · ${tick.signals.length} worker replan request${tick.signals.length === 1 ? '' : 's'}`
+                      : ''}
+                    {tick.completedDirectives?.length
+                      ? ` · ${tick.completedDirectives.length} directive${tick.completedDirectives.length === 1 ? '' : 's'} completed`
                       : ''}
                   </span>
                 </li>

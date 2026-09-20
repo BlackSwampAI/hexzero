@@ -416,6 +416,12 @@ function buildSwarmPlannerRequest(
   const targetIdByCell = new Map(
     targetChoices.map(({ targetId, cell }) => [cell, targetId]),
   );
+  const completedDirectiveByAgent = new Map(
+    (observation.completedDirectives ?? []).map(({ agentId, directiveId }) => [
+      agentId,
+      directiveId,
+    ]),
+  );
   const workers = observation.agents
     .filter(({ agentId }) => agentId !== observation.zeroAgentId)
     .map((agent, index) => ({
@@ -424,6 +430,10 @@ function buildSwarmPlannerRequest(
       controlledCellCount: agent.controlledCellCount,
       territoryDelta: agent.territoryDelta,
       workerStatus: agent.workerStatus ?? 'unknown',
+      directiveComplete:
+        agent.directive !== null &&
+        agent.directive !== undefined &&
+        completedDirectiveByAgent.get(agent.agentId) === agent.directive.id,
       activeDirective: agent.directive
         ? {
             mission: agent.directive.mission,
@@ -467,7 +477,7 @@ function buildSwarmPlannerRequest(
       {
         role: 'system',
         content:
-          'You are Agent Zero, a strategic planner. Return only a JSON object with strategySummary, zeroActionCandidateId, and directives. Return exactly one directive per offered worker, using each workerId once. Each directive has only workerId, mission (expand|hold|relocate|reinforce|evade), targetId (one offered targetId or null), priority (low|normal|high), and riskTolerance (low|medium|high). Select zeroActionCandidateId from legalZeroActions. Assign intent, never exact worker movement. Code supplies directive IDs, agent IDs, target cells, and tick lifetimes; do not output those fields. Use replanReasons and workerReplanRequests when present.',
+          "You are Agent Zero, a strategic planner. Return only a JSON object with strategySummary, zeroActionCandidateId, and directives. Return exactly one directive per offered worker, using each workerId once. Each directive has only workerId, mission (expand|hold|relocate|reinforce|evade), targetId (one offered targetId or null), priority (low|normal|high), and riskTolerance (low|medium|high). Select zeroActionCandidateId from legalZeroActions. Assign intent, never exact worker movement. Code supplies directive IDs, agent IDs, target cells, and tick lifetimes; do not output those fields. Use replanReasons, directiveComplete, and workerReplanRequests when present. Non-hold missions need a target. Expand targets must not already be controlled by that worker. Reinforce targets must be infected or adjacent to infection. Do not assign a relocate, reinforce, or evade target equal to that worker's current position.",
       },
       {
         role: 'user',
