@@ -46,8 +46,10 @@ relocate and reinforce completion on arrival, with reinforce target validity
 checked when issued; evade completion on arrival or
 after leaving high cleaning pressure, non-completing hold-at-target behavior,
 completed-directive IDs passed to the next Zero observation, and deterministic
-fallback for an invalid newly issued friendly expand target. These use scripted
-providers and make no network calls.
+fallback for invalid newly issued expand targets. Focused validation tests
+reject targets infected by the same worker, another worker, or no controller,
+while accepting open targets. These use scripted providers and make no network
+calls.
 
 The pre-live provider audit tests the Jev request's bounded capture-pressure
 projection, omission of hidden hunter state and empty capture noise, and the

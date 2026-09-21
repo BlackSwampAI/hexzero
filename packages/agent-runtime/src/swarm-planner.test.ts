@@ -110,6 +110,9 @@ describe('swarm planners', () => {
     });
     expect(body.max_tokens).toBe(4_096);
     expect(body.messages[0]?.content).toContain('Code supplies directive IDs');
+    expect(body.messages[0]?.content).toContain(
+      'Expand targets must be open cells.',
+    );
     expect(JSON.parse(body.messages[1]!.content)).toMatchObject({
       workers: [{ workerId: 'worker_0', position: cell }],
       targetChoices: [{ targetId: 'target_0', cell }],

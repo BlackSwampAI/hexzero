@@ -33,10 +33,10 @@ another review trigger.
 Completion triggers Zero review on the next tick. The strategic observation
 identifies completed workers by safe `agentId` and server-issued `directiveId`.
 New directives are validated against the authoritative pre-action world after
-simulated-player pressure: non-hold missions need a target, expand cannot target
-a cell already controlled by that worker, relocation/reinforcement/evasion
-cannot target the worker's current cell, and reinforcement needs an infected or
-adjacent frontier target. An invalid plan falls back safely. A completed prior
+simulated-player pressure: non-hold missions need a target, expand requires an
+open cell, relocation/reinforcement/evasion cannot target the worker's current
+cell, and reinforcement needs an infected or adjacent frontier target. An
+invalid plan falls back safely. A completed prior
 directive is not reused during that fallback.
 Zero planning uses the same provider-reported OpenRouter usage normalization as
 legacy turns, including actual `usage.cost` when returned, and preserves that

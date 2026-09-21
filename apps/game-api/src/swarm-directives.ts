@@ -75,12 +75,8 @@ export function swarmDirectiveIssue(
   const target = state.hexes.get(directive.targetCell);
   if (!target) return 'Target is outside the current world.';
 
-  if (
-    directive.mission === 'expand' &&
-    target.state === 'infected' &&
-    target.controllerAgentId === directive.agentId
-  )
-    return 'Expand target is already controlled by this worker.';
+  if (directive.mission === 'expand' && target.state !== 'open')
+    return 'Expand target must be an open cell.';
   if (
     (directive.mission === 'relocate' ||
       directive.mission === 'reinforce' ||

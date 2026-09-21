@@ -92,6 +92,30 @@ describe('swarm directive semantics', () => {
     );
   });
 
+  it('rejects infected expand targets while accepting open targets', () => {
+    const { state, worker, neighbor, directive } = fixture();
+    const otherWorker = [...state.agents.values()][2]!;
+    expect(swarmDirectiveIssue(state, directive('expand'))).toBeNull();
+
+    const otherControlled = new Map(state.hexes);
+    otherControlled.set(neighbor, {
+      state: 'infected',
+      controllerAgentId: otherWorker.id,
+    });
+    expect(
+      swarmDirectiveIssue(
+        { ...state, hexes: otherControlled },
+        directive('expand'),
+      ),
+    ).toContain('Expand');
+
+    const abandoned = new Map(state.hexes);
+    abandoned.set(neighbor, { state: 'infected', controllerAgentId: null });
+    expect(
+      swarmDirectiveIssue({ ...state, hexes: abandoned }, directive('expand')),
+    ).toContain('Expand');
+  });
+
   it('rejects missing, already-satisfied, and incoherent targets on issue', () => {
     const { state, worker, neighbor, farOpen, directive } = fixture();
     expect(swarmDirectiveIssue(state, directive('expand', null))).toBeTruthy();
