@@ -5,6 +5,7 @@ import {
 } from '@hexzero/shared';
 import {
   OpenRouterSwarmPlanner,
+  DeterministicSwarmPlanner,
   ScriptedSwarmPlanner,
   SwarmPlannerError,
 } from './swarm-planner';
@@ -12,11 +13,15 @@ import {
 const zero = '00000000-0000-4000-8000-000000000001';
 const worker = '00000000-0000-4000-8000-000000000002';
 const cell = '8928308280fffff';
+const openCell = '892a1072883ffff';
 const observation = zeroStrategicObservationSchema.parse({
   zeroAgentId: zero,
   tickNumber: 1,
   virtualTime: '2026-08-13T12:00:00.000Z',
-  cells: [{ cell, state: 'infected' as const, controllerAgentId: zero }],
+  cells: [
+    { cell, state: 'infected' as const, controllerAgentId: zero },
+    { cell: openCell, state: 'open' as const, controllerAgentId: null },
+  ],
   agents: [
     {
       agentId: zero,
@@ -45,7 +50,7 @@ const observation = zeroStrategicObservationSchema.parse({
       description: 'Wait on the current cell.',
     },
   ],
-  strategicTargetCells: [cell],
+  strategicTargetCells: [cell, openCell],
 });
 const plan = swarmPlanSchema.parse({
   strategySummary: 'Expand carefully.',
@@ -78,6 +83,22 @@ const compactPlan = {
 };
 
 describe('swarm planners', () => {
+  it('supplies repeatable observation-derived plans for browser swarm runs', async () => {
+    const planner = new DeterministicSwarmPlanner();
+    const first = await planner.plan(observation, 'deterministic-browser');
+    const second = await planner.plan(observation, 'deterministic-browser');
+
+    expect(first).toEqual(second);
+    expect(first.plan.zeroActionCandidateId).toBe('zero_action_0');
+    expect(first.plan.directives).toHaveLength(1);
+    expect(first.plan.directives[0]).toMatchObject({
+      agentId: worker,
+      mission: 'expand',
+      targetCell: openCell,
+      issuedAtTick: 1,
+    });
+  });
+
   it('turns bounded worker and target choices into authoritative directives', async () => {
     const fetchImplementation = vi
       .fn<typeof fetch>()
@@ -121,7 +142,7 @@ describe('swarm planners', () => {
     );
     expect(JSON.parse(body.messages[1]!.content)).toMatchObject({
       workers: [{ workerId: 'worker_0', position: cell }],
-      targetChoices: [{ targetId: 'target_0', cell }],
+      targetChoices: expect.arrayContaining([{ targetId: 'target_0', cell }]),
     });
   });
 

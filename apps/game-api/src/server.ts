@@ -3,10 +3,7 @@ import { serve } from '@hono/node-server';
 import { applyProviderEnvironmentFile } from '@hexzero/agent-runtime';
 import { createApp } from './app';
 
-if (
-  (process.env.HEXZERO_PROVIDER ?? process.env.AGENTBORNE_PROVIDER) !==
-  'scripted'
-) {
+if (process.env.HEXZERO_PROVIDER !== 'scripted') {
   try {
     process.loadEnvFile('../../.env');
     applyProviderEnvironmentFile(

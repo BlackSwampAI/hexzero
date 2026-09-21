@@ -18,7 +18,7 @@ import {
   assignBehavior,
   archiveExperimentExportResponseSchema,
   cancelSimulationResponseSchema,
-  cancelledTurnResponseSchema,
+  cancelledTickResponseSchema,
   experimentExportPreviewSchema,
   experimentExportRequestSchema,
   experimentExportResponseSchema,
@@ -62,6 +62,7 @@ import {
   matchingPersonalityPreset,
   PERSONALITY_PRESETS,
 } from './personality-presets';
+
 import { WorldMap } from './world-map';
 import { buildModelOptions } from './model-options';
 import { resolveAgentColor } from './ui-color';
@@ -530,9 +531,9 @@ export function WorldLab() {
         }
         return;
       }
-      if (!response.ok) throw new Error('turn request failed');
+      if (!response.ok) throw new Error('tick request failed');
       const body: unknown = await response.json();
-      const cancellation = cancelledTurnResponseSchema.safeParse(body);
+      const cancellation = cancelledTickResponseSchema.safeParse(body);
       if (cancellation.success) {
         applySnapshot(cancellation.data.snapshot);
         setUiError('The request was cancelled without consuming a tick.');
@@ -540,12 +541,9 @@ export function WorldLab() {
       }
       const payload = singleTickResponseSchema.parse(body);
       applySnapshot(payload.snapshot);
-      const lost = payload.records.filter(
-        ({ outcome }) => outcome === 'lost-tick',
-      );
-      if (lost.length)
+      if (payload.swarmTick?.plannerFailure)
         setRecoveryNotice(
-          `${lost.length} agent${lost.length === 1 ? '' : 's'} lost this tick; all other decisions committed.`,
+          'Agent Zero fell back to the deterministic directive plan for this tick.',
         );
     } catch {
       setUiError('The response was lost. Reconciling with the Game API…');
@@ -621,9 +619,9 @@ export function WorldLab() {
     if (inFlightRef.current) return;
     if (
       snapshot &&
-      snapshot.experiment.totalCompletedTurns > 0 &&
+      snapshot.tickNumber > 0 &&
       !window.confirm(
-        `Reset World will discard ${snapshot.tickNumber} completed ticks (${snapshot.experiment.totalCompletedTurns} agent records) and all unexported telemetry. Continue?`,
+        `Reset World will discard ${snapshot.tickNumber} completed ticks and all unexported telemetry. Continue?`,
       )
     )
       return;
@@ -774,9 +772,7 @@ export function WorldLab() {
         memberAgentIds.includes(selectedHexController.id),
       )
     : undefined;
-  const latestTurn = selectedAgent
-    ? snapshot.turns.findLast(({ agentId }) => agentId === selectedAgent.id)
-    : undefined;
+  const latestTurn = undefined;
   const status = resetting
     ? 'resetting'
     : reconciling
@@ -797,7 +793,9 @@ export function WorldLab() {
   const terminal =
     snapshot.status === 'patient-zero-captured' ||
     snapshot.status === 'infection-eliminated';
-  const swarmMode = snapshot.scenario.cognitionMode === 'zero-swarm-v1';
+  // PR2 removes the inactive social panels; World Lab now always enters via
+  // the swarm workspace.
+  const swarmMode = true;
   const visibleActivityTab = swarmMode ? 'swarm' : activityTab;
   const zeroAgentId = snapshot.scenario.patientZeroAgentId;
   const zeroModel = snapshot.resolvedModels.find(
@@ -817,12 +815,8 @@ export function WorldLab() {
     personalityPending ||
     snapshot.activeAgentId !== null ||
     activeTick;
-  const modelsReady = swarmMode
-    ? Boolean(zeroModel?.available)
-    : snapshot.resolvedModels.every(({ available }) => available);
-  const executionReady = swarmMode
-    ? modelsReady
-    : snapshot.providerConfigured && modelsReady;
+  const modelsReady = Boolean(zeroModel?.available);
+  const executionReady = modelsReady;
   const reasoningUnavailable = snapshot.resolvedModels.some(
     ({ issue }) => issue === 'reasoning-unavailable',
   );
@@ -845,9 +839,7 @@ export function WorldLab() {
             WL
           </span>
           <div>
-            <p className="eyebrow">
-              {swarmMode ? 'Zero swarm v1' : 'Legacy multi-agent'} experiment
-            </p>
+            <p className="eyebrow">Swarm experiment</p>
             <h1>World Lab</h1>
           </div>
           <nav className="workspace-switcher" aria-label="World Lab workspaces">
@@ -898,7 +890,7 @@ export function WorldLab() {
               ) : (
                 <div>
                   <dt>Retained turns</dt>
-                  <dd>{snapshot.experiment.retainedTurns}</dd>
+                  <dd>{snapshot.swarmTicks?.length ?? 0}</dd>
                 </div>
               )}
               {!swarmMode && (
@@ -1032,15 +1024,13 @@ export function WorldLab() {
           ref={modeTriggerRef}
           type="button"
           disabled={inFlight || activeTick || resetting || running}
-          aria-label={`Current execution mode: ${swarmMode ? 'Zero swarm v1' : 'Legacy multi-agent'}. Change in World Setup`}
+          aria-label="Current swarm architecture"
           onClick={() => {
             setSetupOpenedFromMode(true);
             setSetupOpen(true);
           }}
         >
-          <strong>
-            Mode: {swarmMode ? 'Zero swarm v1' : 'Legacy multi-agent'}
-          </strong>
+          <strong>Architecture: zero-swarm-v1</strong>
           <span className="test-provider-summary">
             {swarmMode
               ? `Zero: ${zeroModel?.modelId ?? 'model required'} · Jev: ${snapshot.swarmProviderStatus?.reflexModel ?? 'deterministic reflex'}`
@@ -1106,7 +1096,6 @@ export function WorldLab() {
               personalityPending ||
               terminal ||
               !executionReady ||
-              snapshot.pendingFailedTurn !== null ||
               snapshot.experiment.attemptAccounting.exhausted ||
               snapshot.status === 'budget-exhausted'
             }
@@ -1490,7 +1479,7 @@ export function WorldLab() {
                         )!.state
                       }
                       latestTurn={latestTurn}
-                      turns={snapshot.turns}
+                      turns={[]}
                       directMessages={snapshot.world.events.filter(
                         (
                           event,
@@ -1627,7 +1616,7 @@ export function WorldLab() {
                 snapshot={snapshot}
                 agents={snapshot.world.agents}
                 events={publicMessages}
-                turns={snapshot.turns}
+                turns={[]}
                 collapsed={false}
                 onCollapsedChange={setChatCollapsed}
               />
@@ -1643,7 +1632,7 @@ export function WorldLab() {
             {!chatCollapsed && visibleActivityTab === 'events' && (
               <EventLog
                 snapshot={snapshot}
-                turns={snapshot.turns}
+                turns={[]}
                 agents={snapshot.world.agents}
                 collapsed={false}
                 onCollapsedChange={setChatCollapsed}
@@ -1651,9 +1640,7 @@ export function WorldLab() {
             )}
             {!chatCollapsed &&
               visibleActivityTab === 'recovery' &&
-              !swarmMode && (
-                <RecoveryLog snapshot={snapshot} turns={snapshot.turns} />
-              )}
+              !swarmMode && <RecoveryLog snapshot={snapshot} turns={[]} />}
           </section>
         </>
       ) : (
@@ -1714,7 +1701,7 @@ export function WorldLab() {
                   )!.state
                 }
                 latestTurn={latestTurn}
-                turns={snapshot.turns}
+                turns={[]}
                 directMessages={snapshot.world.events.filter(
                   (
                     event,
@@ -1872,9 +1859,8 @@ function RunHealthSummary({
   const metrics = snapshot.experiment.metrics.aggregate;
   const elapsedMs = Math.max(
     0,
-    Date.parse(
-      snapshot.turns.at(-1)?.completedAt ?? snapshot.experiment.startedAt,
-    ) - Date.parse(snapshot.experiment.startedAt),
+    Date.parse(snapshot.experiment.startedAt ?? snapshot.experiment.startedAt) -
+      Date.parse(snapshot.experiment.startedAt),
   );
   const elapsedMinutes = Math.floor(elapsedMs / 60_000);
   return (
@@ -2073,7 +2059,7 @@ function WorldSetupPanel({
     const scenario = snapshot.scenario;
     return structuredClone({
       scenarioVersion: scenario.scenarioVersion,
-      cognitionMode: scenario.cognitionMode,
+      swarmArchitectureVersion: scenario.swarmArchitectureVersion,
       locationLabel: scenario.locationLabel,
       center: scenario.center,
       resolution: scenario.resolution,
@@ -2206,7 +2192,7 @@ function WorldSetupPanel({
   const apply = async () => {
     if (!preview?.feasible || !fresh) return;
     if (
-      snapshot.experiment.totalCompletedTurns > 0 &&
+      snapshot.tickNumber > 0 &&
       !window.confirm(
         'Create a new experiment and discard non-exported telemetry?',
       )
@@ -2307,29 +2293,10 @@ function WorldSetupPanel({
       }
     >
       <section className="setup-section">
-        <h3>Execution mode</h3>
-        <label>
-          Cognition mode
-          <select
-            value={draft.cognitionMode}
-            onChange={(event) =>
-              setDraft({
-                ...draft,
-                cognitionMode: event.target
-                  .value as WorldSetupRequest['cognitionMode'],
-              })
-            }
-          >
-            <option value="legacy-multi-agent">Legacy multi-agent</option>
-            <option value="zero-swarm-v1">
-              Zero swarm v1 (Agent Zero + Jev)
-            </option>
-          </select>
-        </label>
+        <h3>Swarm architecture</h3>
         <p className="field-help">
-          Choose Zero swarm v1 to run one Agent Zero planner with Jev workers.
-          Preview and apply to create a new experiment. The live comparison
-          report is a separate command-line experiment.
+          Agent Zero plans for the swarm and Jev workers execute local legal
+          actions. Preview and apply to create a new experiment.
         </p>
       </section>
       <section className="setup-section">
@@ -2810,7 +2777,7 @@ function WorldSetupPanel({
             ))}
           </select>
         </label>
-        {draft.cognitionMode !== 'zero-swarm-v1' && (
+        {draft.swarmArchitectureVersion !== 'zero-swarm-v1' && (
           <>
             <label>
               Behavior assignment seed
@@ -3103,14 +3070,18 @@ function ModelConsole({
       </button>
       <DialogShell
         open={open}
-        title="Agent Controller"
+        title={swarmMode ? 'Agent Zero model' : 'Agent Controller'}
         description={
           swarmMode
             ? `Agent Zero planner model · ${catalog?.models.length ?? 0} catalog compatible · ${catalog?.filteredOutCount ?? 0} filtered out`
             : `Models and reproducible behavior assignments · ${catalog?.models.length ?? 0} catalog compatible · ${catalog?.filteredOutCount ?? 0} filtered out`
         }
-        label="Model selection"
-        closeLabel="Close model selection"
+        label={swarmMode ? 'Agent Zero model selection' : 'Model selection'}
+        closeLabel={
+          swarmMode
+            ? 'Close Agent Zero model selection'
+            : 'Close model selection'
+        }
         className="model-dialog"
         returnFocusRef={toggleRef}
         onClose={close}
@@ -3126,7 +3097,11 @@ function ModelConsole({
       >
         <div
           role="tablist"
-          aria-label="Agent Controller sections"
+          aria-label={
+            swarmMode
+              ? 'Agent Zero model sections'
+              : 'Agent Controller sections'
+          }
           className="controller-tabs"
         >
           {(swarmMode
@@ -3336,62 +3311,53 @@ function ModelConsole({
                 )}
               </div>
             </section>
-            {!swarmMode && (
-              <div className="model-verification">
-                <span>
-                  Catalog compatible:{' '}
-                  {selected
-                    ? 'yes — required metadata advertised'
-                    : 'not selected'}
-                </span>
-                <span>
-                  Runtime verified:{' '}
-                  {verification?.status === 'verified'
-                    ? 'yes'
-                    : verification?.status === 'failed'
-                      ? 'failed'
-                      : 'not tested'}
-                </span>
-                {verification?.failure && (
-                  <p className="catalog-state error" role="status">
-                    {verification.failure.message}
-                  </p>
-                )}
-                <button
-                  disabled={
-                    locked ||
-                    !configuration.globalModelId ||
-                    verifyingModelId === configuration.globalModelId
-                  }
-                  type="button"
-                  onClick={() =>
-                    configuration.globalModelId &&
-                    void onVerify(
-                      configuration.globalModelId,
-                      configuration.globalReasoningProfile,
-                      verification?.status === 'failed',
-                    )
-                  }
-                >
-                  {verifyingModelId === configuration.globalModelId
-                    ? 'Testing model…'
-                    : verification?.status === 'failed'
-                      ? 'Retry model test'
-                      : 'Test selected model'}
-                </button>
-                <small>
-                  Sends one genuine, non-mutating OpenRouter request using the
-                  production decision contract and may incur a small charge.
-                </small>
-              </div>
-            )}
-            {swarmMode && (
-              <p className="catalog-state">
-                Agent Zero uses the swarm planner contract. This legacy model
-                test uses the sequential agent decision contract and is not
-                available here.
-              </p>
-            )}
+            <div className="model-verification">
+              <span>
+                Catalog compatible:{' '}
+                {selected
+                  ? 'yes — required metadata advertised'
+                  : 'not selected'}
+              </span>
+              <span>
+                Runtime verified:{' '}
+                {verification?.status === 'verified'
+                  ? 'yes'
+                  : verification?.status === 'failed'
+                    ? 'failed'
+                    : 'not tested'}
+              </span>
+              {verification?.failure && (
+                <p className="catalog-state error" role="status">
+                  {verification.failure.message}
+                </p>
+              )}
+              <button
+                disabled={
+                  locked ||
+                  !configuration.globalModelId ||
+                  verifyingModelId === configuration.globalModelId
+                }
+                type="button"
+                onClick={() =>
+                  configuration.globalModelId &&
+                  void onVerify(
+                    configuration.globalModelId,
+                    configuration.globalReasoningProfile,
+                    verification?.status === 'failed',
+                  )
+                }
+              >
+                {verifyingModelId === configuration.globalModelId
+                  ? 'Testing model…'
+                  : verification?.status === 'failed'
+                    ? 'Retry Agent Zero planner test'
+                    : 'Test Agent Zero planner'}
+              </button>
+              <small>
+                Sends one genuine, non-mutating OpenRouter request using the
+                Agent Zero planner contract and may incur a small charge.
+              </small>
+            </div>
             {selected && <ModelFacts model={selected} />}
             {!swarmMode && (
               <div className="agent-model-overrides">
@@ -3536,8 +3502,7 @@ function BehaviorPanel({
   ) => Promise<boolean>;
 }) {
   const configuration = snapshot.behaviorConfiguration;
-  const locked =
-    configuration.locked || snapshot.experiment.totalCompletedTurns > 0;
+  const locked = configuration.locked || snapshot.tickNumber > 0;
   const update = (
     next: Omit<BehaviorConfiguration, 'registryVersion' | 'locked'>,
   ) => void onUpdate(next);
@@ -3727,7 +3692,7 @@ function AgentRoster({
   selectedAgentId: AgentId | null;
   onSelect: (agentId: AgentId) => void;
 }) {
-  const swarmMode = snapshot.scenario.cognitionMode === 'zero-swarm-v1';
+  const swarmMode = true;
   return (
     <aside className="agent-roster" aria-label="Agent roster">
       <div className="agent-roster-heading">
@@ -3848,20 +3813,7 @@ function PrivateComms({
     .filter((event) => filter === 'all' || event.channel === filter)
     .toReversed()
     .slice(0, 120);
-  const rejections = snapshot.turns
-    .filter(
-      (turn) =>
-        turn.outcome !== 'provider-error' &&
-        turn.outcome !== 'lost-tick' &&
-        turn.outcome !== 'operator-skipped' &&
-        turn.communicationResult.requested &&
-        !turn.communicationResult.accepted &&
-        turn.communicationResult.attempt.channel !== 'public' &&
-        (filter === 'all' ||
-          turn.communicationResult.attempt.channel === filter),
-    )
-    .toReversed()
-    .slice(0, 40);
+  const rejections: AgentTurnRecord[] = [];
   return (
     <section
       className="panel world-chat-panel"
@@ -3903,15 +3855,7 @@ function PrivateComms({
             const sender = snapshot.world.agents.find(
               ({ id }) => id === event.agentId,
             );
-            const turn = snapshot.turns.find(
-              (candidate) =>
-                candidate.outcome !== 'provider-error' &&
-                candidate.outcome !== 'lost-tick' &&
-                candidate.outcome !== 'operator-skipped' &&
-                candidate.communicationResult.requested &&
-                candidate.communicationResult.accepted &&
-                candidate.communicationResult.event.id === event.id,
-            );
+            const turn = undefined;
             const recipient =
               event.type === 'direct-message-sent'
                 ? snapshot.world.agents.find(
@@ -4296,13 +4240,7 @@ function AllianceEventList({
   return (
     <ol className="compact-history">
       {events.slice(-8).map((event) => {
-        const turn = snapshot.turns.find(
-          (candidate) =>
-            candidate.outcome !== 'provider-error' &&
-            candidate.outcome !== 'lost-tick' &&
-            candidate.outcome !== 'operator-skipped' &&
-            candidate.allianceEvents.some(({ id }) => id === event.id),
-        );
+        const turn = undefined;
         return (
           <li key={event.id}>
             <span>{formatAllianceEvent(event, snapshot)}</span>
@@ -5164,7 +5102,7 @@ function ExperimentUsageMeter({ snapshot }: { snapshot: SimulationSnapshot }) {
   return (
     <div className="usage-meter" aria-label="Current experiment usage">
       <strong>Current experiment</strong>
-      <span>{snapshot.experiment.totalCompletedTurns} turns</span>
+      <span>{snapshot.tickNumber} turns</span>
       <span>{metrics.publicMessagesAccepted} public messages</span>
       <span>{metrics.directMessagesDelivered} direct messages</span>
       <span>{formatCost(metrics.knownCostCredits)} known cost</span>
@@ -5276,7 +5214,7 @@ function ExperimentExportPanel({
   const downloadPendingRef = useRef(false);
   const sqlitePendingRef = useRef(false);
   const close = useCallback(() => onOpenChange(false), [onOpenChange]);
-  const swarmMode = snapshot.scenario.cognitionMode === 'zero-swarm-v1';
+  const swarmMode = true;
 
   const requestInput = swarmMode
     ? {

@@ -118,7 +118,7 @@ export interface OpenRouterSwarmPlannerOptions {
   fetchImplementation?: typeof fetch;
 }
 
-/** OpenRouter-backed strategic planner, isolated from AgentProvider. */
+/** OpenRouter-backed strategic planner for Agent Zero. */
 export class OpenRouterSwarmPlanner implements SwarmPlanner {
   readonly mode = 'openrouter-swarm' as const;
   readonly configured: boolean;
@@ -398,6 +398,73 @@ export class ScriptedSwarmPlanner implements SwarmPlanner {
       finalize?.({ outcome: 'provider-error', failure: error.failure });
       throw error;
     }
+    const metadata = metadataFor(model, 0);
+    finalize?.({ outcome: 'completed', provider: metadata, swarmPlan: plan });
+    return { plan, metadata };
+  }
+}
+
+/**
+ * Repeatable offline planner for browser and end-to-end swarm runs.
+ * It derives every choice from the current authoritative observation and does
+ * not model a provider or retain a finite response fixture.
+ */
+export class DeterministicSwarmPlanner implements SwarmPlanner {
+  readonly mode = 'scripted-swarm-test' as const;
+  readonly configured = true;
+
+  async plan(
+    observationInput: ZeroStrategicObservation,
+    model: string,
+    options: PlannerOptions = {},
+  ): Promise<SwarmPlanResult> {
+    const observation = zeroStrategicObservationSchema.parse(observationInput);
+    const finalize = options.beginAttempt?.('initial');
+    if (finalize === null)
+      throw new SwarmPlannerError({
+        code: 'budget-exhausted',
+        message: 'The deterministic planner attempt budget is exhausted.',
+        retryable: false,
+      });
+    const zeroAction =
+      observation.legalZeroActions.find(
+        ({ action }) => action.type === 'infect',
+      ) ??
+      observation.legalZeroActions.find(
+        ({ action }) => action.type === 'move',
+      ) ??
+      observation.legalZeroActions.find(
+        ({ action }) => action.type === 'wait',
+      ) ??
+      observation.legalZeroActions[0];
+    if (!zeroAction)
+      throw new SwarmPlannerError({
+        code: 'invalid-decision',
+        message: 'The deterministic planner received no legal Zero action.',
+        retryable: false,
+      });
+    const target =
+      observation.strategicTargetCells.find(
+        (cell) =>
+          observation.cells.find((candidate) => candidate.cell === cell)
+            ?.state === 'open',
+      ) ?? null;
+    const plan = swarmPlanSchema.parse({
+      strategySummary: 'Deterministic swarm perimeter expansion.',
+      zeroActionCandidateId: zeroAction.id,
+      directives: observation.agents
+        .filter(({ agentId }) => agentId !== observation.zeroAgentId)
+        .map(({ agentId }) => ({
+          id: `deterministic-${observation.tickNumber}-${agentId}`,
+          agentId,
+          mission: target ? 'expand' : 'hold',
+          targetCell: target,
+          priority: 'normal',
+          riskTolerance: 'medium',
+          issuedAtTick: observation.tickNumber,
+          expiresAtTick: observation.tickNumber + 4,
+        })),
+    });
     const metadata = metadataFor(model, 0);
     finalize?.({ outcome: 'completed', provider: metadata, swarmPlan: plan });
     return { plan, metadata };

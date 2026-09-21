@@ -38,21 +38,11 @@ export const OPENROUTER_MODEL_CONTEXT_MINIMUM = 16_384;
 export const OPENROUTER_MAX_OUTPUT_TOKENS = 4_096;
 export const OPENROUTER_PROVIDER_TIMEOUT_MS = 75_000;
 export const OPENROUTER_429_FALLBACK_BACKOFF_MS = 1_500;
-export const LEGACY_AGENT_DECISION_CONTRACT_VERSION = 'text-flat-json-v3';
-export const PREVIOUS_AGENT_DECISION_CONTRACT_VERSION = 'text-flat-json-v4';
-export const FLUID_ALLIANCE_AGENT_DECISION_CONTRACT_VERSION =
-  'text-flat-json-v5';
-export const PATIENT_ZERO_AGENT_DECISION_CONTRACT_VERSION = 'text-flat-json-v6';
-export const GOAL_AGENT_DECISION_CONTRACT_VERSION = 'text-flat-json-v7';
-export const AGENT_DECISION_CONTRACT_VERSION = 'text-flat-json-v8';
-export const agentDecisionContractVersionSchema = z.enum([
-  LEGACY_AGENT_DECISION_CONTRACT_VERSION,
-  PREVIOUS_AGENT_DECISION_CONTRACT_VERSION,
-  FLUID_ALLIANCE_AGENT_DECISION_CONTRACT_VERSION,
-  PATIENT_ZERO_AGENT_DECISION_CONTRACT_VERSION,
-  GOAL_AGENT_DECISION_CONTRACT_VERSION,
-  AGENT_DECISION_CONTRACT_VERSION,
-]);
+/** Versioned provenance for Agent Zero's structured planning contract. */
+export const SWARM_PLANNER_CONTRACT_VERSION = 'swarm-planner-v1';
+export const swarmPlannerContractVersionSchema = z.literal(
+  SWARM_PLANNER_CONTRACT_VERSION,
+);
 export const OBJECTIVE_PROMPT_VERSION = 'durable-influence-v3';
 export const OPENROUTER_REQUIRED_PARAMETERS = ['max_tokens'] as const;
 export const DEVELOPMENT_WORLD_CONFIG = {
@@ -73,12 +63,11 @@ export const ALLIANCE_COLOR_PALETTE = [
 export const agentIdSchema = z.uuid().brand<'AgentId'>();
 export type AgentId = z.infer<typeof agentIdSchema>;
 
-/** Selects the decision architecture used to execute an experiment. */
-export const cognitionModeSchema = z.enum([
-  'legacy-multi-agent',
-  'zero-swarm-v1',
-]);
-export type CognitionMode = z.infer<typeof cognitionModeSchema>;
+/** Records the fixed cognition architecture used to produce an experiment. */
+export const swarmArchitectureVersionSchema = z.literal('zero-swarm-v1');
+export type SwarmArchitectureVersion = z.infer<
+  typeof swarmArchitectureVersionSchema
+>;
 
 export const eventIdSchema = z.uuid().brand<'EventId'>();
 export type EventId = z.infer<typeof eventIdSchema>;
@@ -2547,7 +2536,7 @@ export const modelVerificationStatusSchema = z.enum([
 export const modelVerificationSchema = z.object({
   modelId: modelIdSchema,
   reasoningProfile: reasoningProfileSchema.default('provider-default'),
-  contractVersion: z.literal(AGENT_DECISION_CONTRACT_VERSION),
+  contractVersion: swarmPlannerContractVersionSchema,
   status: modelVerificationStatusSchema,
   testedAt: z.iso.datetime().optional(),
   failure: z
@@ -3105,7 +3094,8 @@ export type ExperimentExecutionLimits = z.infer<
 const worldSetupRequestObjectSchema = z
   .object({
     scenarioVersion: scenarioContractVersionSchema.default('world-scenario-v1'),
-    cognitionMode: cognitionModeSchema.default('legacy-multi-agent'),
+    swarmArchitectureVersion:
+      swarmArchitectureVersionSchema.default('zero-swarm-v1'),
     locationLabel: z.string().trim().min(1).max(120).optional(),
     center: z.object({
       latitude: z.number().finite().min(-90).max(90),
@@ -3269,8 +3259,8 @@ export const defaultWorldSetupResponseSchema = z.object({
 });
 
 const appliedScenarioShape = {
-  decisionContractVersion: agentDecisionContractVersionSchema.default(
-    AGENT_DECISION_CONTRACT_VERSION,
+  swarmPlannerContractVersion: swarmPlannerContractVersionSchema.default(
+    SWARM_PLANNER_CONTRACT_VERSION,
   ),
   exactCellCount: z
     .number()
@@ -3310,15 +3300,46 @@ export const appliedScenarioSchema = worldSetupRequestObjectSchema
   .extend(appliedScenarioShape)
   .superRefine(validateAppliedScenario);
 export type AppliedScenario = z.infer<typeof appliedScenarioSchema>;
-/** Read-only compatibility for exports created before Patient Zero was required. */
-export const archivedAppliedScenarioSchema = worldSetupRequestObjectSchema
-  .extend({
-    patientZeroAgentId: agentIdSchema.nullable(),
-    ...appliedScenarioShape,
-  })
-  .superRefine((scenario, context) =>
-    validateAppliedScenario(scenario, context, true),
-  );
+/**
+ * Read-only translation for historical exports. Active setup never accepts
+ * these retired fields; import normalizes them at the archive boundary.
+ */
+export const archivedAppliedScenarioSchema = z.preprocess(
+  (input) => {
+    if (typeof input !== 'object' || input === null || Array.isArray(input))
+      return input;
+    const scenario = input as Record<string, unknown>;
+    const { cognitionMode, decisionContractVersion, ...current } = scenario;
+    return {
+      ...current,
+      historicalCognitionMode:
+        scenario.historicalCognitionMode ?? cognitionMode,
+      historicalDecisionContractVersion:
+        scenario.historicalDecisionContractVersion ?? decisionContractVersion,
+      swarmArchitectureVersion:
+        scenario.swarmArchitectureVersion ?? 'zero-swarm-v1',
+      swarmPlannerContractVersion:
+        scenario.swarmPlannerContractVersion ?? SWARM_PLANNER_CONTRACT_VERSION,
+    };
+  },
+  worldSetupRequestObjectSchema
+    .extend({
+      patientZeroAgentId: agentIdSchema.nullable(),
+      historicalCognitionMode: z
+        .enum(['legacy-multi-agent', 'zero-swarm-v1'])
+        .optional(),
+      historicalDecisionContractVersion: z
+        .string()
+        .trim()
+        .min(1)
+        .max(80)
+        .optional(),
+      ...appliedScenarioShape,
+    })
+    .superRefine((scenario, context) =>
+      validateAppliedScenario(scenario, context, true),
+    ),
+);
 
 export const worldSetupPreviewResponseSchema = z.discriminatedUnion(
   'feasible',
@@ -3477,7 +3498,6 @@ export const simulationSnapshotSchema = z
   .object({
     world: worldSnapshotSchema,
     scenario: appliedScenarioSchema,
-    turnNumber: z.number().int().nonnegative(),
     tickNumber: z.number().int().nonnegative().default(0),
     virtualTime: z.iso.datetime().default('2026-08-13T12:00:00.000Z'),
     lastTickIntervalMinutes: z
@@ -3487,18 +3507,8 @@ export const simulationSnapshotSchema = z
       .nullable()
       .default(null),
     resolutionOrder: z.array(agentIdSchema).default([]),
-    nextAgentId: agentIdSchema.nullable(),
     activeAgentId: agentIdSchema.nullable(),
     cancellationRequested: z.boolean().default(false),
-    pendingFailedTurn: z
-      .object({
-        turnNumber: z.number().int().positive(),
-        agentId: agentIdSchema,
-        failure: providerFailureSchema,
-        attempts: z.array(modelAttemptSchema).min(1).max(1_000),
-      })
-      .nullable()
-      .default(null),
     status: simulationStatusSchema,
     providerMode: providerModeSchema,
     providerConfigured: z.boolean(),
@@ -3541,17 +3551,10 @@ export const simulationSnapshotSchema = z
           .strict(),
       )
       .default([]),
-    turns: z.array(agentTurnRecordSchema).max(120),
     swarmTicks: z.array(swarmTickRecordSchema).max(120).optional(),
     experiment: z.object({
       id: z.uuid().brand<'ExperimentId'>(),
       startedAt: z.iso.datetime(),
-      totalCompletedTurns: z.number().int().nonnegative(),
-      retainedTurns: z.number().int().nonnegative(),
-      firstRetainedTurn: z.number().int().positive().optional(),
-      lastRetainedTurn: z.number().int().positive().optional(),
-      droppedRecords: z.number().int().nonnegative(),
-      complete: z.boolean(),
       attemptAccounting: experimentAttemptAccountingSchema.default(
         defaultExperimentAttemptAccounting,
       ),
@@ -3572,17 +3575,6 @@ export const simulationSnapshotSchema = z
     const terminal =
       snapshot.status === 'patient-zero-captured' ||
       snapshot.status === 'infection-eliminated';
-    if (
-      (rosterIds.size === 0 && snapshot.nextAgentId !== null) ||
-      (rosterIds.size > 0 &&
-        (snapshot.nextAgentId === null || !rosterIds.has(snapshot.nextAgentId)))
-    )
-      context.addIssue({
-        code: 'custom',
-        path: ['nextAgentId'],
-        message:
-          'Next agent must identify an active agent, or be null when none remain.',
-      });
     if (rosterIds.size === 0 && snapshot.status !== 'infection-eliminated')
       context.addIssue({
         code: 'custom',
@@ -3844,86 +3836,38 @@ export const simulationSnapshotSchema = z
         'legacy-default-v1',
         'balanced-random',
       ),
-      locked: snapshot.turnNumber > 0,
+      locked: snapshot.tickNumber > 0,
     },
   }));
 export type SimulationSnapshot = z.infer<typeof simulationSnapshotSchema>;
-
-export const singleTurnResponseSchema = z.object({
-  snapshot: simulationSnapshotSchema,
-  turn: agentTurnRecordSchema,
-});
-export type SingleTurnResponse = z.infer<typeof singleTurnResponseSchema>;
 
 export const singleTickResponseSchema = z
   .object({
     snapshot: simulationSnapshotSchema,
     tickNumber: z.number().int().positive(),
-    records: z.array(agentTurnRecordSchema).min(0),
-    swarmTick: swarmTickRecordSchema.optional(),
+    swarmTick: swarmTickRecordSchema.nullable(),
   })
   .superRefine((response, context) => {
-    const zeroSwarmResponse =
-      response.snapshot.scenario.cognitionMode === 'zero-swarm-v1' &&
-      response.records.length === 0 &&
-      response.swarmTick !== undefined;
-    if (zeroSwarmResponse) {
-      const swarmTick = response.swarmTick!;
-      if (
-        response.snapshot.tickNumber !== response.tickNumber ||
-        swarmTick.tickNumber !== response.tickNumber ||
-        response.snapshot.virtualTime !== swarmTick.virtualTime ||
-        response.snapshot.lastTickIntervalMinutes !==
-          swarmTick.tickIntervalMinutes
-      )
-        context.addIssue({
-          code: 'custom',
-          message: 'Swarm tick telemetry must match the committed snapshot.',
-        });
-      return;
-    }
-    const roster = response.snapshot.world.agents.map(({ id }) => id);
-    const positions = response.records.map(({ tickPosition }) => tickPosition);
-    const agents = response.records.map(({ agentId }) => agentId);
-    const first = response.records[0];
     const consistent =
       response.snapshot.tickNumber === response.tickNumber &&
-      response.records.length === roster.length &&
-      new Set(agents).size === roster.length &&
-      agents.every((id) => roster.includes(id)) &&
-      positions.every((position, index) => position === index + 1) &&
-      response.records.every(
-        (record) =>
-          record.tickNumber === response.tickNumber &&
-          record.virtualTime === first?.virtualTime &&
-          record.tickIntervalMinutes === first?.tickIntervalMinutes,
-      ) &&
-      agents.every(
-        (id, index) => response.snapshot.resolutionOrder[index] === id,
-      ) &&
-      response.snapshot.virtualTime === first?.virtualTime &&
-      response.snapshot.lastTickIntervalMinutes === first?.tickIntervalMinutes;
+      (response.swarmTick === null ||
+        (response.swarmTick.tickNumber === response.tickNumber &&
+          response.snapshot.virtualTime === response.swarmTick.virtualTime &&
+          response.snapshot.lastTickIntervalMinutes ===
+            response.swarmTick.tickIntervalMinutes));
     if (!consistent)
       context.addIssue({
         code: 'custom',
-        message:
-          'Tick response records must exactly match the committed snapshot and roster.',
-      });
-    if (response.records.length === 0)
-      context.addIssue({
-        code: 'custom',
-        path: ['records'],
-        message:
-          'Empty tick records require zero-swarm mode with swarm tick telemetry.',
+        message: 'Swarm tick telemetry must match the committed snapshot.',
       });
   });
 export type SingleTickResponse = z.infer<typeof singleTickResponseSchema>;
 
-export const cancelledTurnResponseSchema = z.object({
+export const cancelledTickResponseSchema = z.object({
   snapshot: simulationSnapshotSchema,
   cancelled: z.literal(true),
 });
-export type CancelledTurnResponse = z.infer<typeof cancelledTurnResponseSchema>;
+export type CancelledTickResponse = z.infer<typeof cancelledTickResponseSchema>;
 
 export const resetSimulationResponseSchema = z.object({
   snapshot: simulationSnapshotSchema,
@@ -4059,28 +4003,35 @@ export const experimentManifestSchema = z.preprocess(
     if (typeof input !== 'object' || input === null || Array.isArray(input))
       return input;
     const manifest = input as Record<string, unknown>;
-    const parsedVersion = agentDecisionContractVersionSchema.safeParse(
-      manifest.decisionContractVersion,
-    );
-    const resolvedVersion = parsedVersion.success
-      ? parsedVersion.data
-      : LEGACY_AGENT_DECISION_CONTRACT_VERSION;
+    const resolvedVersion = SWARM_PLANNER_CONTRACT_VERSION;
     const scenario = manifest.scenario;
+    const historicalDecisionContractVersion =
+      manifest.historicalDecisionContractVersion ??
+      manifest.decisionContractVersion;
+    const archivedScenarioRecord =
+      typeof scenario === 'object' &&
+      scenario !== null &&
+      !Array.isArray(scenario)
+        ? (scenario as Record<string, unknown>)
+        : null;
+    const archivedScenario =
+      archivedScenarioRecord !== null
+        ? {
+            ...archivedScenarioRecord,
+            historicalDecisionContractVersion:
+              archivedScenarioRecord.historicalDecisionContractVersion ??
+              historicalDecisionContractVersion,
+            swarmPlannerContractVersion:
+              archivedScenarioRecord.swarmPlannerContractVersion ??
+              resolvedVersion,
+          }
+        : scenario;
     return {
       ...manifest,
-      decisionContractVersion:
-        manifest.decisionContractVersion ?? resolvedVersion,
-      ...(typeof scenario === 'object' &&
-      scenario !== null &&
-      !Array.isArray(scenario) &&
-      !('decisionContractVersion' in scenario)
-        ? {
-            scenario: {
-              ...scenario,
-              decisionContractVersion: resolvedVersion,
-            },
-          }
-        : {}),
+      historicalDecisionContractVersion,
+      swarmPlannerContractVersion:
+        manifest.swarmPlannerContractVersion ?? resolvedVersion,
+      ...(archivedScenario === undefined ? {} : { scenario: archivedScenario }),
     };
   },
   z
@@ -4089,7 +4040,13 @@ export const experimentManifestSchema = z.preprocess(
       startedAt: z.iso.datetime(),
       generatedAt: z.iso.datetime().optional(),
       providerMode: providerModeSchema,
-      decisionContractVersion: agentDecisionContractVersionSchema,
+      historicalDecisionContractVersion: z
+        .string()
+        .trim()
+        .min(1)
+        .max(80)
+        .optional(),
+      swarmPlannerContractVersion: swarmPlannerContractVersionSchema,
       modelConfiguration: experimentModelConfigurationSchema.optional(),
       behaviorConfiguration: behaviorConfigurationSchema.optional(),
       scenario: archivedAppliedScenarioSchema.optional(),
@@ -4102,12 +4059,12 @@ export const experimentManifestSchema = z.preprocess(
     .superRefine((manifest, context) => {
       if (
         manifest.scenario !== undefined &&
-        manifest.scenario.decisionContractVersion !==
-          manifest.decisionContractVersion
+        manifest.scenario.swarmPlannerContractVersion !==
+          manifest.swarmPlannerContractVersion
       )
         context.addIssue({
           code: 'custom',
-          path: ['scenario', 'decisionContractVersion'],
+          path: ['scenario', 'swarmPlannerContractVersion'],
           message:
             'Scenario decision-contract attribution must match the experiment manifest.',
         });
@@ -4727,7 +4684,10 @@ const experimentExportDocumentObjectSchema = z
   })
   .superRefine((document, context) => {
     if (document.swarmTicks !== undefined) {
-      if (document.experiment.scenario?.cognitionMode !== 'zero-swarm-v1')
+      if (
+        document.experiment.scenario?.swarmArchitectureVersion !==
+        'zero-swarm-v1'
+      )
         context.addIssue({
           code: 'custom',
           path: ['swarmTicks'],

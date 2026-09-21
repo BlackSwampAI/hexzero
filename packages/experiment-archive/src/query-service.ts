@@ -796,7 +796,7 @@ export class ExperimentQueryService {
         startedAt: experiment.started_at,
         providerMode: experiment.provider_mode,
         scenario: parseJson(experiment.scenario_json, null),
-        decisionContractVersion: experiment.decision_contract_version,
+        swarmPlannerContractVersion: experiment.decision_contract_version,
         observationContractVersion: experiment.observation_contract_version,
       },
       roster,

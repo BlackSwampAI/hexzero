@@ -21,7 +21,6 @@
     "lint": "pnpm -r --if-present lint",
     "test": "pnpm -r --if-present test",
     "test:e2e": "playwright test",
-    "smoke:openrouter": "pnpm --filter @hexzero/agent-runtime smoke:openrouter",
     "typecheck": "pnpm -r --if-present typecheck",
     "validate": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build"
   },

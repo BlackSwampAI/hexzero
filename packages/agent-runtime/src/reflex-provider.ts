@@ -10,8 +10,8 @@ import {
 export type { ReflexDecision } from '@hexzero/shared';
 
 /**
- * A bounded local-decision provider. Unlike AgentProvider, this provider can
- * select only a service-compiled opaque candidate identifier.
+ * A bounded local-decision provider that selects only a service-compiled
+ * opaque candidate identifier.
  */
 export interface ReflexProvider {
   readonly mode: 'typesafe-jev' | 'scripted-reflex-test';
@@ -146,6 +146,69 @@ export class ScriptedReflexProvider implements ReflexProvider {
       });
       throw providerError;
     }
+  }
+}
+
+/**
+ * Repeatable offline reflex provider for browser and end-to-end swarm runs.
+ * It always selects a current opaque candidate, so it cannot exhaust after a
+ * fixed number of ticks.
+ */
+export class DeterministicReflexProvider implements ReflexProvider {
+  readonly mode = 'scripted-reflex-test' as const;
+  readonly model = 'deterministic-reflex';
+  readonly configured = true;
+
+  async decide(
+    observationInput: ReflexObservation,
+    options: ReflexDecisionOptions = {},
+  ): Promise<ReflexDecision> {
+    const observation = reflexObservationSchema.parse(observationInput);
+    const finalize = options.beginAttempt?.('initial');
+    if (finalize === null)
+      throw new ReflexProviderError({
+        code: 'budget-exhausted',
+        message: 'The deterministic reflex attempt budget is exhausted.',
+        retryable: false,
+      });
+    const selected =
+      observation.candidates.find(({ description }) =>
+        description.startsWith('Infect'),
+      ) ??
+      observation.candidates.find(({ description }) =>
+        description.includes('open territory'),
+      ) ??
+      observation.candidates[0];
+    if (!selected)
+      throw new ReflexProviderError({
+        code: 'invalid-decision',
+        message: 'The deterministic reflex received no legal candidate.',
+        retryable: false,
+      });
+    const decision = reflexDecisionSchema.parse({
+      chosenCandidateId: selected.id,
+      confidence: 1,
+      probabilities: Object.fromEntries(
+        observation.candidates.map(({ id }) => [
+          id,
+          id === selected.id ? 1 : 0,
+        ]),
+      ),
+      replanProbability:
+        observation.currentSituation.directiveProgress === 'blocked' ? 1 : 0,
+      model: this.model,
+      latencyMs: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      directiveId: observation.directive.id,
+      cognitionSource: 'jev-reflex',
+    });
+    finalize?.({
+      outcome: 'completed',
+      provider: scriptedMetadata(this.model),
+      reflexDecision: decision,
+    });
+    return decision;
   }
 }
 

@@ -1,6 +1,9 @@
 import { parseEnv } from 'node:util';
 
-const providerEnvironmentNames = ['OPENROUTER_API_KEY'] as const;
+const providerEnvironmentNames = [
+  'OPENROUTER_API_KEY',
+  'TYPESAFE_API_KEY',
+] as const;
 
 export function applyProviderEnvironmentFile(
   contents: string,

@@ -2,13 +2,12 @@ import { Hono, type Context } from 'hono';
 import { cors } from 'hono/cors';
 import { createHash } from 'node:crypto';
 import {
-  BrowserTestAgentProvider,
-  AgentProviderError,
+  DeterministicReflexProvider,
+  DeterministicSwarmPlanner,
   OpenRouterModelCatalog,
-  OpenRouterAgentProvider,
   OpenRouterSwarmPlanner,
+  SwarmPlannerError,
   TypeSafeJevReflexProvider,
-  type AgentProvider,
   type ReflexProvider,
   type SwarmPlanner,
 } from '@hexzero/agent-runtime';
@@ -16,9 +15,9 @@ import {
   archiveExperimentExportRequestSchema,
   archiveExperimentExportResponseSchema,
   apiErrorSchema,
-  AGENT_DECISION_CONTRACT_VERSION,
+  SWARM_PLANNER_CONTRACT_VERSION,
   cancelSimulationResponseSchema,
-  cancelledTurnResponseSchema,
+  cancelledTickResponseSchema,
   experimentExportRequestSchema,
   experimentExportPreviewSchema,
   experimentExportResponseSchema,
@@ -31,7 +30,6 @@ import {
   resetSimulationResponseSchema,
   restoreDefaultPersonalitiesResponseSchema,
   simulationSnapshotSchema,
-  singleTurnResponseSchema,
   singleTickResponseSchema,
   updateAgentPersonalityRequestSchema,
   updateAgentPersonalityResponseSchema,
@@ -77,7 +75,6 @@ export { healthResponseSchema };
 
 export interface AppOptions {
   service?: SimulationService;
-  provider?: AgentProvider;
   swarmPlanner?: SwarmPlanner;
   reflexProvider?: ReflexProvider;
   catalog?: Pick<OpenRouterModelCatalog, 'getCatalog'>;
@@ -107,41 +104,32 @@ async function archiveExperimentExportDefault(
   }
 }
 
-export function resolveProviderModeFromEnvironment(
+export function swarmProvidersFromEnvironment(
   environment: NodeJS.ProcessEnv = process.env,
-  warn: (message: string) => void = console.warn,
-): string | undefined {
-  if (environment.HEXZERO_PROVIDER !== undefined)
-    return environment.HEXZERO_PROVIDER;
-  if (environment.AGENTBORNE_PROVIDER !== undefined) {
-    warn(
-      'AGENTBORNE_PROVIDER is deprecated; use HEXZERO_PROVIDER. Continuing with the legacy setting.',
-    );
-    return environment.AGENTBORNE_PROVIDER;
-  }
-  return undefined;
-}
-
-export function providerFromEnvironment(
-  environment: NodeJS.ProcessEnv = process.env,
-  warn: (message: string) => void = console.warn,
-): AgentProvider {
-  if (resolveProviderModeFromEnvironment(environment, warn) === 'scripted') {
-    return new BrowserTestAgentProvider();
-  }
-  return new OpenRouterAgentProvider({
-    apiKey: environment.OPENROUTER_API_KEY,
-  });
+): { swarmPlanner: SwarmPlanner; reflexProvider: ReflexProvider } {
+  if (environment.HEXZERO_PROVIDER === 'scripted')
+    return {
+      swarmPlanner: new DeterministicSwarmPlanner(),
+      reflexProvider: new DeterministicReflexProvider(),
+    };
+  return {
+    swarmPlanner: new OpenRouterSwarmPlanner({
+      apiKey: environment.OPENROUTER_API_KEY,
+    }),
+    reflexProvider: new TypeSafeJevReflexProvider({
+      apiKey: environment.TYPESAFE_API_KEY,
+    }),
+  };
 }
 
 export function createApp(options: AppOptions = {}) {
   const app = new Hono();
+  const providers = swarmProvidersFromEnvironment();
   const service =
     options.service ??
     new SimulationService({
-      provider: options.provider ?? providerFromEnvironment(),
-      swarmPlanner: options.swarmPlanner ?? new OpenRouterSwarmPlanner(),
-      reflexProvider: options.reflexProvider ?? new TypeSafeJevReflexProvider(),
+      swarmPlanner: options.swarmPlanner ?? providers.swarmPlanner,
+      reflexProvider: options.reflexProvider ?? providers.reflexProvider,
     });
   const catalog =
     options.catalog ??
@@ -153,13 +141,7 @@ export function createApp(options: AppOptions = {}) {
   const turnMutations = new Map<string, Promise<unknown>>();
   const mutationPromise = <T>(
     context: Context,
-    operation:
-      | 'turn'
-      | 'tick'
-      | 'retry'
-      | 'unattended-retry'
-      | 'unattended-skip'
-      | 'setup',
+    operation: 'tick' | 'setup',
     execute: () => Promise<T>,
   ): Promise<T> => {
     const supplied =
@@ -345,7 +327,7 @@ export function createApp(options: AppOptions = {}) {
         }),
         400,
       );
-    const cacheKey = `${request.data.modelId}:${request.data.reasoningProfile}:${AGENT_DECISION_CONTRACT_VERSION}`;
+    const cacheKey = `${request.data.modelId}:${request.data.reasoningProfile}:${SWARM_PLANNER_CONTRACT_VERSION}`;
     const cached = modelVerifications.get(cacheKey);
     if (cached && !request.data.force)
       return context.json(
@@ -363,7 +345,7 @@ export function createApp(options: AppOptions = {}) {
       const verification = modelVerificationSchema.parse({
         modelId: request.data.modelId,
         reasoningProfile: request.data.reasoningProfile,
-        contractVersion: AGENT_DECISION_CONTRACT_VERSION,
+        contractVersion: SWARM_PLANNER_CONTRACT_VERSION,
         status: 'verified',
         testedAt: new Date().toISOString(),
         provider,
@@ -371,11 +353,11 @@ export function createApp(options: AppOptions = {}) {
       modelVerifications.set(cacheKey, verification);
       return context.json(verifyModelResponseSchema.parse({ verification }));
     } catch (error) {
-      if (error instanceof AgentProviderError) {
+      if (error instanceof SwarmPlannerError) {
         const verification = modelVerificationSchema.parse({
           modelId: request.data.modelId,
           reasoningProfile: request.data.reasoningProfile,
-          contractVersion: AGENT_DECISION_CONTRACT_VERSION,
+          contractVersion: SWARM_PLANNER_CONTRACT_VERSION,
           status: 'failed',
           testedAt: new Date().toISOString(),
           failure: {
@@ -501,73 +483,22 @@ export function createApp(options: AppOptions = {}) {
     }
   });
 
-  app.post('/api/simulation/turn', async (context) => {
-    try {
-      const turn = await mutationPromise(context, 'turn', () =>
-        service.executeNextTurn(),
-      );
-      return context.json(
-        singleTurnResponseSchema.parse({
-          snapshot: service.getSnapshot(),
-          turn,
-        }),
-      );
-    } catch (error) {
-      if (error instanceof SimulationTurnCancelledError)
-        return context.json(
-          cancelledTurnResponseSchema.parse({
-            snapshot: service.getSnapshot(),
-            cancelled: true,
-          }),
-        );
-      if (error instanceof SimulationConflictError) {
-        return context.json(
-          apiErrorSchema.parse({
-            error: { code: 'turn_conflict', message: error.message },
-          }),
-          409,
-        );
-      }
-      if (
-        error instanceof SimulationValidationError &&
-        error.code === 'models_unavailable'
-      )
-        return context.json(
-          apiErrorSchema.parse({
-            error: { code: error.code, message: error.message },
-          }),
-          409,
-        );
-      if (error instanceof SimulationValidationError)
-        return context.json(
-          apiErrorSchema.parse({
-            error: { code: 'invalid_request', message: error.message },
-          }),
-          400,
-        );
-      throw error;
-    }
-  });
-
   app.post('/api/simulation/tick', async (context) => {
     try {
       const response = await mutationPromise(context, 'tick', async () => {
-        const records = await service.executeNextTick();
+        const swarmTick = await service.executeNextTick();
         const snapshot = service.getSnapshot();
         return singleTickResponseSchema.parse({
           snapshot,
           tickNumber: snapshot.tickNumber,
-          records,
-          ...(snapshot.scenario.cognitionMode === 'zero-swarm-v1'
-            ? { swarmTick: snapshot.swarmTicks?.at(-1) }
-            : {}),
+          swarmTick,
         });
       });
       return context.json(response);
     } catch (error) {
       if (error instanceof SimulationTurnCancelledError)
         return context.json(
-          cancelledTurnResponseSchema.parse({
+          cancelledTickResponseSchema.parse({
             snapshot: service.getSnapshot(),
             cancelled: true,
           }),
@@ -590,24 +521,6 @@ export function createApp(options: AppOptions = {}) {
     }
   });
 
-  app.post('/api/simulation/turn/cancel', (context) => {
-    try {
-      return context.json(
-        cancelSimulationResponseSchema.parse({
-          snapshot: service.cancelCurrentRequest(),
-        }),
-      );
-    } catch (error) {
-      if (error instanceof SimulationConflictError)
-        return context.json(
-          apiErrorSchema.parse({
-            error: { code: 'cancel_conflict', message: error.message },
-          }),
-          409,
-        );
-      throw error;
-    }
-  });
   app.post('/api/simulation/tick/cancel', (context) => {
     try {
       return context.json(
@@ -620,107 +533,6 @@ export function createApp(options: AppOptions = {}) {
         return context.json(
           apiErrorSchema.parse({
             error: { code: 'tick_cancel_conflict', message: error.message },
-          }),
-          409,
-        );
-      throw error;
-    }
-  });
-
-  const respondToManualTurn = async (
-    context: Context,
-    operation: 'retry' | 'skip',
-  ) => {
-    try {
-      const turn =
-        operation === 'retry'
-          ? await mutationPromise(context, 'retry', () =>
-              service.retryFailedTurn(),
-            )
-          : service.skipFailedTurn();
-      return context.json(
-        singleTurnResponseSchema.parse({
-          snapshot: service.getSnapshot(),
-          turn,
-        }),
-      );
-    } catch (error) {
-      if (error instanceof SimulationTurnCancelledError)
-        return context.json(
-          cancelledTurnResponseSchema.parse({
-            snapshot: service.getSnapshot(),
-            cancelled: true,
-          }),
-        );
-      if (error instanceof SimulationConflictError)
-        return context.json(
-          apiErrorSchema.parse({
-            error: { code: 'turn_conflict', message: error.message },
-          }),
-          409,
-        );
-      if (error instanceof SimulationValidationError)
-        return context.json(
-          apiErrorSchema.parse({
-            error: { code: error.code, message: error.message },
-          }),
-          409,
-        );
-      throw error;
-    }
-  };
-
-  app.post('/api/simulation/turn/retry', (context) =>
-    respondToManualTurn(context, 'retry'),
-  );
-  app.post('/api/simulation/turn/skip', (context) =>
-    respondToManualTurn(context, 'skip'),
-  );
-  app.post('/api/simulation/turn/unattended-retry', async (context) => {
-    try {
-      const turn = await mutationPromise(context, 'unattended-retry', () =>
-        service.retryFailedTurn('unattended-retry'),
-      );
-      return context.json(
-        singleTurnResponseSchema.parse({
-          snapshot: service.getSnapshot(),
-          turn,
-        }),
-      );
-    } catch (error) {
-      if (error instanceof SimulationTurnCancelledError)
-        return context.json(
-          cancelledTurnResponseSchema.parse({
-            snapshot: service.getSnapshot(),
-            cancelled: true,
-          }),
-        );
-      if (error instanceof SimulationConflictError)
-        return context.json(
-          apiErrorSchema.parse({
-            error: { code: 'turn_conflict', message: error.message },
-          }),
-          409,
-        );
-      throw error;
-    }
-  });
-  app.post('/api/simulation/turn/unattended-skip', async (context) => {
-    try {
-      const turn = await mutationPromise(context, 'unattended-skip', async () =>
-        service.skipFailedTurn('unattended'),
-      );
-      return context.json(
-        singleTurnResponseSchema.parse({
-          snapshot: service.getSnapshot(),
-          turn,
-        }),
-      );
-    } catch (error) {
-      if (error instanceof SimulationConflictError)
-        return context.json(
-          apiErrorSchema.parse({
-            error: { code: 'turn_conflict', message: error.message },
           }),
           409,
         );

@@ -18,7 +18,7 @@ export function summarizeSwarmSnapshot(snapshot: SimulationSnapshot) {
   });
   return {
     tick: snapshot.tickNumber,
-    mode: snapshot.scenario.cognitionMode,
+    swarmArchitectureVersion: snapshot.scenario.swarmArchitectureVersion,
     infectedCells: snapshot.world.hexes.filter(
       ({ state }) => state === 'infected',
     ).length,

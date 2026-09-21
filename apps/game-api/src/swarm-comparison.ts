@@ -1,5 +1,4 @@
 import {
-  BrowserTestAgentProvider,
   ReflexProviderError,
   type PlannerOptions,
   type ReflexDecisionOptions,
@@ -21,7 +20,7 @@ import { SimulationService } from './simulation-service';
 import type { CompiledReflexObservation } from './reflex-execution';
 
 export type OfflineComparisonVariant =
-  'legacy-multi-agent' | 'zero-swarm-v1' | 'deterministic-worker-baseline';
+  'zero-swarm-jev' | 'zero-swarm-deterministic-workers';
 
 export interface OfflineComparisonOptions {
   /** Defaults include a known deterministic capture case. */
@@ -351,9 +350,6 @@ function sample(
       completionTokens: outputTokens,
       totalTokens: inputTokens + outputTokens,
     })),
-    ...snapshot.turns
-      .filter(({ tickNumber }) => tickNumber === snapshot.tickNumber)
-      .flatMap(({ provider }) => (provider ? [provider] : [])),
   ];
   return {
     tick: snapshot.tickNumber,
@@ -384,12 +380,7 @@ function sample(
       (total, item) => total + item.latencyMs,
       0,
     ),
-    generativeAttempts:
-      swarm?.planSource === 'zero-llm'
-        ? 1
-        : snapshot.turns.filter(
-            ({ tickNumber }) => tickNumber === snapshot.tickNumber,
-          ).length,
+    generativeAttempts: swarm?.planSource === 'zero-llm' ? 1 : 0,
     zeroPlans: swarm?.planSource === 'zero-llm' ? 1 : 0,
     reflexDecisions: reflex.length,
     workerStalls:
@@ -410,20 +401,17 @@ function sample(
 function createService(variant: OfflineComparisonVariant, seed: string) {
   const planner = new OfflinePlanner();
   const service = new SimulationService({
-    provider: new BrowserTestAgentProvider(),
     swarmPlanner: planner,
     // Kept for the ordinary swarm variant and snapshot provider status. The
     // deterministic baseline uses the explicit server-side selector below and
     // never invokes this provider.
     reflexProvider: new OfflineReflex('semantic'),
-    ...(variant === 'deterministic-worker-baseline'
+    ...(variant === 'zero-swarm-deterministic-workers'
       ? { deterministicWorkerCandidateSelector: selectGreedyCandidate }
       : {}),
     now: () => '2026-08-13T12:00:00.000Z',
     createEventId: deterministicIds('1'),
     createExperimentId: deterministicIds('2'),
-    createAllianceId: deterministicIds('3'),
-    createProposalId: deterministicIds('4'),
   });
   service.setCompatibleModels([model]);
   const request = service.getDefaultWorldSetup();
@@ -431,8 +419,6 @@ function createService(variant: OfflineComparisonVariant, seed: string) {
   const roster = generateDeterministicRoster(8, 'worker-capture-roster');
   service.applyWorldSetup({
     ...request,
-    cognitionMode:
-      variant === 'legacy-multi-agent' ? 'legacy-multi-agent' : 'zero-swarm-v1',
     roster,
     patientZeroAgentId: roster[1]!.id,
     worldSeed: `offline-world-${seed}`,
@@ -446,6 +432,8 @@ function createService(variant: OfflineComparisonVariant, seed: string) {
       overrides: [],
       locked: false,
     },
+    // This transitional scenario field remains required until PR 2 removes
+    // legacy behavior configuration from the shared world setup schema.
     behaviorConfiguration: {
       ...request.behaviorConfiguration,
       assignments: assignBehavior(
@@ -551,7 +539,7 @@ function aggregate(
   };
 }
 
-/** Run the three comparison modes through SimulationService without a network call. */
+/** Run the Jev and deterministic-worker variants without a network call. */
 export async function runOfflineComparison(
   options: OfflineComparisonOptions = {},
 ): Promise<OfflineComparisonReport> {
@@ -564,9 +552,8 @@ export async function runOfflineComparison(
       `tickCap must be an integer between 1 and ${MAX_TICK_CAP}.`,
     );
   const variants: OfflineComparisonVariant[] = [
-    'legacy-multi-agent',
-    'zero-swarm-v1',
-    'deterministic-worker-baseline',
+    'zero-swarm-jev',
+    'zero-swarm-deterministic-workers',
   ];
   return {
     formatVersion: 1,
@@ -574,7 +561,7 @@ export async function runOfflineComparison(
     seeds,
     tickCap,
     providerDisclaimer:
-      'All providers in this report are deterministic offline fakes. Legacy mode uses BrowserTestAgentProvider, whose scripted social policy is not a behavioral substitute for a live legacy model. Token and latency fields describe only fake-provider telemetry, never live inference usage.',
+      'All providers in this report are deterministic offline fakes. Token and latency fields describe only fake-provider telemetry, never live inference usage.',
     costDisclaimer:
       'Fake-provider costCredits are accounting fixtures only. This report contains no authoritative billed monetary cost.',
     variants: await Promise.all(
@@ -585,11 +572,9 @@ export async function runOfflineComparison(
         return {
           variant,
           providerKind:
-            variant === 'legacy-multi-agent'
-              ? 'BrowserTestAgentProvider'
-              : variant === 'zero-swarm-v1'
-                ? 'OfflinePlanner + semantic OfflineReflex'
-                : 'OfflinePlanner + deterministic legal-candidate selector',
+            variant === 'zero-swarm-jev'
+              ? 'OfflinePlanner + semantic OfflineReflex'
+              : 'OfflinePlanner + deterministic legal-candidate selector',
           runs,
           aggregate: aggregate(runs),
         };
