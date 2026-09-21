@@ -53,6 +53,10 @@ request as the action choice. Code applies the replan threshold and stores a
 structured signal; it grants no action or mutation authority. Reused directives
 are checked against expiry, and Zero's physical action comes from current legal
 engine affordances rather than an earlier plan's candidate ID.
+Zero's local threat fields come from public disinfection effects and H3 geometry;
+bounded capture context comes from public capture events. Neither projection
+reads the hunter's selected target, planned route, or hidden state. Current
+events are projected before worker decisions without being committed early.
 
 In `zero-swarm-v1`, a separate OpenRouter planner receives bounded strategic
 facts, an engine-generated target allowlist, and opaque legal Zero action IDs.

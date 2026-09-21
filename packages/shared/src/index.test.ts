@@ -60,6 +60,7 @@ import {
   createMemoryId,
   archiveExperimentExportResponseSchema,
   providerAttemptRecordSchema,
+  zeroStrategicObservationSchema,
 } from '.';
 
 const agentId = '128f3f38-6b7d-4db7-9e95-751b4ce2681e';
@@ -1189,6 +1190,69 @@ describe('agent observation and decision schemas', () => {
       agentObservationSchema.safeParse({
         ...observation,
         recentControlChanges: Array(7).fill(change),
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe('Zero strategic observation schema', () => {
+  const strategicObservation = {
+    zeroAgentId: agentId,
+    tickNumber: 2,
+    virtualTime: '2026-08-13T12:00:00.000Z',
+    cells: [{ cell, state: 'infected' as const, controllerAgentId: agentId }],
+    agents: [
+      {
+        agentId,
+        position: cell,
+        controlledCellCount: 1,
+        territoryDelta: 0,
+        localPressure: 'low' as const,
+        pressureDirection: null,
+        pressureDistance: null,
+      },
+      {
+        agentId: scoreboard[1]!.agentId,
+        position: cell,
+        controlledCellCount: 0,
+        territoryDelta: 0,
+        localPressure: 'rising' as const,
+        pressureDirection: 'NE' as const,
+        pressureDistance: 'adjacent' as const,
+      },
+    ],
+    recentPlayerPressure: [],
+    legalZeroActions: [
+      {
+        id: 'zero_action_0',
+        action: { type: 'wait' as const },
+        description: 'Wait on the current cell.',
+      },
+    ],
+    strategicTargetCells: [cell],
+  };
+
+  it('requires bounded semantic worker threat fields and caps recent captures', () => {
+    expect(
+      zeroStrategicObservationSchema.safeParse(strategicObservation).success,
+    ).toBe(true);
+    expect(
+      zeroStrategicObservationSchema.safeParse({
+        ...strategicObservation,
+        agents: strategicObservation.agents.map((agent, index) =>
+          index === 1 ? { ...agent, localPressure: undefined } : agent,
+        ),
+      }).success,
+    ).toBe(false);
+    expect(
+      zeroStrategicObservationSchema.safeParse({
+        ...strategicObservation,
+        recentCaptures: Array.from({ length: 5 }, () => ({
+          capturedAgentId: scoreboard[1]!.agentId,
+          cell,
+          originatingTick: 2,
+          abandonedCellCount: 1,
+        })),
       }).success,
     ).toBe(false);
   });

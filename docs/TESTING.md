@@ -41,6 +41,9 @@ fallbacks for immediate diagnosis of apparently stationary ticks.
 Focused offline progress tests cover a worker advancing after a move, reaching
 a directive target, waiting at that target, and the corresponding status seen
 by Zero on the next planning tick.
+Offline swarm pressure tests cover current-tick disinfection proximity, bounded
+event history, capture context, pressure-aware replan thresholds, and the
+following tick's worker-request reason. No provider network calls are made.
 Directive-lifecycle tests also cover expand completion only after worker control,
 relocate and reinforce completion on arrival, with reinforce target validity
 checked when issued; evade completion on arrival or

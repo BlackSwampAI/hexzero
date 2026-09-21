@@ -113,6 +113,11 @@ import {
   ExperimentMetricAccumulator,
 } from './experiment-export';
 import { geographicDirectionBetweenCells } from './geographic-direction';
+import {
+  boundedPressureEvents,
+  boundedRecentCaptures,
+  localPressureAtCell,
+} from './swarm-pressure';
 import { ObservationHistory } from './observation-history';
 import { AttemptAccounting } from './attempt-accounting';
 import {
@@ -143,6 +148,16 @@ const RESET_GENERATED_AT = '2026-08-13T12:00:00.000Z';
 const MAX_TURN_HISTORY = 120;
 const MAX_WORLD_EVENT_HISTORY = 120;
 const DEFAULT_EXPERIMENT_RETENTION = 5_000;
+export const LOW_PRESSURE_REPLAN_THRESHOLD = 0.8;
+export const ELEVATED_PRESSURE_REPLAN_THRESHOLD = 0.5;
+
+export function replanThresholdForPressure(
+  pressure: 'low' | 'rising' | 'high',
+): number {
+  return pressure === 'low'
+    ? LOW_PRESSURE_REPLAN_THRESHOLD
+    : ELEVATED_PRESSURE_REPLAN_THRESHOLD;
+}
 
 function chooseDeterministicWorkerAction(
   compiled: CompiledReflexObservation,
@@ -1602,6 +1617,13 @@ export class SimulationService {
       { createEventId: this.#createEventId, now: () => virtualTime },
     );
     const candidate = playerAdvance.state;
+    // Include public effects of this advance before workers make their choices.
+    // This array is derived only; player events remain committed once below.
+    const pressureEvents = boundedPressureEvents(
+      this.#simulatedPlayerEvents,
+      playerAdvance.events,
+      tickNumber,
+    );
     const agents = [...candidate.agents.values()];
     const zero = zeroAgentId ? candidate.agents.get(zeroAgentId) : undefined;
     if (!agents.length || !zero) {
@@ -1775,17 +1797,7 @@ export class SimulationService {
         this.#activeAgentId = worker.id;
         const history = {
           previousCell: this.#lastSwarmPositions.get(worker.id),
-          recentCleanedCells: this.#simulatedPlayerEvents
-            .filter(
-              (
-                event,
-              ): event is Extract<
-                SimulatedPlayerEvent,
-                { type: 'hex-disinfected' }
-              > => event.type === 'hex-disinfected',
-            )
-            .slice(-6)
-            .map(({ cell }) => cell),
+          pressureEvents,
           captureAlerts: captureAlertsFrom(playerAdvance.events),
           territoryDelta: this.#lastSwarmTerritoryDeltas.get(worker.id) ?? 0,
           recentActionOutcome: this.#swarmTicks
@@ -1856,7 +1868,9 @@ export class SimulationService {
       const signals = workers.flatMap((worker) => {
         const selection = selected.get(worker.id)!;
         const probability = selection.decision?.replanProbability;
-        return probability !== undefined && probability >= 0.8
+        const pressure = selection.observation.currentSituation.nearbyPressure;
+        const threshold = replanThresholdForPressure(pressure);
+        return probability !== undefined && probability >= threshold
           ? [
               {
                 type: 'worker-replan-requested' as const,
@@ -2777,7 +2791,17 @@ export class SimulationService {
                 : 'Wait on the current cell.',
       }),
     );
-    const workerReplanRequests = this.#swarmWorkerReplanRequests();
+    const workerReplanRequests = this.#swarmWorkerReplanRequests(state);
+    const pressureEvents = boundedPressureEvents(
+      this.#simulatedPlayerEvents,
+      playerEvents,
+      tickNumber,
+    );
+    const recentCaptures = boundedRecentCaptures(
+      this.#simulatedPlayerEvents,
+      playerEvents,
+      tickNumber,
+    );
     return {
       zeroAgentId,
       tickNumber,
@@ -2789,6 +2813,10 @@ export class SimulationService {
           hex.state === 'infected' ? hex.controllerAgentId : null,
       })),
       agents: [...state.agents.values()].map((agent) => {
+        const localThreat = localPressureAtCell(
+          agent.currentCell,
+          pressureEvents,
+        );
         const priorWorker = this.#swarmTicks
           .at(-1)
           ?.workers.find(({ agentId }) => agentId === agent.id);
@@ -2822,18 +2850,22 @@ export class SimulationService {
           position: agent.currentCell,
           controlledCellCount: counts.get(agent.id) ?? 0,
           territoryDelta: this.#lastSwarmTerritoryDeltas.get(agent.id) ?? 0,
+          localPressure: localThreat.localPressure,
+          pressureDirection: localThreat.pressureDirection,
+          pressureDistance: localThreat.pressureDistance,
           ...(agent.id === zeroAgentId ? {} : { workerStatus, directive }),
         };
       }),
       recentPlayerPressure: playerEvents.map((event) =>
         event.type === 'hex-disinfected'
-          ? 'A nearby infected cell was cleaned this tick.'
+          ? 'An infected cell was cleaned this tick.'
           : event.type === 'simulated-player-clean-blocked'
             ? 'Cleaning pressure was blocked by an occupied infected cell.'
             : event.type === 'simulated-player-agent-captured'
               ? `Worker ${event.capturedAgentId} was captured at ${event.cell}; ${event.abandonedCellCount} controlled cells became abandoned.`
               : 'The simulated player moved this tick.',
       ),
+      ...(recentCaptures.length ? { recentCaptures } : {}),
       ...(replanReasons.length ? { replanReasons: [...replanReasons] } : {}),
       ...(completedDirectives.length
         ? { completedDirectives: [...completedDirectives] }
@@ -2904,7 +2936,7 @@ export class SimulationService {
       )
     )
       reasons.push('directive-expired');
-    if (this.#swarmWorkerReplanRequests().length)
+    if (this.#swarmWorkerReplanRequests(state).length)
       reasons.push('worker-request');
     const recent = this.#swarmTicks.slice(-2);
     if (
@@ -2955,18 +2987,18 @@ export class SimulationService {
     return reasons;
   }
 
-  #swarmWorkerReplanRequests(): Array<{
+  #swarmWorkerReplanRequests(state: WorldState = this.#state): Array<{
     agentId: AgentId;
     directiveId: string;
     probability: number;
   }> {
-    return (this.#swarmTicks.at(-1)?.signals ?? []).map(
-      ({ agentId, directiveId, probability }) => ({
+    return (this.#swarmTicks.at(-1)?.signals ?? [])
+      .filter(({ agentId }) => state.agents.has(agentId))
+      .map(({ agentId, directiveId, probability }) => ({
         agentId,
         directiveId,
         probability,
-      }),
-    );
+      }));
   }
 
   #reusedSwarmPlan(state: WorldState, zeroAgentId: AgentId): SwarmPlan {

@@ -11,10 +11,12 @@ import {
 } from '@hexzero/agent-runtime';
 import {
   assignBehavior,
+  h3CellSchema,
   type CompatibleModel,
   type SwarmPlan,
   type ZeroStrategicObservation,
   reflexDecisionSchema,
+  swarmPlanSchema,
   singleTickResponseSchema,
 } from '@hexzero/shared';
 import { generateDeterministicRoster } from '@hexzero/world-engine';
@@ -23,7 +25,9 @@ import {
   SimulationConflictError,
   SimulationService,
   SimulationTurnCancelledError,
+  replanThresholdForPressure,
 } from './simulation-service';
+import { geographicDirectionBetweenCells } from './geographic-direction';
 
 const model = {
   id: 'test/zero',
@@ -266,6 +270,215 @@ function setup(
 }
 
 describe('zero-swarm SimulationService tick', () => {
+  it('uses conservative and elevated-pressure worker replan thresholds', () => {
+    expect(0.6 >= replanThresholdForPressure('high')).toBe(true);
+    expect(0.6 >= replanThresholdForPressure('rising')).toBe(true);
+    expect(0.6 >= replanThresholdForPressure('low')).toBe(false);
+    expect(0.79 >= replanThresholdForPressure('low')).toBe(false);
+    expect(0.8 >= replanThresholdForPressure('low')).toBe(true);
+  });
+
+  it('escalates a real current-tick trail-hunter disinfection into the next Zero replan', async () => {
+    const workerCell = h3CellSchema.parse('892a94d2e73ffff');
+    const safeMoveCell = h3CellSchema.parse('892a94d2e47ffff');
+    const safeMoveDirection = geographicDirectionBetweenCells(
+      workerCell,
+      safeMoveCell,
+    );
+    const moveToHunterDirection = geographicDirectionBetweenCells(
+      safeMoveCell,
+      workerCell,
+    );
+    const observations: ZeroStrategicObservation[] = [];
+    const planner: SwarmPlanner = {
+      mode: 'scripted-swarm-test',
+      configured: true,
+      async plan(observation, _model, options = {}) {
+        observations.push(structuredClone(observation));
+        const plan = {
+          strategySummary: 'Follow assigned positions.',
+          zeroActionCandidateId: observation.legalZeroActions.find(
+            ({ action }) => action.type === 'wait',
+          )!.id,
+          directives: observation.agents
+            .filter(({ agentId }) => agentId !== observation.zeroAgentId)
+            .map((agent) => ({
+              id: `pressure-${observation.tickNumber}-${agent.agentId}`,
+              agentId: agent.agentId,
+              mission: 'hold' as const,
+              targetCell: agent.position,
+              priority: 'normal' as const,
+              riskTolerance: 'medium' as const,
+              issuedAtTick: observation.tickNumber,
+              expiresAtTick: observation.tickNumber + 5,
+            })),
+        };
+        swarmPlanSchema.parse(plan);
+        options.beginAttempt?.('initial')?.({
+          outcome: 'completed',
+          provider: {
+            provider: 'scripted-test',
+            model: 'test/zero',
+            latencyMs: 0,
+          },
+          swarmPlan: plan,
+        });
+        return {
+          plan,
+          metadata: {
+            provider: 'scripted-test',
+            model: 'test/zero',
+            latencyMs: 0,
+          },
+        };
+      },
+    };
+    let reflexCalls = 0;
+    const reflex: ReflexProvider = {
+      mode: 'scripted-reflex-test',
+      model: 'test-reflex',
+      configured: true,
+      async decide(observation, options) {
+        const choice =
+          reflexCalls === 0
+            ? observation.candidates.find(({ description }) =>
+                description.startsWith('Infect'),
+              )!
+            : reflexCalls === 1
+              ? observation.candidates.find(({ description }) =>
+                  description.startsWith(`Move ${safeMoveDirection} `),
+                )!
+              : reflexCalls === 3
+                ? observation.candidates.find(({ description }) =>
+                    description.startsWith(`Move ${moveToHunterDirection} `),
+                  )!
+                : observation.candidates.find(({ description }) =>
+                    description.startsWith('Remain'),
+                  )!;
+        reflexCalls += 1;
+        const decision = reflexDecisionSchema.parse({
+          chosenCandidateId: choice.id,
+          confidence: 1,
+          probabilities: Object.fromEntries(
+            observation.candidates.map(({ id }) => [
+              id,
+              id === choice.id ? 1 : 0,
+            ]),
+          ),
+          replanProbability: 0.6,
+          model: 'test-reflex',
+          latencyMs: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          directiveId: observation.directive.id,
+          cognitionSource: 'jev-reflex',
+        });
+        options?.beginAttempt?.('initial')?.({
+          outcome: 'completed',
+          reflexDecision: decision,
+        });
+        return decision;
+      },
+    };
+    const simulation = new SimulationService({
+      provider: new BrowserTestAgentProvider(),
+      swarmPlanner: planner,
+      reflexProvider: reflex,
+      now: () => '2026-08-13T12:00:00.000Z',
+    });
+    simulation.setCompatibleModels([model]);
+    const request = simulation.getDefaultWorldSetup();
+    const roster = request.roster.slice(0, 2);
+    simulation.applyWorldSetup({
+      ...request,
+      cognitionMode: 'zero-swarm-v1',
+      roster,
+      patientZeroAgentId: roster[0]!.id,
+      spawnSeed: 'pressure-spawn-0',
+      objectiveVersion: 'durable-influence-v3',
+      capabilities: { ...request.capabilities, simulatedPlayerPressure: true },
+      simulatedPlayer: {
+        enabled: true,
+        profile: 'trail-hunter-v1',
+        seed: 'pressure-hunter-17',
+      },
+      modelConfiguration: {
+        globalModelId: model.id,
+        globalReasoningProfile: 'low',
+        overrides: [],
+        locked: false,
+      },
+      behaviorConfiguration: {
+        ...request.behaviorConfiguration,
+        assignments: assignBehavior(
+          roster.map(({ id }) => id),
+          request.behaviorConfiguration.seed,
+          'balanced-random',
+        ),
+      },
+    });
+
+    await simulation.executeNextTick();
+    await simulation.executeNextTick();
+    await simulation.executeNextTick();
+    const firstTwo = simulation.getSnapshot().swarmTicks?.slice(0, 2) ?? [];
+    expect(firstTwo).toHaveLength(2);
+    expect(
+      firstTwo.every(
+        (tick) =>
+          tick.workers[0]?.situation?.nearbyPressure === 'low' &&
+          tick.workers[0]?.reflexDecision?.replanProbability === 0.6 &&
+          tick.signals === undefined,
+      ),
+    ).toBe(true);
+    const third = simulation.getSnapshot().swarmTicks?.[2];
+    expect(third).toBeDefined();
+    expect(reflexCalls).toBe(3);
+    expect(third?.workers[0]?.situation?.nearbyPressure).toBe('high');
+    expect(third?.workers[0]?.reflexDecision?.replanProbability).toBe(0.6);
+    expect(third?.signals).toEqual([
+      expect.objectContaining({
+        type: 'worker-replan-requested',
+        probability: 0.6,
+      }),
+    ]);
+    const zeroAtDisinfection = observations.find(
+      ({ tickNumber }) => tickNumber === 3,
+    );
+    expect(
+      zeroAtDisinfection?.agents.find(
+        ({ agentId }) => agentId === roster[1]!.id,
+      ),
+    ).toMatchObject({
+      localPressure: 'high',
+      pressureDistance: 'adjacent',
+      pressureDirection: geographicDirectionBetweenCells(
+        safeMoveCell,
+        workerCell,
+      ),
+    });
+    await simulation.executeNextTick();
+    expect(simulation.getSnapshot().swarmTicks?.[3]?.replanReasons).toContain(
+      'worker-request',
+    );
+    expect(
+      observations.find(({ tickNumber }) => tickNumber === 4)?.replanReasons,
+    ).toContain('worker-request');
+    await simulation.executeNextTick();
+    const afterCapture = observations.find(
+      ({ tickNumber }) => tickNumber === 5,
+    )!;
+    expect(afterCapture.agents.map(({ agentId }) => agentId)).toEqual([
+      roster[0]!.id,
+    ]);
+    expect(afterCapture.replanReasons).toContain('roster-changed');
+    expect(afterCapture.replanReasons).not.toContain('worker-request');
+    expect(afterCapture.workerReplanRequests).toBeUndefined();
+    expect(afterCapture.recentCaptures).toEqual([
+      expect.objectContaining({ capturedAgentId: roster[1]!.id }),
+    ]);
+  });
+
   it('commits a player-only terminal tick when trail hunter captures Patient Zero', async () => {
     const planner = new InspectingPlanner();
     const simulation = setup(
@@ -387,6 +600,9 @@ describe('zero-swarm SimulationService tick', () => {
     expect(planner.observations[0]?.recentPlayerPressure).toEqual(
       expect.arrayContaining([expect.stringContaining(roster[0]!.id)]),
     );
+    expect(planner.observations[0]?.recentCaptures).toEqual([
+      expect.objectContaining({ capturedAgentId: roster[0]!.id }),
+    ]);
     expect(snapshot.experiment.attemptAccounting.attemptsStarted).toBe(1);
   });
 
@@ -560,6 +776,7 @@ describe('zero-swarm SimulationService tick', () => {
           action?.type === 'infect' && actionResult?.accepted === true,
       ),
     ).toBe(true);
+    expect(tick?.signals).toBeUndefined();
     expect(
       simulation.getSnapshot().experiment.attemptAccounting.attemptsStarted,
     ).toBe(1);
@@ -924,6 +1141,7 @@ describe('zero-swarm SimulationService tick', () => {
           source === 'deterministic-fallback' && action?.type === 'wait',
       ),
     ).toBe(true);
+    expect(simulation.getSnapshot().swarmTicks?.[0]?.signals).toBeUndefined();
     expect(
       simulation.getSnapshot().experiment.attemptAccounting.attemptsStarted,
     ).toBe(8);
