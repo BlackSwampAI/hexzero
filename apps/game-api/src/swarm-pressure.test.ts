@@ -56,15 +56,63 @@ describe('swarm pressure', () => {
     });
   });
 
-  it('bounds retained plus current public events without duplication', () => {
+  it('retains current and prior five ticks of public disinfections', () => {
+    const currentTick = 10;
+    const combined = boundedPressureEvents(
+      [
+        disinfection(adjacent, '00000000-0000-4000-8000-000000000010', 5),
+        disinfection(adjacent, '00000000-0000-4000-8000-000000000011', 4),
+      ],
+      [
+        disinfection(nearby, '00000000-0000-4000-8000-000000000012', 10),
+        disinfection(nearby, '00000000-0000-4000-8000-000000000013', 11),
+      ],
+      currentTick,
+    );
+
+    expect(combined.map(({ id }) => id)).toEqual([
+      '00000000-0000-4000-8000-000000000010',
+      '00000000-0000-4000-8000-000000000012',
+    ]);
+    expect(localPressureAtCell(cell, combined).localPressure).toBe('high');
+    expect(
+      localPressureAtCell(
+        cell,
+        boundedPressureEvents(
+          [],
+          [disinfection(nearby, '00000000-0000-4000-8000-000000000012', 10)],
+          currentTick,
+        ),
+      ).localPressure,
+    ).toBe('rising');
+  });
+
+  it('expires old high and rising disinfections before deriving local pressure', () => {
+    const combined = boundedPressureEvents(
+      [
+        disinfection(adjacent, '00000000-0000-4000-8000-000000000014', 4),
+        disinfection(nearby, '00000000-0000-4000-8000-000000000015', 3),
+      ],
+      [],
+      10,
+    );
+
+    expect(localPressureAtCell(cell, combined)).toEqual({
+      localPressure: 'low',
+      pressureDirection: null,
+      pressureDistance: null,
+    });
+  });
+
+  it('deduplicates then caps retained plus current in-window events', () => {
     const events = Array.from({ length: 7 }, (_, index) =>
       disinfection(
         index % 2 === 0 ? adjacent : nearby,
         `00000000-0000-4000-8000-0000000000${10 + index}`,
-        index + 1,
+        10,
       ),
     );
-    const combined = boundedPressureEvents(events, [events[1]!, ...events]);
+    const combined = boundedPressureEvents(events, [events[1]!, ...events], 10);
     expect(combined.map(({ id }) => id)).toEqual(
       events.slice(-6).map(({ id }) => id),
     );

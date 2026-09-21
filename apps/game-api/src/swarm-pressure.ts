@@ -10,6 +10,7 @@ import {
 } from './geographic-direction';
 
 export const MAX_SWARM_PRESSURE_EVENTS = 6;
+export const SWARM_PRESSURE_WINDOW_TICKS = 6;
 export const RECENT_CAPTURE_WINDOW_TICKS = 6;
 
 type DisinfectionEvent = Extract<
@@ -30,11 +31,18 @@ export interface LocalPressureContext {
 export function boundedPressureEvents(
   retained: readonly SimulatedPlayerEvent[],
   current: readonly SimulatedPlayerEvent[],
+  currentTick: number,
 ): DisinfectionEvent[] {
   const seen = new Set<string>();
   return [...retained, ...current]
     .filter(
       (event): event is DisinfectionEvent => event.type === 'hex-disinfected',
+    )
+    .filter(
+      (event) =>
+        event.originatingTick >=
+          currentTick - SWARM_PRESSURE_WINDOW_TICKS + 1 &&
+        event.originatingTick <= currentTick,
     )
     .filter((event) => {
       if (seen.has(event.id)) return false;

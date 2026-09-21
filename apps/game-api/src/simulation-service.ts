@@ -1622,6 +1622,7 @@ export class SimulationService {
     const pressureEvents = boundedPressureEvents(
       this.#simulatedPlayerEvents,
       playerAdvance.events,
+      tickNumber,
     );
     const agents = [...candidate.agents.values()];
     const zero = zeroAgentId ? candidate.agents.get(zeroAgentId) : undefined;
@@ -2794,6 +2795,7 @@ export class SimulationService {
     const pressureEvents = boundedPressureEvents(
       this.#simulatedPlayerEvents,
       playerEvents,
+      tickNumber,
     );
     const recentCaptures = boundedRecentCaptures(
       this.#simulatedPlayerEvents,

@@ -24,7 +24,8 @@ they enter committed history only after the tick succeeds. One shared geometry
 rule classifies a disinfection at most one cell away as high pressure, two cells
 away as rising pressure, and otherwise low pressure. Zero receives that local
 classification and bounded direction/distance categories for each surviving
-agent, plus recent observable captures. A real Jev replan probability triggers
+agent, plus recent observable captures. Disinfection pressure uses the current
+and prior five ticks, capped at six events. A real Jev replan probability triggers
 a worker request at 0.50 under rising or high pressure and at 0.80 under low
 pressure; deterministic fallbacks cannot emit that signal.
 Directive progress compares each worker's current cell with its position before
