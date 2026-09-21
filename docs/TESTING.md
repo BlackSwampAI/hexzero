@@ -67,6 +67,9 @@ these safe worker failure reasons. Cost display tests separate provider-reported
 cost from admission exposure and show that TypeSafe Jev monetary cost remains
 unknown without provider billing data. The browser suite checks that a long
 swarm activity log scrolls inside the fixed-height bottom dock.
+World Lab component coverage also checks that applying a fresh Trail hunter
+scenario after a tick-50 experiment resets the run counter so the next Run to
+tick 50 command sends its first Game API tick request.
 
 Attempt-budget tests use deterministic providers and cover whole-roster tick
 admission, retry permits, cancellation finalization, and the distinction

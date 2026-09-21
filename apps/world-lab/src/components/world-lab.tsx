@@ -1372,13 +1372,8 @@ export function WorldLab() {
           }
           onClose={() => setSetupOpen(false)}
           onApplied={(next) => {
-            setSnapshot(next);
+            applySnapshot(next);
             setSelectedCell(null);
-            setSelectedAgentId((selected) =>
-              next.world.agents.some(({ id }) => id === selected)
-                ? selected
-                : (next.world.agents[0]?.id ?? null),
-            );
             setExportAgentIds((selected) =>
               selected.filter((id) =>
                 next.world.agents.some((agent) => agent.id === id),

@@ -1982,6 +1982,90 @@ describe('WorldLab', () => {
     }
   }, 15_000);
 
+  it('starts a fresh trail-hunter experiment after setup even when the prior experiment was at tick 50', async () => {
+    vi.useFakeTimers();
+    const at50 = simulationSnapshotSchema.parse({
+      ...initial,
+      tickNumber: 50,
+      turnNumber: 400,
+      experiment: { ...initial.experiment, totalCompletedTurns: 400 },
+    });
+    const fresh = simulationSnapshotSchema.parse({
+      ...initial,
+      scenario: {
+        ...initial.scenario,
+        objectiveVersion: 'durable-influence-v3',
+        capabilities: {
+          ...initial.scenario.capabilities,
+          simulatedPlayerPressure: true,
+        },
+        simulatedPlayer: {
+          enabled: true,
+          profile: 'trail-hunter-v1',
+          seed: 'reset-trail-hunter',
+        },
+      },
+    });
+    let tickRequests = 0;
+    let appliedProfile: string | undefined;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith('/setup/preview'))
+          return jsonResponse(previewWorldSetup(JSON.parse(String(init?.body))));
+        if (url.endsWith('/experiment/setup')) {
+          appliedProfile = JSON.parse(String(init?.body)).simulatedPlayer.profile;
+          return jsonResponse({ snapshot: fresh });
+        }
+        if (url.includes('/tick?mutationId=') && init?.method === 'POST') {
+          tickRequests += 1;
+          return jsonResponse(completeTickResponse(fresh, 1));
+        }
+        return jsonResponse(at50);
+      }),
+    );
+
+    try {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      render(<WorldLab />);
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(screen.getByText('Tick 50')).toBeInTheDocument();
+      await openOverflow(user);
+      await user.click(screen.getByRole('button', { name: 'World setup' }));
+      await user.click(
+        screen.getByRole('checkbox', {
+          name: 'Enable simulated player pressure',
+        }),
+      );
+      await user.selectOptions(
+        screen.getByLabelText('Simulated player profile'),
+        'trail-hunter-v1',
+      );
+      await user.click(screen.getByRole('button', { name: 'Preview' }));
+      await user.click(
+        screen.getByRole('button', { name: 'Apply / Create Experiment' }),
+      );
+      expect(appliedProfile).toBe('trail-hunter-v1');
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(screen.getByText('Tick 0')).toBeInTheDocument();
+      await user.selectOptions(screen.getByLabelText('Tick target'), '50');
+      await user.click(screen.getByRole('button', { name: 'Run to tick 50' }));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+      expect(tickRequests).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps run targets absolute and makes current or past targets unavailable', async () => {
     window.sessionStorage.setItem('hexzero.world-lab.run-target', '25');
     const at50 = simulationSnapshotSchema.parse({
