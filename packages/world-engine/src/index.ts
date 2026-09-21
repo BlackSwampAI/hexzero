@@ -9,7 +9,7 @@ import {
 } from 'h3-js';
 import {
   ALLIANCE_COLOR_PALETTE,
-  AGENT_DECISION_CONTRACT_VERSION,
+  SWARM_PLANNER_CONTRACT_VERSION,
   DEVELOPMENT_WORLD_CONFIG,
   DEFAULT_COMMUNICATION_RANGE_KM,
   DEFAULT_MINIMUM_TICK_INTERVAL_MINUTES,
@@ -1585,7 +1585,7 @@ export function defaultWorldSetupRequest(): WorldSetupRequest {
   })) as ScenarioRosterEntry[];
   return {
     scenarioVersion: 'world-scenario-v1',
-    cognitionMode: 'legacy-multi-agent',
+    swarmArchitectureVersion: 'zero-swarm-v1',
     locationLabel: 'Toledo, Ohio',
     center: {
       latitude: DEVELOPMENT_WORLD_CONFIG.latitude,
@@ -1755,7 +1755,7 @@ export function previewWorldSetup(
   };
   const scenario: AppliedScenario = {
     ...request,
-    decisionContractVersion: AGENT_DECISION_CONTRACT_VERSION,
+    swarmPlannerContractVersion: SWARM_PLANNER_CONTRACT_VERSION,
     exactCellCount: cells.length,
     areaSquareKilometers: cells.reduce(
       (total, cell) => total + cellArea(cell, UNITS.km2),

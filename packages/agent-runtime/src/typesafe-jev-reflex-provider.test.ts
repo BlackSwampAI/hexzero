@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { reflexObservationSchema } from '@hexzero/shared';
 import {
+  DeterministicReflexProvider,
   ScriptedReflexProvider,
   TypeSafeJevReflexProvider,
   TYPESAFE_JEV_MODEL,
@@ -58,6 +59,16 @@ function choiceResponse(choice = 'action_0', model = TYPESAFE_JEV_MODEL) {
 }
 
 describe('TypeSafeJevReflexProvider', () => {
+  it('reuses current legal candidates across arbitrary deterministic calls', async () => {
+    const provider = new DeterministicReflexProvider();
+    const first = await provider.decide(observation);
+    const second = await provider.decide(observation);
+
+    expect(first).toEqual(second);
+    expect(first.chosenCandidateId).toBe('action_0');
+    expect(first.probabilities).toEqual({ action_0: 1, action_1: 0 });
+  });
+
   it('sends the pinned model and opaque candidate choice criteria', async () => {
     const fetchImplementation = vi
       .fn<typeof fetch>()

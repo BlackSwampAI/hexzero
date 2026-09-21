@@ -1,10 +1,8 @@
 import { gridDistance } from 'h3-js';
 import { describe, expect, it } from 'vitest';
 import {
-  BrowserTestAgentProvider,
   ReflexProviderError,
   ScriptedReflexProvider,
-  type AgentProvider,
   type PlannerOptions,
   type ReflexProvider,
   type SwarmPlanner,
@@ -232,10 +230,8 @@ function setup(
   planner: SwarmPlanner,
   reflex: ReflexProvider,
   pressure = false,
-  provider: AgentProvider = new BrowserTestAgentProvider(),
 ) {
   const simulation = new SimulationService({
-    provider,
     swarmPlanner: planner,
     reflexProvider: reflex,
     now: () => '2026-08-13T12:00:00.000Z',
@@ -244,7 +240,6 @@ function setup(
   const request = simulation.getDefaultWorldSetup();
   simulation.applyWorldSetup({
     ...request,
-    cognitionMode: 'zero-swarm-v1',
     ...(pressure
       ? {
           objectiveVersion: 'durable-influence-v3' as const,
@@ -381,7 +376,6 @@ describe('zero-swarm SimulationService tick', () => {
       },
     };
     const simulation = new SimulationService({
-      provider: new BrowserTestAgentProvider(),
       swarmPlanner: planner,
       reflexProvider: reflex,
       now: () => '2026-08-13T12:00:00.000Z',
@@ -391,7 +385,6 @@ describe('zero-swarm SimulationService tick', () => {
     const roster = request.roster.slice(0, 2);
     simulation.applyWorldSetup({
       ...request,
-      cognitionMode: 'zero-swarm-v1',
       roster,
       patientZeroAgentId: roster[0]!.id,
       spawnSeed: 'pressure-spawn-0',
@@ -489,7 +482,6 @@ describe('zero-swarm SimulationService tick', () => {
     const roster = generateDeterministicRoster(1, 'terminal-roster');
     simulation.applyWorldSetup({
       ...request,
-      cognitionMode: 'zero-swarm-v1',
       roster,
       patientZeroAgentId: roster[0]!.id,
       spawnSeed: 'terminal-spawn',
@@ -516,12 +508,11 @@ describe('zero-swarm SimulationService tick', () => {
       },
     });
 
-    await expect(simulation.executeNextTick()).resolves.toEqual([]);
+    await expect(simulation.executeNextTick()).resolves.toBeNull();
     const snapshot = simulation.getSnapshot();
     expect(snapshot.status).toBe('infection-eliminated');
     expect(snapshot.tickNumber).toBe(1);
     expect(snapshot.resolutionOrder).toEqual([]);
-    expect(snapshot.nextAgentId).toBeNull();
     expect(snapshot.world.agents).toEqual([]);
     expect(snapshot.world.events).toContainEqual(
       expect.objectContaining({ type: 'simulated-player-agent-captured' }),
@@ -562,7 +553,6 @@ describe('zero-swarm SimulationService tick', () => {
     const roster = generateDeterministicRoster(2, 'worker-capture-roster');
     simulation.applyWorldSetup({
       ...request,
-      cognitionMode: 'zero-swarm-v1',
       roster,
       patientZeroAgentId: roster[1]!.id,
       spawnSeed: 'worker-capture-spawn',
@@ -617,7 +607,6 @@ describe('zero-swarm SimulationService tick', () => {
     const roster = generateDeterministicRoster(3, 'attempt-capture-roster');
     simulation.applyWorldSetup({
       ...request,
-      cognitionMode: 'zero-swarm-v1',
       roster,
       patientZeroAgentId: roster[1]!.id,
       spawnSeed: 'attempt-capture-spawn',
@@ -663,29 +652,6 @@ describe('zero-swarm SimulationService tick', () => {
     expect(attempts.map(({ agentId }) => agentId)).not.toContain(roster[0]!.id);
   });
 
-  it('reports swarm providers without requiring the unused legacy provider', () => {
-    const legacy: AgentProvider = {
-      mode: 'openrouter',
-      configured: false,
-      async decide() {
-        throw new Error('Legacy provider must not run in zero-swarm mode.');
-      },
-    };
-    const simulation = setup(
-      new InspectingPlanner(),
-      new ScriptedReflexProvider([{ chosenCandidateId: 'action_0' }]),
-      false,
-      legacy,
-    );
-    const snapshot = simulation.getSnapshot();
-    expect(snapshot.providerConfigured).toBe(false);
-    expect(snapshot.status).toBe('paused');
-    expect(snapshot.swarmProviderStatus).toMatchObject({
-      plannerConfigured: true,
-      reflexConfigured: true,
-    });
-  });
-
   it('returns a schema-valid swarm tick through the API without legacy turn records', async () => {
     const simulation = setup(
       new InspectingPlanner(),
@@ -699,7 +665,6 @@ describe('zero-swarm SimulationService tick', () => {
     );
     expect(response.status).toBe(200);
     const tick = singleTickResponseSchema.parse(await response.json());
-    expect(tick.records).toEqual([]);
     expect(tick.swarmTick?.tickNumber).toBe(1);
   });
 
@@ -716,11 +681,11 @@ describe('zero-swarm SimulationService tick', () => {
         .getSnapshot()
         .world.agents.map(({ id, currentCell }) => [id, currentCell]),
     );
-    await expect(simulation.executeNextTick()).resolves.toEqual([]);
+    await expect(simulation.executeNextTick()).resolves.toMatchObject({
+      tickNumber: 1,
+    });
     const snapshot = simulation.getSnapshot();
     expect(snapshot.tickNumber).toBe(1);
-    expect(snapshot.turnNumber).toBe(0);
-    expect(snapshot.turns).toEqual([]);
     expect(snapshot.swarmTicks).toHaveLength(1);
     expect(snapshot.swarmProviderStatus).toMatchObject({
       plannerMode: 'scripted-swarm-test',

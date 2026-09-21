@@ -9,7 +9,6 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "lint": "eslint .",
-    "smoke:openrouter": "tsx src/real-provider-smoke.ts",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json"
   },

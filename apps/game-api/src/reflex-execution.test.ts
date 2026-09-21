@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { gridDisk } from 'h3-js';
 import {
-  BrowserTestAgentProvider,
+  DeterministicReflexProvider,
+  DeterministicSwarmPlanner,
   ScriptedReflexProvider,
   TypeSafeJevReflexProvider,
   type ReflexProvider,
@@ -45,20 +46,18 @@ function fixture() {
 }
 
 describe('zero-swarm reflex execution seam', () => {
-  it('identifies zero-swarm scenarios without running the legacy tick executor', async () => {
+  it('executes swarm scenarios through the planner and reflex seams', async () => {
     const service = new SimulationService({
-      provider: new BrowserTestAgentProvider(),
+      swarmPlanner: new DeterministicSwarmPlanner(),
+      reflexProvider: new DeterministicReflexProvider(),
     });
     const setup = service.getDefaultWorldSetup();
     const snapshot = service.applyWorldSetup({
       ...setup,
-      cognitionMode: 'zero-swarm-v1',
     });
-    expect(snapshot.scenario.cognitionMode).toBe('zero-swarm-v1');
-    await expect(service.executeNextTick()).rejects.toThrow(
-      'Zero-swarm execution requires a planner and reflex provider',
-    );
-    expect(service.getSnapshot().tickNumber).toBe(0);
+    expect(snapshot.scenario.swarmArchitectureVersion).toBe('zero-swarm-v1');
+    await service.executeNextTick();
+    expect(service.getSnapshot().tickNumber).toBe(1);
   });
 
   it('takes a directive through legal candidate choice and the real engine', async () => {

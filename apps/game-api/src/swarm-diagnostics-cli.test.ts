@@ -7,7 +7,7 @@ describe('swarm diagnostic projection', () => {
     const snapshot = {
       tickNumber: 1,
       scenario: {
-        cognitionMode: 'zero-swarm-v1',
+        swarmArchitectureVersion: 'zero-swarm-v1',
         patientZeroAgentId: 'zero',
         simulatedPlayer: { enabled: false, profile: 'casual-cleaner' },
       },

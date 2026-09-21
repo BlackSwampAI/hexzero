@@ -4,11 +4,11 @@ import {
   archivedAppliedScenarioSchema,
   assignBehavior,
   behaviorConfigurationSchema,
+  experimentManifestSchema,
   worldSetupPreviewResponseSchema,
   worldSetupRequestSchema,
   WORLD_SCENARIO_LIMITS,
-  AGENT_DECISION_CONTRACT_VERSION,
-  LEGACY_AGENT_DECISION_CONTRACT_VERSION,
+  SWARM_PLANNER_CONTRACT_VERSION,
 } from './index';
 
 const roster = [
@@ -55,7 +55,7 @@ const request = {
 describe('scenario contracts', () => {
   it('defaults safe virtual tick bounds and rejects inverted bounds', () => {
     const parsed = worldSetupRequestSchema.parse(request);
-    expect(parsed.cognitionMode).toBe('legacy-multi-agent');
+    expect(parsed.swarmArchitectureVersion).toBe('zero-swarm-v1');
     expect(parsed.minimumTickIntervalMinutes).toBe(5);
     expect(parsed.maximumTickIntervalMinutes).toBe(10);
     expect(
@@ -287,7 +287,7 @@ describe('scenario contracts', () => {
     expect(
       worldSetupRequestSchema.safeParse({
         ...request,
-        decisionContractVersion: LEGACY_AGENT_DECISION_CONTRACT_VERSION,
+        swarmPlannerContractVersion: 'text-flat-json-v8',
       }).success,
     ).toBe(false);
     expect(
@@ -297,8 +297,51 @@ describe('scenario contracts', () => {
         areaSquareKilometers: 0.1,
         startingCells: ['8928308280fffff'],
         setupWarnings: [],
-      }).decisionContractVersion,
-    ).toBe(AGENT_DECISION_CONTRACT_VERSION);
+      }).swarmPlannerContractVersion,
+    ).toBe(SWARM_PLANNER_CONTRACT_VERSION);
+  });
+
+  it('normalizes retired cognition and decision attribution only for historical scenarios', () => {
+    const current = appliedScenarioSchema.parse({
+      ...worldSetupRequestSchema.parse(request),
+      exactCellCount: 1,
+      areaSquareKilometers: 0.1,
+      startingCells: ['8928308280fffff'],
+      setupWarnings: [],
+    });
+    const historical = { ...current } as Record<string, unknown>;
+    delete historical.swarmArchitectureVersion;
+    delete historical.swarmPlannerContractVersion;
+    historical.cognitionMode = 'legacy-multi-agent';
+    historical.decisionContractVersion = 'text-flat-json-v8';
+    expect(archivedAppliedScenarioSchema.parse(historical)).toMatchObject({
+      swarmArchitectureVersion: 'zero-swarm-v1',
+      swarmPlannerContractVersion: SWARM_PLANNER_CONTRACT_VERSION,
+      historicalCognitionMode: 'legacy-multi-agent',
+      historicalDecisionContractVersion: 'text-flat-json-v8',
+    });
+    expect(worldSetupRequestSchema.safeParse(historical).success).toBe(false);
+  });
+
+  it('carries top-level historical decision attribution into the archived scenario', () => {
+    const current = appliedScenarioSchema.parse({
+      ...worldSetupRequestSchema.parse(request),
+      exactCellCount: 1,
+      areaSquareKilometers: 0.1,
+      startingCells: ['8928308280fffff'],
+      setupWarnings: [],
+    });
+    const parsed = experimentManifestSchema.parse({
+      id: '128f3f38-6b7d-4db7-9e95-751b4ce2681e',
+      startedAt: '2026-08-13T12:00:00.000Z',
+      providerMode: 'openrouter',
+      decisionContractVersion: 'text-flat-json-v8',
+      scenario: current,
+    });
+    expect(parsed.historicalDecisionContractVersion).toBe('text-flat-json-v8');
+    expect(parsed.scenario?.historicalDecisionContractVersion).toBe(
+      'text-flat-json-v8',
+    );
   });
 
   it('preserves null only for strict archived applied scenarios with common refinements', () => {

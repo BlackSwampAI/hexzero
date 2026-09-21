@@ -26,7 +26,6 @@ describe('runLiveComparison admission guard', () => {
     const providers = {
       createPlanner,
       createReflex: vi.fn(),
-      createLegacy: vi.fn(),
     } as unknown as LiveComparisonProviders;
 
     await expect(
@@ -40,7 +39,6 @@ describe('runLiveComparison admission guard', () => {
     const providers = {
       createPlanner,
       createReflex: vi.fn(),
-      createLegacy: vi.fn(),
     } as unknown as LiveComparisonProviders;
 
     await expect(

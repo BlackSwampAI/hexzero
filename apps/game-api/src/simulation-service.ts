@@ -1,22 +1,14 @@
 import { gridDisk, gridDistance } from 'h3-js';
 import {
-  AgentProviderError,
   SwarmPlannerError,
-  dispatchTickDecisions,
   type ReflexProvider,
   type SwarmPlanner,
-  type AgentProvider,
-  type ProviderDecision,
 } from '@hexzero/agent-runtime';
 import {
   agentIdSchema,
-  appliedScenarioSchema,
+  archivedAppliedScenarioSchema,
   assignBehavior,
   behaviorConfigurationSchema,
-  agentObservationSchema,
-  agentTurnRecordSchema,
-  communicationIntentSchema,
-  diplomacyIntentSchema,
   experimentIdSchema,
   experimentExportDocumentSchema,
   experimentExportPreviewSchema,
@@ -30,7 +22,6 @@ import {
   RECENT_ZERO_STRATEGIC_EVENT_LIMIT,
   PERSONALITY_MAX_LENGTH,
   OPENROUTER_PROVIDER_TIMEOUT_MS,
-  OPENROUTER_429_FALLBACK_BACKOFF_MS,
   WORLD_SCENARIO_LIMITS,
   PATIENT_ZERO_DIPLOMACY_SUMMARY_LIMITS,
   PATIENT_ZERO_PLAYER_THREAT_FEED_LIMIT,
@@ -44,14 +35,12 @@ import {
   simulationSnapshotSchema,
   type Agent,
   type AgentId,
-  type AgentObservation,
   type AgentGoalState,
   type GoalRevisionResult,
   type RequestedGoalRevision,
   type MemoryEntry,
   type MemoryOperationResult,
   type RequestedMemoryOperation,
-  type AgentTurnRecord,
   type ExperimentExportDocument,
   type ExperimentExportPreview,
   type ExperimentId,
@@ -59,7 +48,6 @@ import {
   type BehaviorConfiguration,
   type CompatibleModel,
   type ModelId,
-  type ModelAttempt,
   type ExperimentConfigurationEvent,
   type H3Cell,
   type ProviderFailure,
@@ -84,8 +72,6 @@ import {
   type WorldSetupRequest,
 } from '@hexzero/shared';
 import {
-  applyCommunication,
-  applyDiplomacy,
   applyWorldAction,
   createDevelopmentWorld,
   createDefaultAppliedScenario,
@@ -93,12 +79,9 @@ import {
   defaultWorldSetupRequest,
   previewWorldSetup,
   DEVELOPMENT_AGENT_BLUEPRINTS,
-  getCaptureEligibility,
   getAgentAlliance,
   getEffectiveAgentColor,
-  getProposalTargetEligibility,
   physicalDistanceKm,
-  expireAllianceProposals,
   seededTickIntervalMinutes,
   seededTickOrder,
   advanceSimulatedPlayer,
@@ -118,7 +101,6 @@ import {
   boundedRecentCaptures,
   localPressureAtCell,
 } from './swarm-pressure';
-import { ObservationHistory } from './observation-history';
 import { AttemptAccounting } from './attempt-accounting';
 import {
   chooseReflexWorldAction,
@@ -297,15 +279,6 @@ function captureAlertsFrom(
     }));
 }
 
-interface PendingFailedTurn {
-  turnNumber: number;
-  agentId: AgentId;
-  startedAt: string;
-  observation: AgentObservation;
-  failure: ProviderFailure;
-  attempts: ModelAttempt[];
-}
-
 export class SimulationConflictError extends Error {
   constructor(message: string) {
     super(message);
@@ -340,10 +313,8 @@ export class SimulationValidationError extends Error {
 }
 
 export interface SimulationServiceOptions {
-  provider: AgentProvider;
-  /** Separate strategic and reflex cognition used only by zero-swarm-v1. */
-  swarmPlanner?: SwarmPlanner;
-  reflexProvider?: ReflexProvider;
+  swarmPlanner: SwarmPlanner;
+  reflexProvider: ReflexProvider;
   /**
    * Offline comparison seam: choose one opaque, already legal candidate without
    * calling a reflex provider. Production zero-swarm execution leaves this unset.
@@ -354,42 +325,32 @@ export interface SimulationServiceOptions {
   now?: () => string;
   createEventId?: () => string;
   createExperimentId?: () => string;
-  createAllianceId?: () => string;
-  createProposalId?: () => string;
   experimentRetentionLimit?: number;
 }
 
 export class SimulationService {
-  readonly #provider: AgentProvider;
-  readonly #swarmPlanner: SwarmPlanner | undefined;
-  readonly #reflexProvider: ReflexProvider | undefined;
+  readonly #swarmPlanner: SwarmPlanner;
+  readonly #reflexProvider: ReflexProvider;
   readonly #deterministicWorkerCandidateSelector:
     ((compiled: CompiledReflexObservation) => string) | undefined;
   readonly #now: () => string;
   readonly #createEventId: () => string;
   readonly #createExperimentId: () => string;
-  readonly #createAllianceId: () => string;
-  readonly #createProposalId: () => string;
   readonly #experimentRetentionLimit: number;
   #state: WorldState;
-  #turns: AgentTurnRecord[] = [];
-  #completedTurnCount = 0;
   #completedSwarmDecisionCount = 0;
   #completedTickCount = 0;
   #virtualTime = RESET_GENERATED_AT;
   #lastTickIntervalMinutes: number | null = null;
   #resolutionOrder: AgentId[] = [];
-  #cursor = 0;
   #busy = false;
   #verificationBusy = false;
   #status: SimulationStatus;
   #activeAgentId: AgentId | null = null;
   #activeRequestController: AbortController | null = null;
   #cancellationRequested = false;
-  #pendingFailedTurn: PendingFailedTurn | null = null;
   #experimentId: ExperimentId;
   #experimentStartedAt: string;
-  #experimentTurns: AgentTurnRecord[] = [];
   #initialExperimentAgents: Agent[];
   #initialExperimentWorld: SimulationSnapshot['world'];
   #configurationEvents: ExperimentConfigurationEvent[] = [];
@@ -402,7 +363,6 @@ export class SimulationService {
   #agentGoals = new Map<AgentId, AgentGoalState>();
   #agentMemories = new Map<AgentId, MemoryEntry[]>();
   #simulatedPlayerEvents: SimulatedPlayerEvent[] = [];
-  #observationHistory: ObservationHistory;
   #attemptAccounting: AttemptAccounting;
   #swarmTicks: SwarmTickRecord[] = [];
   #experimentSwarmTicks: SwarmTickRecord[] = [];
@@ -412,15 +372,12 @@ export class SimulationService {
   #lastSwarmPositions = new Map<AgentId, H3Cell>();
 
   constructor({
-    provider,
     swarmPlanner,
     reflexProvider,
     deterministicWorkerCandidateSelector,
     now = () => new Date().toISOString(),
     createEventId = () => crypto.randomUUID(),
     createExperimentId = () => crypto.randomUUID(),
-    createAllianceId = () => crypto.randomUUID(),
-    createProposalId = () => crypto.randomUUID(),
     experimentRetentionLimit = DEFAULT_EXPERIMENT_RETENTION,
   }: SimulationServiceOptions) {
     if (
@@ -428,7 +385,6 @@ export class SimulationService {
       experimentRetentionLimit < 1
     )
       throw new Error('Experiment retention limit must be a positive integer.');
-    this.#provider = provider;
     this.#swarmPlanner = swarmPlanner;
     this.#reflexProvider = reflexProvider;
     this.#deterministicWorkerCandidateSelector =
@@ -436,14 +392,14 @@ export class SimulationService {
     this.#now = now;
     this.#createEventId = createEventId;
     this.#createExperimentId = createExperimentId;
-    this.#createAllianceId = createAllianceId;
-    this.#createProposalId = createProposalId;
     this.#experimentRetentionLimit = experimentRetentionLimit;
     this.#state = toWorldState(
       createDevelopmentWorld({ generatedAt: RESET_GENERATED_AT }),
     );
-    this.#observationHistory = new ObservationHistory(this.#state.events);
-    this.#status = provider.configured ? 'paused' : 'configuration-error';
+    this.#status =
+      swarmPlanner.configured && reflexProvider.configured
+        ? 'paused'
+        : 'configuration-error';
     this.#experimentId = experimentIdSchema.parse(this.#createExperimentId());
     this.#experimentStartedAt = this.#now();
     this.#initialExperimentAgents = structuredClone([
@@ -454,10 +410,9 @@ export class SimulationService {
       ...this.#state.agents.keys(),
     ]);
     const scriptedModel =
-      (provider.model as ModelId | undefined) ??
-      (provider.mode === 'scripted-test'
+      swarmPlanner.mode === 'scripted-swarm-test'
         ? ('deterministic-script' as ModelId)
-        : null);
+        : null;
     this.#modelConfiguration = experimentModelConfigurationSchema.parse({
       globalModelId: scriptedModel,
       globalReasoningProfile: 'provider-default',
@@ -489,46 +444,31 @@ export class SimulationService {
 
   getSnapshot(): SimulationSnapshot {
     const agents = [...this.#state.agents.values()];
-    const next = agents[this.#cursor % agents.length];
-    const droppedRecords =
-      this.#completedTurnCount - this.#experimentTurns.length;
     return simulationSnapshotSchema.parse({
       world: this.#worldSnapshot(),
       scenario: this.#scenario,
-      turnNumber: this.#completedTurnCount,
       tickNumber: this.#completedTickCount,
       virtualTime: this.#virtualTime,
       lastTickIntervalMinutes: this.#lastTickIntervalMinutes,
       resolutionOrder: this.#resolutionOrder,
-      nextAgentId: next?.id ?? null,
       activeAgentId: this.#activeAgentId,
       cancellationRequested: this.#cancellationRequested,
-      pendingFailedTurn: this.#pendingFailedTurn
-        ? {
-            turnNumber: this.#pendingFailedTurn.turnNumber,
-            agentId: this.#pendingFailedTurn.agentId,
-            failure: this.#pendingFailedTurn.failure,
-            attempts: this.#pendingFailedTurn.attempts,
-          }
-        : null,
       status: this.#status,
-      providerMode: this.#provider.mode,
-      providerConfigured: this.#provider.configured,
-      ...(this.#scenario.cognitionMode === 'zero-swarm-v1' &&
-      this.#swarmPlanner &&
-      this.#reflexProvider
-        ? {
-            swarmProviderStatus: {
-              plannerMode: this.#swarmPlanner.mode,
-              plannerConfigured: this.#swarmPlanner.configured,
-              reflexMode: this.#reflexProvider.mode,
-              reflexConfigured: this.#reflexProvider.configured,
-              ...(this.#reflexProvider.model
-                ? { reflexModel: this.#reflexProvider.model }
-                : {}),
-            },
-          }
-        : {}),
+      providerMode:
+        this.#swarmPlanner.mode === 'openrouter-swarm'
+          ? 'openrouter'
+          : 'scripted-test',
+      providerConfigured:
+        this.#swarmPlanner.configured && this.#reflexProvider.configured,
+      swarmProviderStatus: {
+        plannerMode: this.#swarmPlanner.mode,
+        plannerConfigured: this.#swarmPlanner.configured,
+        reflexMode: this.#reflexProvider.mode,
+        reflexConfigured: this.#reflexProvider.configured,
+        ...(this.#reflexProvider.model
+          ? { reflexModel: this.#reflexProvider.model }
+          : {}),
+      },
       modelConfiguration: this.#modelConfiguration,
       ...(agents.length > 0
         ? { behaviorConfiguration: this.#behaviorConfiguration }
@@ -542,19 +482,10 @@ export class SimulationService {
         agentId: id,
         entries: structuredClone(this.#agentMemories.get(id) ?? []),
       })),
-      ...(this.#scenario.cognitionMode === 'zero-swarm-v1'
-        ? { swarmTicks: structuredClone(this.#swarmTicks) }
-        : {}),
-      turns: this.#turns,
+      swarmTicks: structuredClone(this.#swarmTicks),
       experiment: {
         id: this.#experimentId,
         startedAt: this.#experimentStartedAt,
-        totalCompletedTurns: this.#completedTurnCount,
-        retainedTurns: this.#experimentTurns.length,
-        firstRetainedTurn: this.#experimentTurns[0]?.turnNumber,
-        lastRetainedTurn: this.#experimentTurns.at(-1)?.turnNumber,
-        droppedRecords,
-        complete: droppedRecords === 0,
         attemptAccounting: this.#attemptAccounting.snapshot(),
         metrics: this.#experimentMetrics.snapshot(agents.map(({ id }) => id)),
         currentTerritory: this.#territoryScoreboard(),
@@ -578,18 +509,14 @@ export class SimulationService {
     this.#state = toWorldState(
       createWorldFromScenario(this.#scenario, RESET_GENERATED_AT),
     );
-    this.#turns = [];
-    this.#completedTurnCount = 0;
     this.#completedSwarmDecisionCount = 0;
     this.#completedTickCount = 0;
     this.#virtualTime = RESET_GENERATED_AT;
     this.#lastTickIntervalMinutes = null;
     this.#resolutionOrder = [];
-    this.#cursor = 0;
     this.#activeAgentId = null;
     this.#activeRequestController = null;
     this.#cancellationRequested = false;
-    this.#pendingFailedTurn = null;
     this.#agentGoals = new Map();
     this.#agentMemories = new Map();
     this.#swarmTicks = [];
@@ -600,10 +527,8 @@ export class SimulationService {
     this.#lastSwarmPositions = new Map();
     this.#experimentId = experimentIdSchema.parse(this.#createExperimentId());
     this.#experimentStartedAt = this.#now();
-    this.#experimentTurns = [];
     this.#configurationEvents = [];
     this.#simulatedPlayerEvents = [];
-    this.#observationHistory = new ObservationHistory(this.#state.events);
     this.#initialExperimentAgents = structuredClone([
       ...this.#state.agents.values(),
     ]);
@@ -624,13 +549,9 @@ export class SimulationService {
       locked: false,
     };
     this.#status =
-      this.#scenario.cognitionMode === 'zero-swarm-v1' &&
-      this.#swarmPlanner &&
-      this.#reflexProvider
+      this.#swarmPlanner.configured && this.#reflexProvider.configured
         ? 'paused'
-        : this.#provider.configured
-          ? 'paused'
-          : 'configuration-error';
+        : 'configuration-error';
     return this.getSnapshot();
   }
 
@@ -737,18 +658,14 @@ export class SimulationService {
     };
     this.#modelConfiguration = nextModels;
     this.#behaviorConfiguration = nextBehavior;
-    this.#turns = [];
-    this.#completedTurnCount = 0;
     this.#completedSwarmDecisionCount = 0;
     this.#completedTickCount = 0;
     this.#virtualTime = RESET_GENERATED_AT;
     this.#lastTickIntervalMinutes = null;
     this.#resolutionOrder = [];
-    this.#cursor = 0;
     this.#activeAgentId = null;
     this.#activeRequestController = null;
     this.#cancellationRequested = false;
-    this.#pendingFailedTurn = null;
     this.#agentGoals = new Map();
     this.#agentMemories = new Map();
     this.#swarmTicks = [];
@@ -759,10 +676,8 @@ export class SimulationService {
     this.#lastSwarmPositions = new Map();
     this.#experimentId = experimentIdSchema.parse(this.#createExperimentId());
     this.#experimentStartedAt = this.#now();
-    this.#experimentTurns = [];
     this.#configurationEvents = [];
     this.#simulatedPlayerEvents = [];
-    this.#observationHistory = new ObservationHistory(this.#state.events);
     this.#initialExperimentAgents = structuredClone([
       ...this.#state.agents.values(),
     ]);
@@ -775,20 +690,16 @@ export class SimulationService {
       this.#experimentRetentionLimit,
     );
     this.#status =
-      this.#scenario.cognitionMode === 'zero-swarm-v1' &&
-      this.#swarmPlanner &&
-      this.#reflexProvider
+      this.#swarmPlanner.configured && this.#reflexProvider.configured
         ? 'paused'
-        : this.#provider.configured
-          ? 'paused'
-          : 'configuration-error';
+        : 'configuration-error';
     return this.getSnapshot();
   }
 
   setCompatibleModels(models: CompatibleModel[]): void {
     this.#availableModels = new Map(models.map((model) => [model.id, model]));
     this.#availableModelIds = new Set(models.map(({ id }) => id));
-    if (this.#provider.mode === 'scripted-test')
+    if (this.#swarmPlanner.mode === 'scripted-swarm-test')
       this.#availableModelIds.add('deterministic-script' as ModelId);
   }
 
@@ -853,7 +764,7 @@ export class SimulationService {
   }
 
   updateBehaviorConfiguration(input: unknown): SimulationSnapshot {
-    if (this.#busy || this.#verificationBusy || this.#completedTurnCount > 0)
+    if (this.#busy || this.#verificationBusy || this.#completedTickCount > 0)
       throw new SimulationConflictError(
         'Behavior is locked after the experiment begins. Reset to create new assignments.',
       );
@@ -964,7 +875,7 @@ export class SimulationService {
       (version === 9 || version === 10) &&
       typeof experiment?.scenario === 'object' &&
       experiment.scenario !== null
-        ? (appliedScenarioSchema.safeParse(experiment.scenario).data
+        ? (archivedAppliedScenarioSchema.safeParse(experiment.scenario).data
             ?.patientZeroAgentId ?? null)
         : null;
     const knownAgents = new Set(this.#state.agents.keys());
@@ -1008,7 +919,7 @@ export class SimulationService {
         );
       this.#behaviorConfiguration = {
         ...structuredClone(importedBehavior.data),
-        locked: this.#completedTurnCount > 0,
+        locked: this.#completedTickCount > 0,
       };
     }
     this.#recordModelConfigurationChanges(
@@ -1184,13 +1095,19 @@ export class SimulationService {
         'invalid_model_configuration',
         'The selected reasoning profile is not advertised by this model.',
       );
-    const agents = [...this.#state.agents.values()];
-    const agent = agents[this.#cursor % agents.length];
-    if (!agent) throw new Error('The development world has no agents.');
+    const zero = this.#state.agents.get(this.#scenario.patientZeroAgentId);
+    if (!zero) throw new Error('The development world has no Agent Zero.');
     this.#verificationBusy = true;
     try {
-      const result = await this.#provider.decide(
-        structuredClone(this.#buildObservation(agent.id)),
+      const result = await this.#swarmPlanner.plan(
+        this.#buildZeroStrategicObservation(
+          this.#state,
+          zero.id,
+          this.#completedTickCount + 1,
+          this.#virtualTime,
+          [],
+          ['initial'],
+        ),
         modelId,
         { reasoningProfile },
       );
@@ -1200,399 +1117,11 @@ export class SimulationService {
     }
   }
 
-  async executeNextTurn(): Promise<AgentTurnRecord> {
-    if (this.#scenario.cognitionMode === 'zero-swarm-v1')
-      throw new SimulationConflictError(
-        'Zero-swarm execution supports whole simultaneous ticks only.',
-      );
-    if (this.#completedTickCount > 0)
-      throw new SimulationConflictError(
-        'Legacy sequential turns cannot run after a simultaneous tick.',
-      );
-    if (this.#pendingFailedTurn)
-      throw new SimulationConflictError(
-        'The failed turn must be retried or skipped before starting another turn.',
-      );
-    return this.#executeTurnAttempt('initial');
-  }
-
-  /** Execute one atomic simultaneous tick for every active agent. */
-  async executeNextTick(): Promise<AgentTurnRecord[]> {
-    if (this.#scenario.cognitionMode === 'zero-swarm-v1')
-      return this.#executeZeroSwarmTick();
+  /** Execute one atomic Zero strategy → worker reflex → world resolution tick. */
+  async executeNextTick(): Promise<SwarmTickRecord | null> {
     if (this.#busy || this.#verificationBusy)
       throw new SimulationConflictError(
         'A simulation tick is already in progress.',
-      );
-    if (
-      this.#pendingFailedTurn ||
-      (this.#completedTurnCount > 0 && this.#completedTickCount === 0)
-    )
-      throw new SimulationConflictError(
-        'A simultaneous tick cannot start inside a legacy sequential experiment. Reset first.',
-      );
-    if (this.#isTerminal())
-      throw new SimulationConflictError(
-        'This simulation has reached a terminal infection outcome. Reset before running another tick.',
-      );
-    const tickNumber = this.#completedTickCount + 1;
-    const preTickState = this.#state;
-    const interval = seededTickIntervalMinutes(
-      this.#scenario.worldSeed,
-      tickNumber,
-      this.#scenario.minimumTickIntervalMinutes,
-      this.#scenario.maximumTickIntervalMinutes,
-    );
-    const virtualTime = new Date(
-      new Date(this.#virtualTime).getTime() + interval * 60_000,
-    ).toISOString();
-    const playerAdvance = advanceSimulatedPlayer(
-      preTickState,
-      this.#scenario.simulatedPlayer.seed,
-      tickNumber,
-      { createEventId: this.#createEventId, now: () => virtualTime },
-    );
-    const agents = [...playerAdvance.state.agents.values()];
-    if (!agents.length) {
-      this.#commitTerminalPlayerTick(
-        playerAdvance,
-        tickNumber,
-        virtualTime,
-        interval,
-      );
-      return [];
-    }
-    const unresolved = agents
-      .map(({ id }) => this.#resolvedModel(id))
-      .filter(({ available }) => !available);
-    if (unresolved.length)
-      throw new SimulationValidationError(
-        'models_unavailable',
-        'Every agent requires an available compatible model before the experiment can run.',
-      );
-    if (!this.#attemptAccounting.reserve(agents.length)) {
-      this.#status = 'budget-exhausted';
-      throw new SimulationValidationError(
-        'experiment_budget_exhausted',
-        'The experiment does not have enough provider-attempt or credit-admission capacity for a complete tick.',
-      );
-    }
-
-    const order = seededTickOrder(
-      agents.map(({ id }) => id),
-      this.#scenario.worldSeed,
-      tickNumber,
-    );
-    // Observation construction is synchronous. Temporarily point it at the
-    // uncommitted candidate so cancellation cannot expose or persist a partial
-    // player interval while every agent still observes the same frozen state.
-    this.#state = playerAdvance.state;
-    let observations: Map<AgentId, AgentObservation>;
-    try {
-      observations = new Map(
-        agents.map(({ id }) => [
-          id,
-          structuredClone(this.#buildObservation(id, playerAdvance.events)),
-        ]),
-      );
-    } catch (error) {
-      this.#attemptAccounting.releaseReservations();
-      throw error;
-    } finally {
-      this.#state = preTickState;
-    }
-    const controller = new AbortController();
-    this.#busy = true;
-    this.#activeRequestController = controller;
-    this.#activeAgentId = null;
-    this.#cancellationRequested = false;
-    this.#status = 'waiting-for-model';
-    const deadlineAtMs = Date.now() + OPENROUTER_PROVIDER_TIMEOUT_MS;
-    let dispatched: Awaited<ReturnType<typeof dispatchTickDecisions>> = [];
-    try {
-      dispatched = await dispatchTickDecisions(
-        this.#provider,
-        agents.map(({ id }) => {
-          const resolved = this.#resolvedModel(id);
-          return {
-            agentId: id,
-            observation: observations.get(id)!,
-            modelId: resolved.modelId!,
-            reasoningProfile: resolved.reasoningProfile,
-          };
-        }),
-        {
-          concurrency: Math.min(8, agents.length),
-          deadlineAtMs,
-          signal: controller.signal,
-          now: this.#now,
-          deferSuccessfulFinalization: true,
-          beginAttempt: (job, kind, attemptStartedAt) => {
-            const intendedTurnNumber =
-              this.#completedTurnCount +
-              Math.max(1, order.indexOf(job.agentId) + 1);
-            const details = {
-              agentId: job.agentId,
-              intendedTurnNumber,
-              intendedTickNumber: tickNumber,
-              kind,
-              startedAt: attemptStartedAt,
-              modelId: job.modelId,
-              reasoningProfile: job.reasoningProfile,
-            };
-            const permitId =
-              kind === 'initial'
-                ? this.#attemptAccounting.startReserved(details)
-                : this.#attemptAccounting.startAdditional(details);
-            return permitId === null
-              ? null
-              : (completion) =>
-                  this.#attemptAccounting.finalize(permitId, completion);
-          },
-        },
-      );
-      if (controller.signal.aborted) throw new SimulationTurnCancelledError();
-      const byAgent = new Map(
-        dispatched.map((result) => [result.agentId, result]),
-      );
-      const context = {
-        now: () => virtualTime,
-        createEventId: this.#createEventId,
-        createAllianceId: this.#createAllianceId,
-        createProposalId: this.#createProposalId,
-        communicationRangeKm: this.#scenario.communicationRangeKm,
-        patientZeroAgentId: this.#scenario.patientZeroAgentId,
-        tickNumber,
-        diplomacyRangeState: playerAdvance.state,
-      };
-      const recordOrdinal = new Map(
-        order.map((agentId, index) => [
-          agentId,
-          this.#completedTurnCount + index + 1,
-        ]),
-      );
-      let state = playerAdvance.state;
-      const actionResults = new Map<
-        AgentId,
-        ReturnType<typeof applyWorldAction>['result']
-      >();
-      for (const agentId of order) {
-        const result = byAgent.get(agentId)!;
-        if (result.outcome === 'lost-tick') continue;
-        const applied = applyWorldAction(
-          state,
-          agentId,
-          result.decision.decision.worldAction,
-          context,
-        );
-        state = applied.state;
-        actionResults.set(agentId, applied.result);
-      }
-      const communicationResults = new Map<
-        AgentId,
-        ReturnType<typeof applyCommunication>['result']
-      >();
-      for (const agentId of order) {
-        const result = byAgent.get(agentId)!;
-        if (result.outcome === 'lost-tick') continue;
-        const applied = applyCommunication(
-          state,
-          playerAdvance.state,
-          agentId,
-          result.decision.decision.communication,
-          context,
-        );
-        state = applied.state;
-        communicationResults.set(agentId, applied.result);
-      }
-      const diplomacyResults = new Map<
-        AgentId,
-        ReturnType<typeof applyDiplomacy>['result']
-      >();
-      const diplomacyEvents = new Map<AgentId, AllianceEvent[]>();
-      for (const agentId of order) {
-        const result = byAgent.get(agentId)!;
-        if (result.outcome === 'lost-tick') continue;
-        const before = state;
-        const applied = applyDiplomacy(
-          state,
-          agentId,
-          result.decision.decision.diplomacy,
-          recordOrdinal.get(agentId)!,
-          context,
-        );
-        state = applied.state;
-        diplomacyResults.set(agentId, applied.result);
-        diplomacyEvents.set(agentId, allianceEventsSince(before, state));
-      }
-      const beforeExpiration = state;
-      state = expireAllianceProposals(
-        state,
-        recordOrdinal.get(order.at(-1)!)!,
-        context,
-      );
-      const expirationEvents = allianceEventsSince(beforeExpiration, state);
-      if (expirationEvents.length) {
-        const finalAgentId = order.at(-1)!;
-        diplomacyEvents.set(finalAgentId, [
-          ...(diplomacyEvents.get(finalAgentId) ?? []),
-          ...expirationEvents,
-        ]);
-      }
-      const committedObservationEvents = state.events.slice(
-        preTickState.events.length,
-      );
-      state = {
-        ...state,
-        events: state.events.slice(-MAX_WORLD_EVENT_HISTORY),
-      };
-      const nextGoals = new Map(this.#agentGoals);
-      const goalResults = new Map<AgentId, GoalRevisionResult>();
-      const nextMemories = new Map(this.#agentMemories);
-      const memoryResults = new Map<AgentId, MemoryOperationResult>();
-      for (const agentId of order) {
-        const result = byAgent.get(agentId)!;
-        if (result.outcome === 'lost-tick') continue;
-        const applied = applyGoalRevision(
-          this.#agentGoals.get(agentId),
-          result.decision.decision.goalRevision,
-          tickNumber,
-        );
-        goalResults.set(agentId, applied.result);
-        if (applied.goal) nextGoals.set(agentId, applied.goal);
-        else nextGoals.delete(agentId);
-        const appliedMemory = applyMemoryOperation(
-          this.#agentMemories.get(agentId) ?? [],
-          result.decision.decision.memoryOperation,
-          agentId,
-          tickNumber,
-        );
-        memoryResults.set(agentId, appliedMemory.result);
-        nextMemories.set(agentId, appliedMemory.entries);
-      }
-
-      const records = order.map((agentId, index) => {
-        const result = byAgent.get(agentId)!;
-        const base = {
-          turnNumber: this.#completedTurnCount + index + 1,
-          tickNumber,
-          tickPosition: index + 1,
-          virtualTime,
-          tickIntervalMinutes: interval,
-          agentId,
-          startedAt: result.attempts[0]?.startedAt ?? this.#now(),
-          completedAt: result.attempts.at(-1)?.completedAt ?? this.#now(),
-          observation: observations.get(agentId)!,
-          behavior: this.#behaviorFor(agentId),
-          modelAttempts: result.attempts,
-          allianceEvents: diplomacyEvents.get(agentId) ?? [],
-        };
-        if (result.outcome === 'lost-tick')
-          return agentTurnRecordSchema.parse({
-            ...base,
-            outcome: 'lost-tick',
-            failure: result.failure,
-            provider: result.attempts.at(-1)?.provider,
-          });
-        const decision = result.decision.decision;
-        const actionResult = actionResults.get(agentId)!;
-        return agentTurnRecordSchema.parse({
-          ...base,
-          outcome: actionResult.accepted ? 'accepted' : 'rejected',
-          worldAction: decision.worldAction,
-          communication: communicationIntentSchema.safeParse(
-            decision.communication,
-          ).data,
-          diplomacy: diplomacyIntentSchema.safeParse(decision.diplomacy).data,
-          goalRevision: decision.goalRevision,
-          goalRevisionResult: goalResults.get(agentId),
-          memoryOperation: decision.memoryOperation,
-          memoryOperationResult: memoryResults.get(agentId),
-          summary: decision.summary,
-          worldActionResult: actionResult,
-          communicationResult: communicationResults.get(agentId)!,
-          diplomacyResult: diplomacyResults.get(agentId)!,
-          provider: result.decision.metadata,
-        });
-      });
-      if (controller.signal.aborted) throw new SimulationTurnCancelledError();
-      this.#commitCompletedTick(
-        records,
-        state,
-        tickNumber,
-        virtualTime,
-        interval,
-        order,
-        nextGoals,
-        nextMemories,
-        playerAdvance.events,
-        committedObservationEvents,
-      );
-      for (const result of dispatched)
-        if (result.outcome === 'completed') result.finalizeAttempt?.();
-      this.#status = this.#attemptAccounting.snapshot().exhausted
-        ? 'budget-exhausted'
-        : 'paused';
-      return records;
-    } catch (error) {
-      const cancelledAttempt =
-        controller.signal.aborted ||
-        error instanceof SimulationTurnCancelledError;
-      const failure: ProviderFailure = cancelledAttempt
-        ? {
-            code: 'cancelled',
-            message: 'The model request was cancelled by the operator.',
-            retryable: false,
-          }
-        : {
-            code: 'simulation-validation',
-            message: 'The simultaneous tick could not be committed safely.',
-            retryable: true,
-          };
-      for (const result of dispatched)
-        if (result.outcome === 'completed') {
-          if (cancelledAttempt) result.finalizeAttempt?.('completed');
-          else result.finalizeAttempt?.('provider-error', failure);
-        }
-      if (
-        controller.signal.aborted ||
-        (error &&
-          typeof error === 'object' &&
-          'failure' in error &&
-          (error as { failure?: ProviderFailure }).failure?.code ===
-            'cancelled')
-      ) {
-        this.#status = 'paused';
-        throw new SimulationTurnCancelledError();
-      }
-      throw error;
-    } finally {
-      this.#attemptAccounting.releaseReservations();
-      this.#busy = false;
-      this.#activeRequestController = null;
-      this.#activeAgentId = null;
-      this.#cancellationRequested = false;
-      if (this.#status === 'waiting-for-model')
-        this.#status = this.#attemptAccounting.snapshot().exhausted
-          ? 'budget-exhausted'
-          : 'paused';
-      if (this.#attemptAccounting.snapshot().exhausted)
-        this.#status = 'budget-exhausted';
-    }
-  }
-
-  /**
-   * The swarm path intentionally has no AgentTurnRecord: its safe telemetry is
-   * a SwarmTickRecord and it never invokes legacy social cognition.
-   */
-  async #executeZeroSwarmTick(): Promise<AgentTurnRecord[]> {
-    if (this.#busy || this.#verificationBusy)
-      throw new SimulationConflictError(
-        'A simulation tick is already in progress.',
-      );
-    if (!this.#swarmPlanner || !this.#reflexProvider)
-      throw new SimulationConflictError(
-        'Zero-swarm execution requires a planner and reflex provider.',
       );
     if (this.#isTerminal())
       throw new SimulationConflictError(
@@ -1633,7 +1162,7 @@ export class SimulationService {
         virtualTime,
         interval,
       );
-      return [];
+      return null;
     }
     const resolvedZero = this.#resolvedModel(zero.id);
     if (!resolvedZero.available || !resolvedZero.modelId)
@@ -1912,13 +1441,11 @@ export class SimulationService {
         }),
         ...(signals.length ? { signals } : {}),
       });
-      const observationEvents = state.events.slice(preTickState.events.length);
       this.#state = {
         ...state,
         events: state.events.slice(-MAX_WORLD_EVENT_HISTORY),
       };
       this.#pruneCapturedRosterState();
-      this.#observationHistory.ingest(observationEvents);
       this.#completedTickCount = tickNumber;
       this.#completedSwarmDecisionCount += order.length;
       this.#virtualTime = virtualTime;
@@ -1969,7 +1496,7 @@ export class SimulationService {
       this.#status = this.#attemptAccounting.snapshot().exhausted
         ? 'budget-exhausted'
         : 'paused';
-      return [];
+      return tick;
     } catch (error) {
       if (
         controller.signal.aborted ||
@@ -1991,53 +1518,6 @@ export class SimulationService {
           ? 'budget-exhausted'
           : 'paused';
     }
-  }
-
-  #commitCompletedTick(
-    records: AgentTurnRecord[],
-    state: WorldState,
-    tickNumber: number,
-    virtualTime: string,
-    interval: number,
-    order: AgentId[],
-    goals: Map<AgentId, AgentGoalState>,
-    memories: Map<AgentId, MemoryEntry[]>,
-    playerEvents: SimulatedPlayerEvent[],
-    observationEvents: WorldEvent[],
-  ): void {
-    this.#state = state;
-    this.#pruneCapturedRosterState();
-    this.#observationHistory.ingest(observationEvents);
-    this.#completedTickCount = tickNumber;
-    this.#virtualTime = virtualTime;
-    this.#lastTickIntervalMinutes = interval;
-    this.#resolutionOrder = [...order];
-    this.#agentGoals = new Map(
-      [...goals].filter(([agentId]) => this.#state.agents.has(agentId)),
-    );
-    this.#agentMemories = new Map(
-      [...memories].filter(([agentId]) => this.#state.agents.has(agentId)),
-    );
-    this.#simulatedPlayerEvents = [
-      ...this.#simulatedPlayerEvents,
-      ...structuredClone(playerEvents),
-    ].slice(-this.#experimentRetentionLimit * 2);
-    this.#completedTurnCount =
-      records.at(-1)?.turnNumber ?? this.#completedTurnCount;
-    this.#turns = retainCompleteTickGroups(
-      [...this.#turns, ...records],
-      MAX_TURN_HISTORY,
-    );
-    this.#experimentTurns = retainCompleteTickGroups(
-      [...this.#experimentTurns, ...structuredClone(records)],
-      this.#experimentRetentionLimit,
-    );
-    for (const record of records) this.#experimentMetrics.add(record);
-    this.#behaviorConfiguration = {
-      ...this.#behaviorConfiguration,
-      locked: true,
-    };
-    this.#modelConfiguration = { ...this.#modelConfiguration, locked: false };
   }
 
   #isTerminal(): boolean {
@@ -2064,13 +1544,11 @@ export class SimulationService {
       events: playerAdvance.state.events.slice(-MAX_WORLD_EVENT_HISTORY),
     };
     this.#pruneCapturedRosterState();
-    this.#observationHistory.ingest(playerAdvance.events);
     this.#completedTickCount = tickNumber;
     this.#virtualTime = virtualTime;
     this.#lastTickIntervalMinutes = interval;
     this.#resolutionOrder = [];
     this.#activeAgentId = null;
-    this.#pendingFailedTurn = null;
     this.#simulatedPlayerEvents = [
       ...this.#simulatedPlayerEvents,
       ...structuredClone(playerAdvance.events),
@@ -2111,581 +1589,12 @@ export class SimulationService {
     };
   }
 
-  async retryFailedTurn(
-    kind: 'manual-retry' | 'unattended-retry' = 'manual-retry',
-  ): Promise<AgentTurnRecord> {
-    if (this.#completedTickCount > 0)
-      throw new SimulationConflictError(
-        'Legacy retry is unavailable after a simultaneous tick.',
-      );
-    if (!this.#pendingFailedTurn)
-      throw new SimulationConflictError(
-        'There is no failed turn awaiting a manual retry.',
-      );
-    return this.#executeTurnAttempt(kind);
-  }
-
-  skipFailedTurn(
-    skipKind: 'manual' | 'unattended' = 'manual',
-  ): AgentTurnRecord {
-    if (this.#completedTickCount > 0)
-      throw new SimulationConflictError(
-        'Legacy skip is unavailable after a simultaneous tick.',
-      );
-    if (this.#busy || this.#verificationBusy)
-      throw new SimulationConflictError('A model request is still active.');
-    const pending = this.#pendingFailedTurn;
-    if (!pending)
-      throw new SimulationConflictError(
-        'There is no failed turn awaiting an operator decision.',
-      );
-    const agents = [...this.#state.agents.values()];
-    const record = agentTurnRecordSchema.parse({
-      turnNumber: pending.turnNumber,
-      agentId: pending.agentId,
-      startedAt: pending.startedAt,
-      completedAt: this.#now(),
-      observation: pending.observation,
-      behavior: this.#behaviorFor(pending.agentId),
-      outcome: 'operator-skipped',
-      skipKind,
-      failure: pending.failure,
-      provider: pending.attempts.at(-1)?.provider,
-      modelAttempts: pending.attempts,
-      allianceEvents: [],
-    });
-    this.#pendingFailedTurn = null;
-    this.#commitCompletedTurn(
-      record,
-      this.#state,
-      agents.length,
-      undefined,
-      [],
-    );
-    this.#status = this.#attemptAccounting.snapshot().exhausted
-      ? 'budget-exhausted'
-      : 'paused';
-    return record;
-  }
-
-  async #executeTurnAttempt(
-    attemptKind: 'initial' | 'manual-retry' | 'unattended-retry',
-  ): Promise<AgentTurnRecord> {
-    if (this.#busy || this.#verificationBusy) {
-      throw new SimulationConflictError(
-        'Model execution is already in progress.',
-      );
-    }
-    const agents = [...this.#state.agents.values()];
-    const unresolved = agents
-      .map(({ id }) => this.#resolvedModel(id))
-      .filter(({ available }) => !available);
-    if (unresolved.length)
-      throw new SimulationValidationError(
-        'models_unavailable',
-        'Every agent requires an available compatible model before the experiment can run.',
-      );
-    const pending = this.#pendingFailedTurn;
-    const agent = pending
-      ? agents.find(({ id }) => id === pending.agentId)
-      : agents[this.#cursor % agents.length];
-    if (!agent) throw new Error('The development world has no agents.');
-
-    this.#busy = true;
-    this.#activeAgentId = agent.id;
-    this.#activeRequestController = new AbortController();
-    this.#cancellationRequested = false;
-    this.#status = 'waiting-for-model';
-    const startedAt = pending?.startedAt ?? this.#now();
-    const observation =
-      pending?.observation ?? this.#buildObservation(agent.id);
-    const turnNumber = pending?.turnNumber ?? this.#completedTurnCount + 1;
-    const attemptStartedAt = this.#now();
-    let successfulAttemptStartedAt = attemptStartedAt;
-    let successfulAttemptKind: ModelAttempt['kind'] = attemptKind;
-    const resolvedModel = this.#resolvedModel(agent.id);
-    const selectedModel = resolvedModel.modelId!;
-    let providerResult: ProviderDecision | undefined;
-    let successfulProviderMetadata: ProviderMetadata | undefined;
-    let successfulAccountingPermitId: number | null = null;
-    const attemptHistory = [...(pending?.attempts ?? [])];
-    const deadlineAtMs = Date.now() + OPENROUTER_PROVIDER_TIMEOUT_MS;
-
-    try {
-      const providerObservation = structuredClone(observation);
-
-      const automaticRecoveryAllowed = attemptKind === 'initial';
-      let nextKind: ModelAttempt['kind'] = attemptKind;
-      let validationFeedback: ProviderFailure['validationCodes'] =
-        pending?.failure.validationCodes;
-      for (let automaticCall = 0; automaticCall < 2; automaticCall += 1) {
-        const currentAttemptStartedAt = this.#now();
-        const accountingPermitId = this.#attemptAccounting.startAdditional({
-          agentId: agent.id,
-          intendedTurnNumber: turnNumber,
-          kind: nextKind,
-          startedAt: currentAttemptStartedAt,
-          modelId: selectedModel,
-          reasoningProfile: resolvedModel.reasoningProfile,
-        });
-        if (accountingPermitId === null) {
-          this.#status = 'budget-exhausted';
-          throw new SimulationValidationError(
-            'experiment_budget_exhausted',
-            'The experiment does not have enough provider-attempt or credit-admission capacity.',
-          );
-        }
-        successfulAttemptStartedAt = currentAttemptStartedAt;
-        successfulAttemptKind = nextKind;
-        let accountingMetadata: ProviderMetadata | undefined;
-        let accountingFailure: ProviderFailure | undefined;
-        try {
-          providerResult = await this.#provider.decide(
-            providerObservation,
-            selectedModel,
-            {
-              reasoningProfile: resolvedModel.reasoningProfile,
-              signal: this.#activeRequestController.signal,
-              deadlineAtMs,
-              validationFeedback,
-            },
-          );
-          successfulProviderMetadata = safeRecoveryProviderMetadata(
-            providerResult.metadata,
-            this.#provider.mode,
-            selectedModel,
-          );
-          accountingMetadata = successfulProviderMetadata;
-          if (this.#activeRequestController.signal.aborted)
-            throw new AgentProviderError({
-              code: 'cancelled',
-              message: 'The model request was cancelled by the operator.',
-              retryable: false,
-              model: selectedModel,
-            });
-          break;
-        } catch (error) {
-          const providerError = asProviderError(error);
-          accountingMetadata = providerError.metadata ?? accountingMetadata;
-          if (providerError.failure.code === 'cancelled') {
-            // A response that already returned is completed provider work even
-            // when cancellation prevents the later world commit. Leave its
-            // finalization to the outer rollback boundary.
-            if (!successfulProviderMetadata)
-              accountingFailure = providerError.failure;
-            this.#status = 'paused';
-            throw new SimulationTurnCancelledError();
-          }
-          accountingFailure = providerError.failure;
-          const attemptProvider = providerError.metadata ?? {
-            provider: this.#provider.mode,
-            model: providerError.failure.model ?? selectedModel,
-            latencyMs: providerError.failure.latencyMs ?? 0,
-          };
-          const attempt = {
-            attemptNumber: attemptHistory.length + 1,
-            kind: nextKind,
-            startedAt: currentAttemptStartedAt,
-            completedAt: this.#now(),
-            modelId: selectedModel,
-            reasoningProfile: resolvedModel.reasoningProfile,
-            failure: providerError.failure,
-            provider: attemptProvider,
-          } satisfies ModelAttempt;
-          attemptHistory.push(attempt);
-          const formatFailure = Boolean(
-            providerError.failure.validationCodes?.length,
-          );
-          const transientFailure =
-            providerError.failure.retryable &&
-            (providerError.failure.code === 'network' ||
-              providerError.failure.code === 'timeout' ||
-              providerError.failure.code === 'malformed-response' ||
-              providerError.failure.code === 'unsupported-response' ||
-              (providerError.failure.code === 'provider-http' &&
-                [408, 429, 500, 502, 503, 504].includes(
-                  providerError.failure.httpStatus ?? 0,
-                )));
-          const retryDelayMs = automaticRetryDelayMs(
-            providerError.failure,
-            deadlineAtMs,
-          );
-          const canRetry =
-            automaticRecoveryAllowed &&
-            automaticCall === 0 &&
-            Date.now() < deadlineAtMs &&
-            Date.now() + retryDelayMs < deadlineAtMs &&
-            (formatFailure || transientFailure);
-          if (canRetry) {
-            if (retryDelayMs > 0) {
-              try {
-                await waitForRetryBackoff(
-                  retryDelayMs,
-                  this.#activeRequestController.signal,
-                  selectedModel,
-                );
-              } catch (error) {
-                if (
-                  error instanceof AgentProviderError &&
-                  error.failure.code === 'cancelled'
-                ) {
-                  this.#status = 'paused';
-                  throw new SimulationTurnCancelledError();
-                }
-                throw error;
-              }
-            }
-            validationFeedback = providerError.failure.validationCodes;
-            nextKind = formatFailure
-              ? 'automatic-repair'
-              : 'automatic-transport-retry';
-            continue;
-          }
-          this.#pendingFailedTurn = {
-            turnNumber,
-            agentId: agent.id,
-            startedAt,
-            observation,
-            failure: providerError.failure,
-            attempts: attemptHistory,
-          };
-          const record = agentTurnRecordSchema.parse({
-            turnNumber,
-            agentId: agent.id,
-            startedAt,
-            completedAt: this.#now(),
-            observation,
-            behavior: this.#behaviorFor(agent.id),
-            outcome: 'provider-error',
-            failure: providerError.failure,
-            provider: attemptProvider,
-            modelAttempts: attemptHistory,
-            allianceEvents: [],
-          });
-          this.#status =
-            providerError.failure.code === 'configuration'
-              ? 'configuration-error'
-              : 'provider-error';
-          return record;
-        } finally {
-          if (accountingFailure)
-            this.#attemptAccounting.finalize(accountingPermitId, {
-              outcome:
-                accountingFailure.code === 'cancelled'
-                  ? 'cancelled'
-                  : accountingFailure.code === 'timeout'
-                    ? 'timeout'
-                    : 'provider-error',
-              completedAt: this.#now(),
-              provider: accountingMetadata,
-              failure: accountingFailure,
-            });
-          else successfulAccountingPermitId = accountingPermitId;
-        }
-      }
-
-      if (!providerResult)
-        throw new Error('The provider completed without a decision result.');
-
-      const preActionState = this.#state;
-      const occurredAt = this.#now();
-      const communicationInput =
-        providerResult.decision.communication ?? undefined;
-      const diplomacyInput = providerResult.decision.diplomacy ?? undefined;
-      const parsedCommunication =
-        communicationIntentSchema.safeParse(communicationInput);
-      const communication = parsedCommunication.success
-        ? parsedCommunication.data
-        : undefined;
-      const parsedDiplomacy = diplomacyIntentSchema.safeParse(diplomacyInput);
-      const diplomacy = parsedDiplomacy.success
-        ? parsedDiplomacy.data
-        : undefined;
-      const context = {
-        now: () => occurredAt,
-        createEventId: this.#createEventId,
-        createAllianceId: this.#createAllianceId,
-        createProposalId: this.#createProposalId,
-        communicationRangeKm: this.#scenario.communicationRangeKm,
-        patientZeroAgentId: this.#scenario.patientZeroAgentId,
-        diplomacyRangeState: preActionState,
-      };
-      const appliedAction = applyWorldAction(
-        preActionState,
-        agent.id,
-        providerResult.decision.worldAction,
-        context,
-      );
-      const appliedCommunication = applyCommunication(
-        appliedAction.state,
-        preActionState,
-        agent.id,
-        communicationInput,
-        context,
-      );
-      const appliedDiplomacy = applyDiplomacy(
-        appliedCommunication.state,
-        agent.id,
-        diplomacyInput,
-        turnNumber,
-        context,
-      );
-      const stateAfterExpiration = expireAllianceProposals(
-        appliedDiplomacy.state,
-        turnNumber,
-        context,
-      );
-      const committedObservationEvents = stateAfterExpiration.events.slice(
-        preActionState.events.length,
-      );
-      const candidateState = {
-        ...stateAfterExpiration,
-        events: stateAfterExpiration.events.slice(-MAX_WORLD_EVENT_HISTORY),
-      };
-      const appliedGoal = applyGoalRevision(
-        this.#agentGoals.get(agent.id),
-        providerResult.decision.goalRevision,
-        turnNumber,
-      );
-      const appliedMemory = applyMemoryOperation(
-        this.#agentMemories.get(agent.id) ?? [],
-        providerResult.decision.memoryOperation,
-        agent.id,
-        turnNumber,
-      );
-
-      const completed = {
-        turnNumber,
-        agentId: agent.id,
-        startedAt,
-        completedAt: this.#now(),
-        observation,
-        behavior: this.#behaviorFor(agent.id),
-        worldAction: providerResult.decision.worldAction,
-        communication,
-        diplomacy,
-        goalRevision: providerResult.decision.goalRevision,
-        goalRevisionResult: appliedGoal.result,
-        memoryOperation: providerResult.decision.memoryOperation,
-        memoryOperationResult: appliedMemory.result,
-        summary: providerResult.decision.summary,
-        worldActionResult: appliedAction.result,
-        communicationResult: appliedCommunication.result,
-        diplomacyResult: appliedDiplomacy.result,
-        allianceEvents: allianceEventsSince(
-          preActionState,
-          stateAfterExpiration,
-        ),
-        provider: providerResult.metadata,
-        modelAttempts: [
-          ...attemptHistory,
-          {
-            attemptNumber: attemptHistory.length + 1,
-            kind: nextKind,
-            startedAt: successfulAttemptStartedAt,
-            completedAt: this.#now(),
-            modelId: selectedModel,
-            reasoningProfile: resolvedModel.reasoningProfile,
-            provider: providerResult.metadata,
-          },
-        ],
-      };
-      const record = agentTurnRecordSchema.parse(
-        appliedAction.result.accepted
-          ? {
-              ...completed,
-              outcome: 'accepted',
-              worldActionResult: appliedAction.result,
-            }
-          : {
-              ...completed,
-              outcome: 'rejected',
-              worldActionResult: appliedAction.result,
-            },
-      );
-
-      this.#pendingFailedTurn = null;
-      this.#commitCompletedTurn(
-        record,
-        candidateState,
-        agents.length,
-        {
-          agentId: agent.id,
-          goal: appliedGoal.goal,
-          memoryEntries: appliedMemory.entries,
-        },
-        committedObservationEvents,
-      );
-      if (successfulAccountingPermitId !== null) {
-        this.#attemptAccounting.finalize(successfulAccountingPermitId, {
-          outcome: 'completed',
-          completedAt: this.#now(),
-          provider: successfulProviderMetadata,
-        });
-        successfulAccountingPermitId = null;
-      }
-      this.#status = this.#attemptAccounting.snapshot().exhausted
-        ? 'budget-exhausted'
-        : 'paused';
-      return record;
-    } catch (error) {
-      if (
-        error instanceof SimulationTurnCancelledError ||
-        !(error instanceof Error) ||
-        error.name !== 'ZodError'
-      )
-        throw error;
-      const failure: ProviderFailure = {
-        code: 'simulation-validation',
-        message: 'The model decision failed post-provider validation.',
-        retryable: true,
-        model: selectedModel,
-      };
-      const attempt = {
-        attemptNumber: attemptHistory.length + 1,
-        kind: successfulAttemptKind,
-        startedAt: successfulAttemptStartedAt,
-        completedAt: this.#now(),
-        modelId: selectedModel,
-        reasoningProfile: resolvedModel.reasoningProfile,
-        failure,
-        provider: successfulProviderMetadata ?? {
-          provider: this.#provider.mode,
-          model: selectedModel,
-          latencyMs: 0,
-        },
-      } satisfies ModelAttempt;
-      const attempts = [...attemptHistory, attempt];
-      if (successfulAccountingPermitId !== null) {
-        this.#attemptAccounting.finalize(successfulAccountingPermitId, {
-          outcome: 'provider-error',
-          completedAt: this.#now(),
-          provider: attempt.provider,
-          failure,
-        });
-        successfulAccountingPermitId = null;
-      }
-      this.#pendingFailedTurn = {
-        turnNumber,
-        agentId: agent.id,
-        startedAt,
-        observation,
-        failure,
-        attempts,
-      };
-      this.#status = this.#attemptAccounting.snapshot().exhausted
-        ? 'budget-exhausted'
-        : 'provider-error';
-      return agentTurnRecordSchema.parse({
-        turnNumber,
-        agentId: agent.id,
-        startedAt,
-        completedAt: this.#now(),
-        observation,
-        behavior: this.#behaviorFor(agent.id),
-        outcome: 'provider-error',
-        failure,
-        provider: attempt.provider,
-        modelAttempts: attempts,
-        allianceEvents: [],
-      });
-    } finally {
-      if (successfulAccountingPermitId !== null) {
-        const cancelled = Boolean(
-          this.#activeRequestController?.signal.aborted,
-        );
-        if (cancelled && successfulProviderMetadata) {
-          this.#attemptAccounting.finalize(successfulAccountingPermitId, {
-            outcome: 'completed',
-            completedAt: this.#now(),
-            provider: successfulProviderMetadata,
-          });
-          successfulAccountingPermitId = null;
-        }
-      }
-      if (successfulAccountingPermitId !== null) {
-        const cancelled = Boolean(
-          this.#activeRequestController?.signal.aborted,
-        );
-        const failure: ProviderFailure = cancelled
-          ? {
-              code: 'cancelled',
-              message: 'The model request was cancelled by the operator.',
-              retryable: false,
-              model: selectedModel,
-            }
-          : {
-              code: 'simulation-validation',
-              message: 'The provider result could not be committed safely.',
-              retryable: true,
-              model: selectedModel,
-            };
-        this.#attemptAccounting.finalize(successfulAccountingPermitId, {
-          outcome: cancelled ? 'cancelled' : 'provider-error',
-          completedAt: this.#now(),
-          provider: successfulProviderMetadata,
-          failure,
-        });
-      }
-      this.#busy = false;
-      this.#activeAgentId = null;
-      this.#activeRequestController = null;
-      this.#cancellationRequested = false;
-      if (this.#status === 'waiting-for-model') {
-        this.#status = this.#provider.configured
-          ? 'paused'
-          : 'configuration-error';
-      }
-      if (
-        this.#status !== 'configuration-error' &&
-        this.#attemptAccounting.snapshot().exhausted
-      )
-        this.#status = 'budget-exhausted';
-    }
-  }
-
-  #commitCompletedTurn(
-    record: AgentTurnRecord,
-    state: WorldState,
-    agentCount: number,
-    goalCommit?: {
-      agentId: AgentId;
-      goal: AgentGoalState | undefined;
-      memoryEntries?: MemoryEntry[];
-    },
-    observationEvents: WorldEvent[] = [],
-  ): void {
-    const turns = [...this.#turns, record].slice(-MAX_TURN_HISTORY);
-    const cursor = (this.#cursor + 1) % agentCount;
-
-    this.#state = state;
-    this.#observationHistory.ingest(observationEvents);
-    if (goalCommit?.goal)
-      this.#agentGoals.set(goalCommit.agentId, goalCommit.goal);
-    else if (goalCommit) this.#agentGoals.delete(goalCommit.agentId);
-    if (goalCommit?.memoryEntries)
-      this.#agentMemories.set(goalCommit.agentId, goalCommit.memoryEntries);
-    this.#behaviorConfiguration = {
-      ...this.#behaviorConfiguration,
-      locked: true,
-    };
-    this.#turns = turns;
-    this.#experimentTurns = [
-      ...this.#experimentTurns,
-      structuredClone(record),
-    ].slice(-this.#experimentRetentionLimit);
-    this.#experimentMetrics.add(record);
-    this.#completedTurnCount = record.turnNumber;
-    this.#cursor = cursor;
-    this.#modelConfiguration = { ...this.#modelConfiguration, locked: false };
-  }
-
   #recordModelConfigurationChanges(
     previous: ExperimentModelConfiguration,
     next: ExperimentModelConfiguration,
   ): void {
     const timestamp = this.#now();
-    const effectiveTurn = this.#completedTurnCount + 1;
+    const effectiveTurn = this.#completedSwarmDecisionCount + 1;
     const events: ExperimentConfigurationEvent[] = [];
     if (
       previous.globalModelId !== next.globalModelId ||
@@ -3123,10 +2032,13 @@ export class SimulationService {
     return {
       id: this.#experimentId,
       startedAt: this.#experimentStartedAt,
-      providerMode: this.#provider.mode,
+      providerMode:
+        this.#swarmPlanner.mode === 'openrouter-swarm'
+          ? 'openrouter'
+          : 'scripted-test',
       retentionLimit: this.#experimentRetentionLimit,
-      totalCompletedTurns: this.#completedTurnCount,
-      turns: this.#experimentTurns,
+      totalCompletedTurns: 0,
+      turns: [],
       initialAgents: this.#initialExperimentAgents,
       currentAgents: [...this.#state.agents.values()],
       configurationEvents: this.#configurationEvents,
@@ -3153,14 +2065,6 @@ export class SimulationService {
       simulatedPlayerEvents: structuredClone(this.#simulatedPlayerEvents),
       swarmTicks: structuredClone(this.#experimentSwarmTicks),
     };
-  }
-
-  #behaviorFor(agentId: AgentId) {
-    const assignment = this.#behaviorConfiguration.assignments.find(
-      (candidate) => candidate.agentId === agentId,
-    );
-    if (!assignment) throw new Error('The agent has no behavior assignment.');
-    return assignment;
   }
 
   #resolvedModel(agentId: AgentId) {
@@ -3196,692 +2100,6 @@ export class SimulationService {
           : available
             ? {}
             : { issue: 'reasoning-unavailable' as const }),
-    };
-  }
-
-  #historicalAgent(agentId: AgentId): Agent | undefined {
-    return (
-      this.#state.agents.get(agentId) ??
-      this.#initialExperimentAgents.find(({ id }) => id === agentId)
-    );
-  }
-
-  #buildObservation(
-    agentId: AgentId,
-    currentCandidatePlayerEvents: readonly SimulatedPlayerEvent[] = [],
-  ): AgentObservation {
-    const agent = this.#state.agents.get(agentId);
-    if (!agent) throw new Error('The active agent does not exist.');
-    const currentGoal = this.#agentGoals.get(agentId) ?? null;
-    const currentMemory = this.#agentMemories.get(agentId) ?? [];
-    const stateFor = (cell: H3Cell) => {
-      const state = this.#state.hexes.get(cell);
-      if (!state) throw new Error('Observation cell is outside the world.');
-      if (state.state === 'open')
-        return {
-          cell,
-          ...state,
-          controllerAllianceId: null,
-          effectiveColor: null,
-        } as const;
-      const controller = state.controllerAgentId;
-      return {
-        cell,
-        ...state,
-        controllerAllianceId:
-          controller === null
-            ? null
-            : (getAgentAlliance(this.#state, controller)?.id ?? null),
-        effectiveColor:
-          controller === null
-            ? null
-            : getEffectiveAgentColor(this.#state, controller),
-      } as const;
-    };
-    const adjacentCells = gridDisk(agent.currentCell, 1)
-      .filter((cell) => cell !== agent.currentCell)
-      .map((cell) => h3CellSchema.parse(cell))
-      .filter((cell) => this.#state.hexes.has(cell))
-      .map(stateFor)
-      .toSorted(
-        (a, b) =>
-          stableOrder(
-            `${this.#scenario.worldSeed}:${agent.id}:${this.#completedTurnCount + 1}:${a.cell}`,
-          ) -
-          stableOrder(
-            `${this.#scenario.worldSeed}:${agent.id}:${this.#completedTurnCount + 1}:${b.cell}`,
-          ),
-      );
-    const recentMovements = this.#observationHistory
-      .movements(agent.id)
-      .map(({ fromCell, toCell, occurredAt }) => ({
-        fromCell,
-        toCell,
-        occurredAt,
-      }));
-    const captureEligibility = getCaptureEligibility(this.#state, agent.id);
-    const actingAlliance = getAgentAlliance(this.#state, agent.id);
-    const patientZeroAgentId = this.#scenario.patientZeroAgentId;
-    const territory = this.#territoryScoreboard();
-    const nearbyAgents = [...this.#state.agents.values()]
-      .filter((candidate) => candidate.id !== agent.id)
-      .map((candidate) => ({
-        id: candidate.id,
-        name: candidate.name,
-        currentCell: candidate.currentCell,
-        distanceKm:
-          physicalDistanceKm(agent.currentCell, candidate.currentCell) ??
-          Number.POSITIVE_INFINITY,
-        distance: gridRingDistance(agent.currentCell, candidate.currentCell),
-        allianceId: getAgentAlliance(this.#state, candidate.id)?.id ?? null,
-        allianceRelationship: actingAlliance?.memberAgentIds.includes(
-          candidate.id,
-        )
-          ? ('allied' as const)
-          : ('not-allied' as const),
-        controlledCellCount:
-          territory.find(({ agentId }) => agentId === candidate.id)
-            ?.controlledCellCount ?? 0,
-      }))
-      .filter(
-        ({ id, distanceKm, allianceRelationship }) =>
-          allianceRelationship === 'allied' ||
-          distanceKm <= this.#scenario.communicationRangeKm ||
-          id === patientZeroAgentId ||
-          agent.id === patientZeroAgentId,
-      )
-      .map((entry) => ({
-        ...entry,
-        directMessageLegal:
-          entry.distanceKm <= this.#scenario.communicationRangeKm ||
-          entry.id === patientZeroAgentId ||
-          agent.id === patientZeroAgentId,
-      }))
-      .sort(
-        (a, b) =>
-          Number(b.id === patientZeroAgentId) -
-            Number(a.id === patientZeroAgentId) ||
-          a.distanceKm - b.distanceKm ||
-          a.id.localeCompare(b.id),
-      )
-      .slice(0, 8);
-    const recentEvents = this.#observationHistory.actions().map((event) => ({
-      type: event.type,
-      agentId: event.agentId,
-      occurredAt: event.occurredAt,
-      summary: summarizeEvent(event, this.#state),
-    }));
-    const recentPublicMessages = this.#observationHistory
-      .publicMessages()
-      .map((event) => {
-        const sender = this.#historicalAgent(event.agentId);
-        if (!sender) throw new Error('A public-message sender does not exist.');
-        return {
-          eventId: event.id,
-          senderId: sender.id,
-          senderName: sender.name,
-          message: event.message,
-          occurredAt: event.occurredAt,
-        };
-      });
-    const recentDirectMessages = this.#observationHistory
-      .directMessages(agent.id)
-      .map((event) => {
-        const sender = this.#historicalAgent(event.agentId);
-        const recipient = this.#historicalAgent(event.recipientId);
-        if (!sender || !recipient)
-          throw new Error('A communication participant does not exist.');
-        return {
-          eventId: event.id,
-          senderId: sender.id,
-          senderName: sender.name,
-          recipientId: recipient.id,
-          recipientName: recipient.name,
-          direction: event.agentId === agent.id ? 'outbound' : 'inbound',
-          message: event.message,
-          occurredAt: event.occurredAt,
-          distance: event.distance,
-        } as const;
-      });
-    const recentAllianceMessages = this.#observationHistory
-      .allianceMessages(agent.id)
-      .map((event) => {
-        const sender = this.#historicalAgent(event.agentId);
-        if (!sender)
-          throw new Error('An alliance-message sender does not exist.');
-        return {
-          eventId: event.id,
-          senderId: sender.id,
-          senderName: sender.name,
-          allianceId: event.allianceId,
-          message: event.message,
-          occurredAt: event.occurredAt,
-        };
-      });
-    const recentZeroMessages = this.#observationHistory
-      .zeroMessages(agent.id)
-      .map((event) => {
-        const sender = this.#historicalAgent(event.agentId);
-        if (!sender) throw new Error('A Zero-message sender does not exist.');
-        return {
-          eventId: event.id,
-          senderId: sender.id,
-          senderName: sender.name,
-          recipientCount: event.recipientIds.length,
-          message: event.message,
-          occurredAt: event.occurredAt,
-        };
-      });
-    const recentControlChanges = this.#observationHistory
-      .controlChanges(agent.id)
-      .flatMap((event) => {
-        const gained = event.controllerAgentId === agent.id;
-        const otherAgentId = gained
-          ? event.previousControllerAgentId
-          : event.controllerAgentId;
-        if (otherAgentId === null) return [];
-        const otherAgent = this.#historicalAgent(otherAgentId);
-        if (!otherAgent)
-          throw new Error('A control-change participant does not exist.');
-        return [
-          {
-            eventId: event.id,
-            direction: gained ? ('gained' as const) : ('lost' as const),
-            otherAgentId,
-            otherAgentName: otherAgent.name,
-            cell: event.cell,
-            occurredAt: event.occurredAt,
-          },
-        ];
-      });
-    const completePlayerPressureEvents = [
-      ...this.#simulatedPlayerEvents,
-      ...currentCandidatePlayerEvents,
-    ];
-    const recentPlayerThreats = this.#scenario.capabilities
-      .simulatedPlayerPressure
-      ? completePlayerPressureEvents
-          .filter(
-            (
-              event,
-            ): event is Extract<WorldEvent, { type: 'hex-disinfected' }> =>
-              event.type === 'hex-disinfected',
-          )
-          .map((event) => ({
-            event,
-            distanceCells: gridRingDistance(agent.currentCell, event.cell),
-            affectedOwnTerritory: event.previousControllerAgentId === agent.id,
-          }))
-          .filter(
-            ({ distanceCells, affectedOwnTerritory }) =>
-              affectedOwnTerritory || distanceCells <= 2,
-          )
-          .slice(-6)
-          .map(({ event, distanceCells, affectedOwnTerritory }) => ({
-            eventId: event.id,
-            kind: affectedOwnTerritory
-              ? ('territory-disinfected' as const)
-              : ('nearby-disinfection' as const),
-            cell: event.cell,
-            occurredAt: event.occurredAt,
-            distanceCells,
-            affectedOwnTerritory,
-          }))
-      : [];
-    const patientZeroPlayerThreats = this.#scenario.capabilities
-      .simulatedPlayerPressure
-      ? currentCandidatePlayerEvents
-          .filter(
-            (
-              event,
-            ): event is Extract<
-              WorldEvent,
-              { type: 'hex-disinfected' | 'simulated-player-clean-blocked' }
-            > =>
-              (event.type === 'hex-disinfected' ||
-                event.type === 'simulated-player-clean-blocked') &&
-              event.originatingTick === this.#completedTickCount + 1,
-          )
-          .toSorted(
-            (left, right) =>
-              left.occurredAt.localeCompare(right.occurredAt) ||
-              left.id.localeCompare(right.id),
-          )
-          .flatMap((event) => {
-            const referencedAgentId =
-              event.type === 'hex-disinfected'
-                ? event.previousControllerAgentId
-                : event.blockingAgentId;
-            if (referencedAgentId === null) return [];
-            const referencedAgent = this.#state.agents.get(referencedAgentId);
-            if (!referencedAgent)
-              throw new Error(
-                'A simulated-player threat references an unknown agent.',
-              );
-            const alliance = getAgentAlliance(this.#state, referencedAgentId);
-            const pressureContext = calculatePatientZeroPressureContext(
-              completePlayerPressureEvents,
-              referencedAgentId,
-              alliance?.memberAgentIds ?? null,
-              this.#completedTickCount + 1,
-            );
-            return [
-              event.type === 'hex-disinfected'
-                ? {
-                    eventId: event.id,
-                    kind: 'territory-disinfected' as const,
-                    cell: event.cell,
-                    occurredAt: event.occurredAt,
-                    affectedAgentId: referencedAgent.id,
-                    affectedAgentName: referencedAgent.name,
-                    affectedAllianceId: alliance?.id ?? null,
-                    affectedAllianceColor: alliance?.color ?? null,
-                    pressureContext,
-                  }
-                : {
-                    eventId: event.id,
-                    kind: 'occupied-clean-blocked' as const,
-                    cell: event.cell,
-                    occurredAt: event.occurredAt,
-                    blockingAgentId: referencedAgent.id,
-                    blockingAgentName: referencedAgent.name,
-                    blockingAllianceId: alliance?.id ?? null,
-                    blockingAllianceColor: alliance?.color ?? null,
-                    pressureContext,
-                  },
-            ];
-          })
-      : [];
-    const captureAlerts = captureAlertsFrom(currentCandidatePlayerEvents);
-    return agentObservationSchema.parse({
-      agentId: agent.id,
-      agentName: agent.name,
-      personality: agent.personality,
-      behavior: this.#behaviorFor(agent.id),
-      currentGoal: structuredClone(currentGoal),
-      goalAvailability: currentGoal
-        ? {
-            active: true,
-            availableOperations: ['keep', 'revise', 'complete', 'abandon'],
-          }
-        : { active: false, availableOperations: ['establish'] },
-      currentMemory: structuredClone(currentMemory),
-      memoryAvailability: {
-        remember: currentMemory.length < MEMORY_ENTRY_LIMIT,
-        revisableMemoryIds: currentMemory.map(({ id }) => id),
-        forgettableMemoryIds: currentMemory.map(({ id }) => id),
-      },
-      currentCell: stateFor(agent.currentCell),
-      captureEligibility,
-      actionAvailability: {
-        moveTargetCellIds: adjacentCells.map(({ cell }) => cell),
-        moveOptions: adjacentCells.map((destination) => {
-          const controllerAlliance = destination.controllerAgentId
-            ? getAgentAlliance(this.#state, destination.controllerAgentId)
-            : undefined;
-          const relationship =
-            destination.state === 'open'
-              ? ('open' as const)
-              : destination.controllerAgentId === agent.id
-                ? ('self' as const)
-                : actingAlliance && controllerAlliance?.id === actingAlliance.id
-                  ? ('allied' as const)
-                  : ('other' as const);
-          return {
-            targetCell: destination.cell,
-            direction: geographicDirectionBetweenCells(
-              agent.currentCell,
-              destination.cell,
-            ),
-            destinationState: destination.state,
-            controllerRelationship: relationship,
-            recentlyOccupied: recentMovements.some(
-              ({ toCell }) => toCell === destination.cell,
-            ),
-            nearbyAgentCount: nearbyAgents.filter(
-              ({ currentCell }) => currentCell === destination.cell,
-            ).length,
-          };
-        }),
-        infect:
-          this.#state.hexes.get(agent.currentCell)?.state === 'open'
-            ? { available: true }
-            : {
-                available: false,
-                reason: 'current-cell-already-infected',
-              },
-        capture: captureEligibility.eligible
-          ? { available: true }
-          : { available: false, reason: captureEligibility.blockedReason },
-        wait: { available: true },
-      },
-      diplomacyAvailability: this.#diplomacyAvailability(agent.id),
-      communicationAvailability: {
-        public: { available: true, playerVisible: true },
-        direct: {
-          eligibleRecipientAgentIds: nearbyAgents
-            .filter(({ directMessageLegal }) => directMessageLegal)
-            .map(({ id }) => id),
-        },
-        alliance: actingAlliance
-          ? { available: true, allianceId: actingAlliance.id }
-          : { available: false, allianceId: null },
-        zero: { available: agent.id === patientZeroAgentId },
-      },
-      adjacentCells,
-      nearbyAgents,
-      recentEvents,
-      recentPublicMessages,
-      recentDirectMessages,
-      recentAllianceMessages,
-      recentZeroMessages,
-      patientZero: {
-        agentId: patientZeroAgentId,
-        agentName:
-          (patientZeroAgentId
-            ? this.#state.agents.get(patientZeroAgentId)?.name
-            : null) ?? null,
-        isPatientZero: agent.id === patientZeroAgentId,
-        directRangeBypass: patientZeroAgentId !== null,
-      },
-      patientZeroGlobalView:
-        agent.id === patientZeroAgentId
-          ? {
-              agents: [...this.#state.agents.values()].map((candidate) => ({
-                id: candidate.id,
-                name: candidate.name,
-                currentCell: candidate.currentCell,
-                allianceId:
-                  getAgentAlliance(this.#state, candidate.id)?.id ?? null,
-                controlledCellCount:
-                  territory.find(({ agentId: id }) => id === candidate.id)
-                    ?.controlledCellCount ?? 0,
-                personality: candidate.personality,
-                strategyId: this.#behaviorFor(candidate.id).strategyId,
-              })),
-              individualTerritory: territory,
-              allianceTerritory: this.#allianceTerritorySummaries(),
-              alliances: [...(this.#state.alliances?.values() ?? [])],
-              activeAllianceProposals: [
-                ...(this.#state.pendingAllianceProposals?.values() ?? []),
-              ],
-              diplomacyFeasibility: [],
-              diplomacySummary: this.#patientZeroDiplomacySummary(),
-              recentStrategicEvents: this.#observationHistory
-                .allianceEvents(RECENT_ZERO_STRATEGIC_EVENT_LIMIT)
-                .map((event) => ({
-                  event,
-                  summary: summarizeAllianceEvent(event, this.#state),
-                })),
-              recentTerritoryChanges: this.#observationHistory.captures(),
-              playerThreatFeed: this.#scenario.capabilities
-                .simulatedPlayerPressure
-                ? {
-                    events: selectMostRecentPatientZeroThreats(
-                      patientZeroPlayerThreats,
-                    ),
-                    totalEventCount: patientZeroPlayerThreats.length,
-                    truncated:
-                      patientZeroPlayerThreats.length >
-                      PATIENT_ZERO_PLAYER_THREAT_FEED_LIMIT,
-                  }
-                : null,
-            }
-          : null,
-      territoryScoreboard: this.#territoryScoreboard(),
-      actingAllianceId: getAgentAlliance(this.#state, agent.id)?.id ?? null,
-      actingAlliance:
-        this.#allianceTerritorySummaries().find(
-          ({ allianceId }) =>
-            allianceId === getAgentAlliance(this.#state, agent.id)?.id,
-        ) ?? null,
-      activeAlliances: this.#allianceTerritorySummaries(),
-      inboundAllianceProposals: [
-        ...(this.#state.pendingAllianceProposals?.values() ?? []),
-      ].filter(({ recipientAgentId }) => recipientAgentId === agent.id),
-      outboundAllianceProposals: [
-        ...(this.#state.pendingAllianceProposals?.values() ?? []),
-      ].filter(({ proposerAgentId }) => proposerAgentId === agent.id),
-      recentAllianceEvents: this.#observationHistory
-        .allianceEvents(RECENT_ALLIANCE_EVENT_LIMIT)
-        .map((event) => ({
-          event,
-          summary: summarizeAllianceEvent(event, this.#state),
-        })),
-      recentControlChanges,
-      playerPressure: {
-        enabled: this.#scenario.capabilities.simulatedPlayerPressure,
-        recentThreats: recentPlayerThreats,
-      },
-      ...(captureAlerts.length ? { captureAlerts } : {}),
-      recentMovements,
-    });
-  }
-
-  #diplomacyAvailability(
-    agentId: AgentId,
-    blockedRecipientLimit: number = WORLD_SCENARIO_LIMITS.maximumNearbyAgentObservations,
-  ) {
-    const proposals = [
-      ...(this.#state.pendingAllianceProposals?.values() ?? []),
-    ];
-    const actingAlliance = getAgentAlliance(this.#state, agentId);
-    const hasOutgoing = proposals.some(
-      ({ proposerAgentId }) => proposerAgentId === agentId,
-    );
-    const eligibleRecipientAgentIds: AgentId[] = [];
-    const blockedRecipients: Array<{
-      agentId: AgentId;
-      reason:
-        | 'current-ally'
-        | 'out-of-range'
-        | 'outgoing-proposal-exists'
-        | 'incoming-proposal-exists'
-        | 'alliance-to-alliance-merge';
-    }> = [];
-    for (const candidateId of [...this.#state.agents.keys()].toSorted()) {
-      let reason: (typeof blockedRecipients)[number]['reason'] | null = null;
-      if (candidateId === agentId) continue;
-      const eligibility = getProposalTargetEligibility(
-        this.#state,
-        agentId,
-        candidateId,
-        this.#scenario.communicationRangeKm,
-        this.#state,
-      );
-      if (!eligibility.eligible) reason = eligibility.reason;
-      if (reason) {
-        if (blockedRecipients.length < blockedRecipientLimit)
-          blockedRecipients.push({ agentId: candidateId, reason });
-      } else eligibleRecipientAgentIds.push(candidateId);
-    }
-    const acceptableProposalIds = proposals
-      .filter((proposal) => {
-        if (proposal.recipientAgentId !== agentId) return false;
-        const proposerAlliance = getAgentAlliance(
-          this.#state,
-          proposal.proposerAgentId,
-        );
-        return (
-          (proposal.proposerAllianceId === null
-            ? !proposerAlliance
-            : proposerAlliance?.id === proposal.proposerAllianceId) &&
-          (proposal.recipientAllianceId === null
-            ? !actingAlliance
-            : actingAlliance?.id === proposal.recipientAllianceId) &&
-          !(proposerAlliance && actingAlliance)
-        );
-      })
-      .map(({ id }) => id);
-    return {
-      neutral: { available: true as const },
-      propose: eligibleRecipientAgentIds.length
-        ? {
-            available: true as const,
-            eligibleRecipientAgentIds,
-            blockedRecipients,
-          }
-        : {
-            available: false as const,
-            eligibleRecipientAgentIds: [],
-            blockedRecipients,
-            reason: hasOutgoing
-              ? 'A pending outgoing formal proposal already exists.'
-              : 'No eligible formal proposal recipient is available.',
-          },
-      accept: acceptableProposalIds.length
-        ? { available: true as const, acceptableProposalIds }
-        : {
-            available: false as const,
-            acceptableProposalIds: [],
-            reason: 'No acceptable inbound formal alliance proposal exists.',
-          },
-      leave: actingAlliance
-        ? { available: true as const, allianceId: actingAlliance.id }
-        : {
-            available: false as const,
-            allianceId: null,
-            reason: 'The agent is not currently in an alliance.',
-          },
-    };
-  }
-
-  #patientZeroDiplomacySummary() {
-    const eligiblePairs: Array<{
-      proposerId: AgentId;
-      recipientId: AgentId;
-    }> = [];
-    const acceptableProposals: Array<{
-      agentId: AgentId;
-      proposalId: AllianceProposalId;
-    }> = [];
-    const leaveAvailableAgentIds: AgentId[] = [];
-    const blockedCounts = new Map<string, number>();
-    const blockers: Array<{
-      proposerId: AgentId;
-      recipientId: AgentId;
-      reason:
-        | 'current-ally'
-        | 'out-of-range'
-        | 'outgoing-proposal-exists'
-        | 'incoming-proposal-exists'
-        | 'alliance-to-alliance-merge';
-    }> = [];
-    for (const proposerAgentId of [...this.#state.agents.keys()].toSorted()) {
-      const availability = this.#diplomacyAvailability(
-        proposerAgentId,
-        WORLD_SCENARIO_LIMITS.maximumAgents,
-      );
-      for (const recipientAgentId of availability.propose
-        .eligibleRecipientAgentIds)
-        eligiblePairs.push({
-          proposerId: proposerAgentId,
-          recipientId: recipientAgentId,
-        });
-      for (const blocked of availability.propose.blockedRecipients) {
-        blockedCounts.set(
-          blocked.reason,
-          (blockedCounts.get(blocked.reason) ?? 0) + 1,
-        );
-        blockers.push({
-          proposerId: proposerAgentId,
-          recipientId: blocked.agentId,
-          reason: blocked.reason,
-        });
-      }
-      for (const proposalId of availability.accept.acceptableProposalIds)
-        acceptableProposals.push({
-          agentId: proposerAgentId,
-          proposalId,
-        });
-      if (availability.leave.available)
-        leaveAvailableAgentIds.push(proposerAgentId);
-    }
-    const blockerPriority = [
-      'out-of-range',
-      'alliance-to-alliance-merge',
-      'current-ally',
-      'incoming-proposal-exists',
-      'outgoing-proposal-exists',
-    ] as const;
-    blockers.sort(
-      (a, b) =>
-        blockerPriority.indexOf(a.reason) - blockerPriority.indexOf(b.reason) ||
-        a.proposerId.localeCompare(b.proposerId) ||
-        a.recipientId.localeCompare(b.recipientId),
-    );
-    const displayedEligiblePairs: typeof eligiblePairs = [];
-    const proposerBuckets = [...this.#state.agents.keys()]
-      .toSorted()
-      .map((proposerAgentId) => ({
-        proposerAgentId,
-        recipientAgentIds: eligiblePairs
-          .filter((pair) => pair.proposerId === proposerAgentId)
-          .map(({ recipientId }) => recipientId),
-      }))
-      .filter(({ recipientAgentIds }) => recipientAgentIds.length > 0);
-    if (proposerBuckets.length) {
-      const offset =
-        (this.#completedTickCount *
-          PATIENT_ZERO_DIPLOMACY_SUMMARY_LIMITS.displayedEligiblePairs) %
-        proposerBuckets.length;
-      const rotated = [
-        ...proposerBuckets.slice(offset),
-        ...proposerBuckets.slice(0, offset),
-      ];
-      for (
-        let recipientIndex = 0;
-        displayedEligiblePairs.length <
-        PATIENT_ZERO_DIPLOMACY_SUMMARY_LIMITS.displayedEligiblePairs;
-        recipientIndex += 1
-      ) {
-        let added = false;
-        for (const bucket of rotated) {
-          const recipientAgentId = bucket.recipientAgentIds[recipientIndex];
-          if (!recipientAgentId) continue;
-          displayedEligiblePairs.push({
-            proposerId: bucket.proposerAgentId,
-            recipientId: recipientAgentId,
-          });
-          added = true;
-          if (
-            displayedEligiblePairs.length ===
-            PATIENT_ZERO_DIPLOMACY_SUMMARY_LIMITS.displayedEligiblePairs
-          )
-            break;
-        }
-        if (!added) break;
-      }
-    }
-    return {
-      eligiblePairCount: eligiblePairs.length,
-      displayedEligiblePairs,
-      eligiblePairsTruncated:
-        eligiblePairs.length > displayedEligiblePairs.length,
-      acceptableProposals: acceptableProposals.slice(
-        0,
-        PATIENT_ZERO_DIPLOMACY_SUMMARY_LIMITS.acceptableProposals,
-      ),
-      acceptableProposalCount: acceptableProposals.length,
-      acceptableProposalsTruncated:
-        acceptableProposals.length >
-        PATIENT_ZERO_DIPLOMACY_SUMMARY_LIMITS.acceptableProposals,
-      leaveAvailableAgentIds: leaveAvailableAgentIds.slice(
-        0,
-        PATIENT_ZERO_DIPLOMACY_SUMMARY_LIMITS.leaveAvailableAgentIds,
-      ),
-      leaveAvailableCount: leaveAvailableAgentIds.length,
-      leaveAvailableTruncated:
-        leaveAvailableAgentIds.length >
-        PATIENT_ZERO_DIPLOMACY_SUMMARY_LIMITS.leaveAvailableAgentIds,
-      blockedCounts: blockerPriority.flatMap((reason) => {
-        const count = blockedCounts.get(reason);
-        return count ? [{ reason, count }] : [];
-      }),
-      blockerExamples: blockers.slice(
-        0,
-        PATIENT_ZERO_DIPLOMACY_SUMMARY_LIMITS.blockerExamples,
-      ),
     };
   }
 
@@ -4033,82 +2251,6 @@ function summarizeAllianceEvent(
     return `${name(event.leftAgentId)} left the alliance.`;
   if (event.type === 'alliance-dissolved') return 'The alliance dissolved.';
   return `The proposal from ${name(event.proposerAgentId)} to ${name(event.recipientAgentId)} was ${event.reason}.`;
-}
-
-function automaticRetryDelayMs(
-  failure: ProviderFailure,
-  deadlineAtMs: number,
-): number {
-  if (failure.code !== 'provider-http' || failure.httpStatus !== 429) return 0;
-  const retryAfterMs = failure.retryAfterMs;
-  if (retryAfterMs !== undefined && Date.now() + retryAfterMs < deadlineAtMs)
-    return retryAfterMs;
-  return OPENROUTER_429_FALLBACK_BACKOFF_MS;
-}
-
-function waitForRetryBackoff(
-  delayMs: number,
-  signal: AbortSignal,
-  model: string,
-): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal.aborted) {
-      reject(cancelledBackoffError(model));
-      return;
-    }
-    const timeout = setTimeout(() => {
-      signal.removeEventListener('abort', cancel);
-      resolve();
-    }, delayMs);
-    const cancel = () => {
-      clearTimeout(timeout);
-      reject(cancelledBackoffError(model));
-    };
-    signal.addEventListener('abort', cancel, { once: true });
-  });
-}
-
-function cancelledBackoffError(model: string): AgentProviderError {
-  return new AgentProviderError({
-    code: 'cancelled',
-    message: 'The model request was cancelled by the operator.',
-    retryable: false,
-    model,
-  });
-}
-
-function asProviderError(error: unknown): {
-  failure: ProviderFailure;
-  metadata?: AgentProviderError['metadata'];
-} {
-  if (error instanceof AgentProviderError) {
-    return { failure: error.failure, metadata: error.metadata };
-  }
-  return {
-    failure: {
-      code: 'network',
-      message: 'The model provider failed unexpectedly.',
-      retryable: true,
-    },
-  };
-}
-
-function retainCompleteTickGroups(
-  records: AgentTurnRecord[],
-  limit: number,
-): AgentTurnRecord[] {
-  if (records.length <= limit) return records;
-  const groups = new Map<number, AgentTurnRecord[]>();
-  for (const record of records) {
-    const key = record.tickNumber ?? record.turnNumber;
-    groups.set(key, [...(groups.get(key) ?? []), record]);
-  }
-  const retained: AgentTurnRecord[] = [];
-  for (const group of [...groups.values()].reverse()) {
-    if (retained.length > 0 && retained.length + group.length > limit) break;
-    retained.unshift(...group);
-  }
-  return retained;
 }
 
 export function applyGoalRevision(

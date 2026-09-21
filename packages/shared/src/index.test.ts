@@ -1,9 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   MODEL_SUMMARY_MAX_LENGTH,
-  AGENT_DECISION_CONTRACT_VERSION,
-  PREVIOUS_AGENT_DECISION_CONTRACT_VERSION,
-  FLUID_ALLIANCE_AGENT_DECISION_CONTRACT_VERSION,
+  SWARM_PLANNER_CONTRACT_VERSION,
   PATIENT_ZERO_DIPLOMACY_SUMMARY_LIMITS,
   WORLD_SCENARIO_LIMITS,
   OBJECTIVE_PROMPT_VERSION,
@@ -51,7 +49,7 @@ import {
   GOAL_TEXT_MAX_LENGTH,
   agentGoalStateSchema,
   requestedGoalRevisionSchema,
-  agentDecisionContractVersionSchema,
+  swarmPlannerContractVersionSchema,
   MEMORY_ENTRY_LIMIT,
   MEMORY_TEXT_MAX_LENGTH,
   memoryLedgerSchema,
@@ -198,7 +196,7 @@ const snapshot = {
     },
     objectiveVersion: 'durable-influence-v2',
     capabilities: { communication: true, diplomacy: true },
-    decisionContractVersion: AGENT_DECISION_CONTRACT_VERSION,
+    swarmPlannerContractVersion: SWARM_PLANNER_CONTRACT_VERSION,
     exactCellCount: 1,
     areaSquareKilometers: 0.1,
     startingCells: worldAgents.map(() => cell),
@@ -272,7 +270,7 @@ const snapshot = {
 };
 
 describe('agent observation and decision schemas', () => {
-  it('bounds goal state and preserves v3-v8 decision attribution', () => {
+  it('bounds goal state and preserves swarm planner attribution', () => {
     expect(
       agentGoalStateSchema.safeParse({
         longTermGoal: 'x'.repeat(GOAL_TEXT_MAX_LENGTH + 1),
@@ -288,15 +286,9 @@ describe('agent observation and decision schemas', () => {
         reason: 'Contradictory extra field.',
       }).success,
     ).toBe(false);
-    for (const version of [
-      'text-flat-json-v3',
-      'text-flat-json-v4',
-      'text-flat-json-v5',
-      'text-flat-json-v6',
-      'text-flat-json-v7',
-      'text-flat-json-v8',
-    ])
-      expect(agentDecisionContractVersionSchema.parse(version)).toBe(version);
+    expect(
+      swarmPlannerContractVersionSchema.parse(SWARM_PLANNER_CONTRACT_VERSION),
+    ).toBe(SWARM_PLANNER_CONTRACT_VERSION);
   });
 
   it('requires exact canonical goal availability while defaulting legacy observations', () => {
@@ -712,19 +704,15 @@ describe('agent observation and decision schemas', () => {
   });
 
   it('preserves established engine contract identifiers through branding changes', () => {
-    expect(AGENT_DECISION_CONTRACT_VERSION).toBe('text-flat-json-v8');
-    expect(PREVIOUS_AGENT_DECISION_CONTRACT_VERSION).toBe('text-flat-json-v4');
-    expect(FLUID_ALLIANCE_AGENT_DECISION_CONTRACT_VERSION).toBe(
-      'text-flat-json-v5',
-    );
+    expect(SWARM_PLANNER_CONTRACT_VERSION).toBe('swarm-planner-v1');
     expect(OBJECTIVE_PROMPT_VERSION).toBe('durable-influence-v3');
     expect(
       modelVerificationSchema.parse({
         modelId: 'author/model',
-        contractVersion: AGENT_DECISION_CONTRACT_VERSION,
+        contractVersion: SWARM_PLANNER_CONTRACT_VERSION,
         status: 'untested',
       }).contractVersion,
-    ).toBe(AGENT_DECISION_CONTRACT_VERSION);
+    ).toBe(SWARM_PLANNER_CONTRACT_VERSION);
     expect(
       modelVerificationSchema.safeParse({
         modelId: 'author/model',
@@ -1387,12 +1375,6 @@ describe('turn and snapshot schemas', () => {
     expect(
       simulationSnapshotSchema.safeParse({
         ...snapshot,
-        turns: Array(121).fill(validTurn),
-      }).success,
-    ).toBe(false);
-    expect(
-      simulationSnapshotSchema.safeParse({
-        ...snapshot,
         world: {
           ...snapshot.world,
           events: Array(121).fill(event),
@@ -1473,49 +1455,9 @@ describe('turn and snapshot schemas', () => {
     ).toBe(false);
   });
 
-  it('requires one consistently attributed record per roster agent in tick responses', () => {
-    const virtualTime = '2026-08-13T12:05:00.000Z';
-    const records = worldAgents.map((agent, index) => ({
-      ...baseTurn,
-      turnNumber: index + 1,
-      agentId: agent.id,
-      observation: { ...observation, agentId: agent.id, agentName: agent.name },
-      outcome: 'lost-tick',
-      tickNumber: 1,
-      tickPosition: index + 1,
-      virtualTime,
-      tickIntervalMinutes: 5,
-      failure: { code: 'timeout', message: 'Timed out.', retryable: false },
-    }));
-    const tickSnapshot = {
-      ...snapshot,
-      turnNumber: records.length,
-      tickNumber: 1,
-      virtualTime,
-      lastTickIntervalMinutes: 5,
-      resolutionOrder: records.map(({ agentId: id }) => id),
-      turns: records,
-    };
+  it('requires swarm telemetry in tick responses', () => {
     expect(
-      singleTickResponseSchema.safeParse({
-        snapshot: tickSnapshot,
-        tickNumber: 1,
-        records,
-      }).success,
-    ).toBe(true);
-    expect(
-      singleTickResponseSchema.safeParse({
-        snapshot: tickSnapshot,
-        tickNumber: 1,
-        records: records.slice(1),
-      }).success,
-    ).toBe(false);
-    expect(
-      singleTickResponseSchema.safeParse({
-        snapshot: tickSnapshot,
-        tickNumber: 1,
-        records: records.map((record) => ({ ...record, tickPosition: 1 })),
-      }).success,
+      singleTickResponseSchema.safeParse({ snapshot, tickNumber: 1 }).success,
     ).toBe(false);
   });
 });

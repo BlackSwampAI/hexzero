@@ -1,8 +1,4 @@
-import {
-  BrowserTestAgentProvider,
-  type ReflexProvider,
-  type SwarmPlanner,
-} from '@hexzero/agent-runtime';
+import { type ReflexProvider, type SwarmPlanner } from '@hexzero/agent-runtime';
 import { assignBehavior, type CompatibleModel } from '@hexzero/shared';
 import { generateDeterministicRoster } from '@hexzero/world-engine';
 import { SimulationService } from './simulation-service';
@@ -141,7 +137,7 @@ export interface LiveComparisonReport {
     seeds: readonly string[];
     tickCap: number;
     agentCount: number;
-    cognitionMode: 'zero-swarm-v1';
+    swarmArchitectureVersion: 'zero-swarm-v1';
     trailHunterProfile: 'trail-hunter-v1';
     rosterSeed: 'worker-capture-roster';
     patientZeroRosterIndex: 1;
@@ -375,9 +371,6 @@ async function runVariant(
   providers: LiveComparisonProviders,
 ): Promise<LiveComparisonRun> {
   const service = new SimulationService({
-    // Zero-swarm never asks the legacy AgentProvider. Keeping this local test
-    // provider prevents an accidental legacy network call in the ablation.
-    provider: new BrowserTestAgentProvider(),
     swarmPlanner: providers.createPlanner(),
     reflexProvider: providers.createReflex(),
     ...(variant === 'live-zero-deterministic-workers'
@@ -385,8 +378,6 @@ async function runVariant(
       : {}),
     createEventId: ids('1'),
     createExperimentId: ids('2'),
-    createAllianceId: ids('3'),
-    createProposalId: ids('4'),
   });
   service.setCompatibleModels([modelFor(config.modelId)]);
   const request = service.getDefaultWorldSetup();
@@ -397,7 +388,6 @@ async function runVariant(
   const zeroAgentId = roster[1]!.id;
   service.applyWorldSetup({
     ...request,
-    cognitionMode: 'zero-swarm-v1',
     roster,
     patientZeroAgentId: zeroAgentId,
     worldSeed: `offline-world-${seed}`,
@@ -417,6 +407,8 @@ async function runVariant(
       overrides: [],
       locked: false,
     },
+    // This transitional scenario field remains required until PR 2 removes
+    // legacy behavior configuration from the shared world setup schema.
     behaviorConfiguration: {
       ...request.behaviorConfiguration,
       assignments: assignBehavior(
@@ -753,7 +745,7 @@ export async function runLiveComparison(
       seeds: [...config.seeds],
       tickCap: config.tickCap,
       agentCount: config.agentCount,
-      cognitionMode: 'zero-swarm-v1',
+      swarmArchitectureVersion: 'zero-swarm-v1',
       trailHunterProfile: 'trail-hunter-v1',
       rosterSeed: 'worker-capture-roster',
       patientZeroRosterIndex: 1,

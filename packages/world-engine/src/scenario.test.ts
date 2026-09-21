@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  AGENT_DECISION_CONTRACT_VERSION,
+  SWARM_PLANNER_CONTRACT_VERSION,
   assignBehavior,
   WORLD_RADIUS_PRESETS,
 } from '@hexzero/shared';
@@ -24,8 +24,8 @@ describe('configurable world scenarios', () => {
     );
     expect(first).toEqual(second);
     expect(first.feasible && first.scenario.exactCellCount).toBe(127);
-    expect(first.feasible && first.scenario.decisionContractVersion).toBe(
-      AGENT_DECISION_CONTRACT_VERSION,
+    expect(first.feasible && first.scenario.swarmPlannerContractVersion).toBe(
+      SWARM_PLANNER_CONTRACT_VERSION,
     );
     expect(first.feasible && first.scenario.patientZeroAgentId).toBe(
       DEVELOPMENT_AGENT_BLUEPRINTS[0]!.id,

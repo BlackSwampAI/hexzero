@@ -9,15 +9,14 @@ describe('runOfflineComparison', () => {
     );
   });
 
-  it('covers every comparison mode and retains engine capture telemetry', async () => {
+  it('compares Jev workers with the deterministic worker baseline', async () => {
     const report = await runOfflineComparison({
       seeds: ['worker-capture-spawn'],
       tickCap: 3,
     });
     expect(report.variants.map(({ variant }) => variant)).toEqual([
-      'legacy-multi-agent',
-      'zero-swarm-v1',
-      'deterministic-worker-baseline',
+      'zero-swarm-jev',
+      'zero-swarm-deterministic-workers',
     ]);
     for (const variant of report.variants) {
       const run = variant.runs[0]!;
@@ -26,12 +25,12 @@ describe('runOfflineComparison', () => {
       expect(run.final.captures).toBeGreaterThan(0);
     }
     const swarm = report.variants.find(
-      ({ variant }) => variant === 'zero-swarm-v1',
+      ({ variant }) => variant === 'zero-swarm-jev',
     )!;
     expect(swarm.aggregate.totalGenerativeAttempts).toBeGreaterThan(0);
     expect(swarm.aggregate.totalReflexAttempts).toBeGreaterThan(0);
     const baseline = report.variants.find(
-      ({ variant }) => variant === 'deterministic-worker-baseline',
+      ({ variant }) => variant === 'zero-swarm-deterministic-workers',
     )!;
     expect(baseline.aggregate.totalReflexAttempts).toBe(0);
     expect(baseline.aggregate.totalProviderAttempts).toBe(
@@ -48,17 +47,5 @@ describe('runOfflineComparison', () => {
       ),
     ).toEqual(expect.arrayContaining([expect.any(Object)]));
     expect(report.costDisclaimer).toContain('no authoritative billed');
-  });
-
-  it('continues legacy observations after captured message participants leave the roster', async () => {
-    const report = await runOfflineComparison({
-      seeds: ['worker-capture-spawn'],
-      tickCap: 12,
-    });
-    const legacy = report.variants.find(
-      ({ variant }) => variant === 'legacy-multi-agent',
-    )!.runs[0]!;
-    expect(legacy.samples).toHaveLength(12);
-    expect(legacy.final.captures).toBeGreaterThan(0);
   });
 });

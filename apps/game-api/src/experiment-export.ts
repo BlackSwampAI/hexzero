@@ -1,5 +1,5 @@
 import {
-  AGENT_DECISION_CONTRACT_VERSION,
+  SWARM_PLANNER_CONTRACT_VERSION,
   experimentExportDocumentSchema,
   experimentExportPreviewSchema,
   experimentExportRequestSchema,
@@ -751,7 +751,7 @@ export function createExperimentExport(
   };
   const include = inclusionsFor(request);
   const exportedSwarmTicks: SwarmTickRecord[] | undefined =
-    source.scenario.cognitionMode === 'zero-swarm-v1' &&
+    source.scenario.swarmArchitectureVersion === 'zero-swarm-v1' &&
     request.agents.mode === 'all' &&
     request.turns.mode === 'entire-retained'
       ? [...structuredClone(source.swarmTicks ?? [])]
@@ -800,7 +800,7 @@ export function createExperimentExport(
       id: source.id,
       startedAt: source.startedAt,
       providerMode: source.providerMode,
-      decisionContractVersion: AGENT_DECISION_CONTRACT_VERSION,
+      swarmPlannerContractVersion: SWARM_PLANNER_CONTRACT_VERSION,
       modelConfiguration: structuredClone(source.modelConfiguration),
       behaviorConfiguration: structuredClone(source.behaviorConfiguration),
       scenario: structuredClone(source.scenario),

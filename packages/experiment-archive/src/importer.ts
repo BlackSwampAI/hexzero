@@ -184,7 +184,7 @@ export function importExperimentExport(
           json(document.experiment.modelConfiguration),
           json(document.experiment.behaviorConfiguration),
           scenario?.objectiveVersion ?? null,
-          document.experiment.decisionContractVersion,
+          document.experiment.swarmPlannerContractVersion,
           `experiment-export-schema-v${document.schemaVersion}`,
           document.retention.limit,
           document.retention.totalCompletedTurns,
