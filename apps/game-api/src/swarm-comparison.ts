@@ -165,19 +165,21 @@ class OfflinePlanner implements SwarmPlanner {
       zeroActionCandidateId: zeroAction.id,
       directives: observation.agents
         .filter(({ agentId }) => agentId !== observation.zeroAgentId)
-        .map((agent, index) => ({
-          id: `offline-${observation.tickNumber}-${index}`,
-          agentId: agent.agentId,
-          mission: 'expand' as const,
-          targetCell:
-            nearestTarget(agent.position, openTargets) ?? agent.position,
-          priority: 'normal' as const,
-          riskTolerance: 'medium' as const,
-          issuedAtTick: observation.tickNumber,
-          // PR D cadence: directives normally cover five ticks, with events
-          // still able to bring Zero back sooner.
-          expiresAtTick: observation.tickNumber + 4,
-        })),
+        .map((agent, index) => {
+          const openTarget = nearestTarget(agent.position, openTargets);
+          return {
+            id: `offline-${observation.tickNumber}-${index}`,
+            agentId: agent.agentId,
+            mission: openTarget ? ('expand' as const) : ('hold' as const),
+            targetCell: openTarget ?? agent.position,
+            priority: 'normal' as const,
+            riskTolerance: 'medium' as const,
+            issuedAtTick: observation.tickNumber,
+            // PR D cadence: directives normally cover five ticks, with events
+            // still able to bring Zero back sooner.
+            expiresAtTick: observation.tickNumber + 4,
+          };
+        }),
     };
     finalize?.({
       outcome: 'completed',

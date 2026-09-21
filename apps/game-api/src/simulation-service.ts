@@ -1,6 +1,7 @@
 import { gridDisk, gridDistance } from 'h3-js';
 import {
   AgentProviderError,
+  SwarmPlannerError,
   dispatchTickDecisions,
   type ReflexProvider,
   type SwarmPlanner,
@@ -71,6 +72,7 @@ import {
   type AllianceProposalId,
   type SimulatedPlayerEvent,
   type SwarmPlan,
+  type CompletedSwarmDirective,
   type SwarmReplanReason,
   type SwarmTickRecord,
   type ZeroStrategicObservation,
@@ -120,6 +122,10 @@ import {
   type CompiledReflexObservation,
   type ReflexSelection,
 } from './reflex-execution';
+import {
+  isSwarmDirectiveComplete,
+  swarmDirectiveIssue,
+} from './swarm-directives';
 
 function attemptAccountingForScenario(
   executionLimits: AppliedScenario['executionLimits'],
@@ -1619,10 +1625,14 @@ export class SimulationService {
       this.#scenario.worldSeed,
       tickNumber,
     );
+    const completedDirectives = this.#completedSwarmDirectives(
+      preTickState,
+    ).filter(({ agentId }) => candidate.agents.has(agentId));
     const replanReasons = this.#swarmReplanReasons(
       tickNumber,
       playerAdvance.events,
       candidate,
+      completedDirectives,
     );
     if (
       agents.length !== preTickState.agents.size &&
@@ -1664,6 +1674,7 @@ export class SimulationService {
         virtualTime,
         playerAdvance.events,
         replanReasons,
+        completedDirectives,
       );
       let plan: SwarmPlan;
       let planSource:
@@ -1725,7 +1736,13 @@ export class SimulationService {
             throw new SimulationTurnCancelledError();
           plan = swarmPlanSchema.parse(planned.plan);
           plannerMetadata = planned.metadata;
-          this.#assertSwarmPlan(plan, observation, zero.id, tickNumber);
+          this.#assertSwarmPlan(
+            plan,
+            observation,
+            candidate,
+            zero.id,
+            tickNumber,
+          );
         }
       } catch (error) {
         if (
@@ -1735,7 +1752,13 @@ export class SimulationService {
           throw error;
         plannerFailure = this.#providerFailure(error, resolvedZero.modelId);
         planSource = 'deterministic-fallback';
-        plan = this.#fallbackSwarmPlan(agents, zero.id, tickNumber, candidate);
+        plan = this.#fallbackSwarmPlan(
+          agents,
+          zero.id,
+          tickNumber,
+          candidate,
+          completedDirectives,
+        );
       }
       const zeroAction = observation.legalZeroActions.find(
         ({ id }) => id === plan.zeroActionCandidateId,
@@ -1775,7 +1798,10 @@ export class SimulationService {
         const retainedDirective = this.#lastValidSwarmPlan?.directives.some(
           (previous) =>
             previous.agentId === worker.id &&
-            previous.expiresAtTick >= tickNumber,
+            previous.expiresAtTick >= tickNumber &&
+            !completedDirectives.some(
+              ({ directiveId }) => directiveId === previous.id,
+            ),
         );
         const choice =
           planSource === 'deterministic-fallback' && !retainedDirective
@@ -1848,6 +1874,7 @@ export class SimulationService {
         plan,
         planSource,
         ...(replanReasons.length ? { replanReasons } : {}),
+        ...(completedDirectives.length ? { completedDirectives } : {}),
         ...(plannerFailure ? { plannerFailure } : {}),
         ...(plannerMetadata ? { plannerMetadata } : {}),
         zeroAction,
@@ -2715,6 +2742,7 @@ export class SimulationService {
     virtualTime: string,
     playerEvents: readonly SimulatedPlayerEvent[],
     replanReasons: readonly SwarmReplanReason[] = [],
+    completedDirectives: readonly CompletedSwarmDirective[] = [],
   ): ZeroStrategicObservation {
     const counts = new Map<AgentId, number>(
       [...state.agents.keys()].map((id) => [id, 0]),
@@ -2807,16 +2835,53 @@ export class SimulationService {
               : 'The simulated player moved this tick.',
       ),
       ...(replanReasons.length ? { replanReasons: [...replanReasons] } : {}),
+      ...(completedDirectives.length
+        ? { completedDirectives: [...completedDirectives] }
+        : {}),
       ...(workerReplanRequests.length ? { workerReplanRequests } : {}),
       legalZeroActions,
       strategicTargetCells,
     };
   }
 
+  #completedSwarmDirectives(state: WorldState): CompletedSwarmDirective[] {
+    if (!this.#lastValidSwarmPlan) return [];
+    const recentCleanedCells = this.#simulatedPlayerEvents
+      .filter(
+        (
+          event,
+        ): event is Extract<
+          SimulatedPlayerEvent,
+          { type: 'hex-disinfected' }
+        > => event.type === 'hex-disinfected',
+      )
+      .slice(-6)
+      .map(({ cell }) => cell);
+    const latestWorkers = this.#swarmTicks.at(-1)?.workers ?? [];
+    return this.#lastValidSwarmPlan.directives.flatMap((directive) => {
+      if (
+        directive.expiresAtTick < this.#completedTickCount ||
+        !state.agents.has(directive.agentId)
+      )
+        return [];
+      const priorNearbyPressure = latestWorkers.find(
+        ({ agentId, directive: active }) =>
+          agentId === directive.agentId && active.id === directive.id,
+      )?.situation?.nearbyPressure;
+      return isSwarmDirectiveComplete(state, directive, {
+        priorNearbyPressure,
+        recentCleanedCells,
+      })
+        ? [{ agentId: directive.agentId, directiveId: directive.id }]
+        : [];
+    });
+  }
+
   #swarmReplanReasons(
     tickNumber: number,
     playerEvents: readonly SimulatedPlayerEvent[],
     state: WorldState = this.#state,
+    completedDirectives: readonly CompletedSwarmDirective[] = [],
   ): SwarmReplanReason[] {
     if (!this.#lastValidSwarmPlan) return ['initial'];
     const reasons: SwarmReplanReason[] = [];
@@ -2831,6 +2896,7 @@ export class SimulationService {
       currentWorkers.some((agentId, index) => agentId !== plannedWorkers[index])
     )
       reasons.push('roster-changed');
+    if (completedDirectives.length) reasons.push('directive-complete');
     if ((tickNumber - 1) % 5 === 0) reasons.push('periodic-review');
     if (
       this.#lastValidSwarmPlan.directives.some(
@@ -2922,6 +2988,7 @@ export class SimulationService {
   #assertSwarmPlan(
     plan: SwarmPlan,
     observation: ZeroStrategicObservation,
+    state: WorldState,
     zeroAgentId: AgentId,
     tickNumber: number,
   ): void {
@@ -2947,6 +3014,15 @@ export class SimulationService {
       throw new Error(
         'The Zero plan does not contain one current, allowlisted directive per worker.',
       );
+    for (const directive of directives) {
+      const issue = swarmDirectiveIssue(state, directive);
+      if (issue)
+        throw new SwarmPlannerError({
+          code: 'invalid-decision',
+          message: `Agent Zero assigned an invalid directive: ${issue}`,
+          retryable: false,
+        });
+    }
     if (
       !observation.legalZeroActions.some(
         ({ id }) => id === plan.zeroActionCandidateId,
@@ -2962,6 +3038,7 @@ export class SimulationService {
     zeroAgentId: AgentId,
     tickNumber: number,
     state: WorldState,
+    completedDirectives: readonly CompletedSwarmDirective[],
   ): SwarmPlan {
     const workers = agents.filter(({ id }) => id !== zeroAgentId);
     const retained = this.#lastValidSwarmPlan?.directives;
@@ -2970,7 +3047,10 @@ export class SimulationService {
         retained?.find(
           (directive) =>
             directive.agentId === worker.id &&
-            directive.expiresAtTick >= tickNumber,
+            directive.expiresAtTick >= tickNumber &&
+            !completedDirectives.some(
+              ({ directiveId }) => directiveId === directive.id,
+            ),
         ) ?? {
           id: `neutral-${tickNumber}-${worker.id}`,
           agentId: worker.id,

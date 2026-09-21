@@ -110,9 +110,39 @@ describe('swarm planners', () => {
     });
     expect(body.max_tokens).toBe(4_096);
     expect(body.messages[0]?.content).toContain('Code supplies directive IDs');
+    expect(body.messages[0]?.content).toContain(
+      'Expand targets must be open cells.',
+    );
     expect(JSON.parse(body.messages[1]!.content)).toMatchObject({
       workers: [{ workerId: 'worker_0', position: cell }],
       targetChoices: [{ targetId: 'target_0', cell }],
+    });
+  });
+
+  it('marks completed worker directives in the compact Zero request', async () => {
+    const completedObservation = zeroStrategicObservationSchema.parse({
+      ...observation,
+      agents: observation.agents.map((agent) =>
+        agent.agentId === worker
+          ? { ...agent, directive: plan.directives[0] }
+          : agent,
+      ),
+      replanReasons: ['directive-complete'],
+      completedDirectives: [{ agentId: worker, directiveId: 'directive-1' }],
+    });
+    const fetchImplementation = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(plannerResponse(compactPlan));
+    await new OpenRouterSwarmPlanner({
+      apiKey: 'test-key',
+      fetchImplementation,
+    }).plan(completedObservation, 'test-model');
+    const body = JSON.parse(
+      String(fetchImplementation.mock.calls[0]?.[1]?.body),
+    ) as { messages: Array<{ content: string }> };
+    expect(JSON.parse(body.messages[1]!.content)).toMatchObject({
+      replanReasons: ['directive-complete'],
+      workers: [{ workerId: 'worker_0', directiveComplete: true }],
     });
   });
 

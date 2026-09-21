@@ -112,6 +112,118 @@ class InspectingPlanner implements SwarmPlanner {
   }
 }
 
+class LifecyclePlanner implements SwarmPlanner {
+  readonly mode = 'scripted-swarm-test' as const;
+  readonly configured = true;
+  readonly observations: ZeroStrategicObservation[] = [];
+  private relocatingAgentId: string | null = null;
+  constructor(private readonly mission: 'expand' | 'hold' | 'relocate') {}
+  async plan(
+    observation: ZeroStrategicObservation,
+    _model: string,
+    options: PlannerOptions = {},
+  ) {
+    this.observations.push(structuredClone(observation));
+    const workers = observation.agents.filter(
+      ({ agentId }) => agentId !== observation.zeroAgentId,
+    );
+    if (this.mission === 'relocate' && observation.tickNumber === 1) {
+      this.relocatingAgentId =
+        workers.find((agent) =>
+          observation.strategicTargetCells.some(
+            (cell) =>
+              gridDistance(agent.position, cell) === 1 &&
+              !observation.agents.some(({ position }) => position === cell),
+          ),
+        )?.agentId ?? null;
+      if (!this.relocatingAgentId)
+        throw new Error('No worker has an adjacent relocate target.');
+    }
+    const zeroActionCandidateId = observation.legalZeroActions.find(
+      ({ action }) => action.type === 'wait',
+    )!.id;
+    const plan: SwarmPlan = {
+      strategySummary: 'Lifecycle fixture.',
+      zeroActionCandidateId,
+      directives: workers.map((agent, index) => {
+        const mission =
+          this.mission === 'relocate'
+            ? agent.agentId === this.relocatingAgentId &&
+              observation.tickNumber === 1
+              ? 'relocate'
+              : 'hold'
+            : this.mission;
+        const targetCell =
+          mission === 'relocate'
+            ? observation.strategicTargetCells.find(
+                (cell) =>
+                  gridDistance(agent.position, cell) === 1 &&
+                  !observation.agents.some(({ position }) => position === cell),
+              )
+            : agent.position;
+        if (!targetCell) throw new Error('No adjacent relocate target.');
+        return {
+          id: `lifecycle-${observation.tickNumber}-${index}`,
+          agentId: agent.agentId,
+          mission,
+          targetCell,
+          priority: 'normal',
+          riskTolerance: 'low',
+          issuedAtTick: observation.tickNumber,
+          expiresAtTick: observation.tickNumber + 4,
+        };
+      }),
+    };
+    const metadata = {
+      provider: 'scripted-test' as const,
+      model: 'test/zero',
+      latencyMs: 0,
+    };
+    options.beginAttempt?.('initial')?.({
+      outcome: 'completed',
+      provider: metadata,
+      swarmPlan: plan,
+    });
+    return { plan, metadata };
+  }
+}
+
+function lifecycleReflex(): ReflexProvider {
+  return {
+    mode: 'scripted-reflex-test',
+    model: 'test-reflex',
+    configured: true,
+    async decide(observation, options) {
+      const choice = observation.candidates.find(({ description }) =>
+        observation.directive.mission === 'relocate'
+          ? description.includes('This advances toward the assigned target.')
+          : description.startsWith('Remain on the current cell'),
+      )!;
+      const decision = reflexDecisionSchema.parse({
+        chosenCandidateId: choice.id,
+        confidence: 1,
+        probabilities: Object.fromEntries(
+          observation.candidates.map(({ id }) => [
+            id,
+            id === choice.id ? 1 : 0,
+          ]),
+        ),
+        model: 'test-reflex',
+        latencyMs: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        directiveId: observation.directive.id,
+        cognitionSource: 'jev-reflex',
+      });
+      options?.beginAttempt?.('initial')?.({
+        outcome: 'completed',
+        reflexDecision: decision,
+      });
+      return decision;
+    },
+  };
+}
+
 function setup(
   planner: SwarmPlanner,
   reflex: ReflexProvider,
@@ -856,5 +968,93 @@ describe('zero-swarm SimulationService tick', () => {
     expect(
       simulation.getSnapshot().experiment.attemptAccounting.attemptsStarted,
     ).toBe(1);
+  });
+
+  it('replans after relocate completion and identifies completed directives to Zero', async () => {
+    const planner = new LifecyclePlanner('relocate');
+    const simulation = setup(planner, lifecycleReflex());
+    await simulation.executeNextTick();
+    const first = simulation.getSnapshot().swarmTicks?.[0];
+    const relocating = first?.workers.find(
+      ({ directive }) => directive.mission === 'relocate',
+    );
+    expect(relocating?.action?.type).toBe('move');
+    await simulation.executeNextTick();
+    const second = simulation.getSnapshot().swarmTicks?.[1];
+    expect(second?.replanReasons).toContain('directive-complete');
+    expect(second?.planSource).toBe('zero-llm');
+    expect(planner.observations).toHaveLength(2);
+    expect(planner.observations[1]?.completedDirectives).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          agentId: relocating?.agentId,
+          directiveId: relocating?.directive.id,
+        }),
+      ]),
+    );
+  });
+
+  it('completes expand only after its target becomes worker-controlled', async () => {
+    const planner = new LifecyclePlanner('expand');
+    const infecting: ReflexProvider = {
+      mode: 'scripted-reflex-test',
+      model: 'test-reflex',
+      configured: true,
+      async decide(observation, options) {
+        const choice = observation.candidates.find(({ description }) =>
+          description.startsWith('Infect the current open cell'),
+        )!;
+        const decision = reflexDecisionSchema.parse({
+          chosenCandidateId: choice.id,
+          confidence: 1,
+          probabilities: Object.fromEntries(
+            observation.candidates.map(({ id }) => [
+              id,
+              id === choice.id ? 1 : 0,
+            ]),
+          ),
+          model: 'test-reflex',
+          latencyMs: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          directiveId: observation.directive.id,
+          cognitionSource: 'jev-reflex',
+        });
+        options?.beginAttempt?.('initial')?.({
+          outcome: 'completed',
+          reflexDecision: decision,
+        });
+        return decision;
+      },
+    };
+    const simulation = setup(planner, infecting);
+    await simulation.executeNextTick();
+    expect(planner.observations).toHaveLength(1);
+    expect(
+      simulation
+        .getSnapshot()
+        .swarmTicks?.[0]?.workers.every(
+          ({ actionResult }) => actionResult?.accepted,
+        ),
+    ).toBe(true);
+    await simulation.executeNextTick();
+    const second = simulation.getSnapshot().swarmTicks?.[1];
+    expect(second?.replanReasons).toContain('directive-complete');
+    expect(second?.planSource).toBe('deterministic-fallback');
+    expect(second?.plannerFailure?.code).toBe('invalid-decision');
+    expect(
+      simulation.getSnapshot().experiment.attemptAccounting.attemptsStarted,
+    ).toBe(9);
+  });
+
+  it('does not complete a hold directive merely because its worker waits at target', async () => {
+    const planner = new LifecyclePlanner('hold');
+    const simulation = setup(planner, lifecycleReflex());
+    await simulation.executeNextTick();
+    await simulation.executeNextTick();
+    expect(simulation.getSnapshot().swarmTicks?.[1]?.planSource).toBe(
+      'directive-reuse',
+    );
+    expect(planner.observations).toHaveLength(1);
   });
 });
