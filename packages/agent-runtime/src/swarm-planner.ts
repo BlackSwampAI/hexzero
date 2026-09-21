@@ -429,6 +429,9 @@ function buildSwarmPlannerRequest(
       position: agent.position,
       controlledCellCount: agent.controlledCellCount,
       territoryDelta: agent.territoryDelta,
+      localPressure: agent.localPressure,
+      pressureDirection: agent.pressureDirection,
+      pressureDistance: agent.pressureDistance,
       workerStatus: agent.workerStatus ?? 'unknown',
       directiveComplete:
         agent.directive !== null &&
@@ -477,7 +480,7 @@ function buildSwarmPlannerRequest(
       {
         role: 'system',
         content:
-          "You are Agent Zero, a strategic planner. Return only a JSON object with strategySummary, zeroActionCandidateId, and directives. Return exactly one directive per offered worker, using each workerId once. Each directive has only workerId, mission (expand|hold|relocate|reinforce|evade), targetId (one offered targetId or null), priority (low|normal|high), and riskTolerance (low|medium|high). Select zeroActionCandidateId from legalZeroActions. Assign intent, never exact worker movement. Code supplies directive IDs, agent IDs, target cells, and tick lifetimes; do not output those fields. Use replanReasons, directiveComplete, and workerReplanRequests when present. Non-hold missions need a target. Expand targets must be open cells. Reinforce targets must be infected or adjacent to infection. Do not assign a relocate, reinforce, or evade target equal to that worker's current position.",
+          "You are Agent Zero, a strategic planner. Return only a JSON object with strategySummary, zeroActionCandidateId, and directives. Return exactly one directive per offered worker, using each workerId once. Each directive has only workerId, mission (expand|hold|relocate|reinforce|evade), targetId (one offered targetId or null), priority (low|normal|high), and riskTolerance (low|medium|high). Select zeroActionCandidateId from legalZeroActions. Assign intent, never exact worker movement. Code supplies directive IDs, agent IDs, target cells, and tick lifetimes; do not output those fields. Use replanReasons, directiveComplete, workerReplanRequests, worker localPressure, spatial pressure categories, and recentCaptures when present. Under trail-hunter pressure, a worker caught by the simulated player is permanently captured and removed, and its controlled territory becomes abandoned. Treat sustained high local pressure as an existential threat. Hold under high pressure only as an intentional defensive or sacrifice choice. Non-hold missions need a target. Expand targets must be open cells. Reinforce targets must be infected or adjacent to infection. Do not assign a relocate, reinforce, or evade target equal to that worker's current position.",
       },
       {
         role: 'user',
@@ -492,6 +495,7 @@ function buildSwarmPlannerRequest(
           },
           workers,
           recentPlayerPressure: observation.recentPlayerPressure,
+          recentCaptures: observation.recentCaptures ?? [],
           replanReasons: observation.replanReasons ?? [],
           workerReplanRequests: (
             observation.workerReplanRequests ?? []

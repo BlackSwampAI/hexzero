@@ -18,6 +18,15 @@ The worker observation includes bounded, current capture alerts. The TypeSafe
 request projects them as structured capture pressure without cell IDs or tick
 numbers. The unused prose `relevantRecentFacts` field is removed; current
 situation and legal candidate descriptions supply the relevant local facts.
+For zero-swarm ticks, public disinfection events from the current simulated-player
+advance join retained events before either Zero or workers observe pressure;
+they enter committed history only after the tick succeeds. One shared geometry
+rule classifies a disinfection at most one cell away as high pressure, two cells
+away as rising pressure, and otherwise low pressure. Zero receives that local
+classification and bounded direction/distance categories for each surviving
+agent, plus recent observable captures. A real Jev replan probability triggers
+a worker request at 0.50 under rising or high pressure and at 0.80 under low
+pressure; deterministic fallbacks cannot emit that signal.
 Directive progress compares each worker's current cell with its position before
 the prior tick's physical action. Reaching the directive target has its own
 `at-target` observation status. Zero's worker status uses the same position

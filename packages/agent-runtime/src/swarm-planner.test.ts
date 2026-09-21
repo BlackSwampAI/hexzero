@@ -23,12 +23,18 @@ const observation = zeroStrategicObservationSchema.parse({
       position: cell,
       controlledCellCount: 1,
       territoryDelta: 0,
+      localPressure: 'low',
+      pressureDirection: null,
+      pressureDistance: null,
     },
     {
       agentId: worker,
       position: cell,
       controlledCellCount: 0,
       territoryDelta: 0,
+      localPressure: 'low',
+      pressureDirection: null,
+      pressureDistance: null,
     },
   ],
   recentPlayerPressure: [],
@@ -144,6 +150,66 @@ describe('swarm planners', () => {
       replanReasons: ['directive-complete'],
       workers: [{ workerId: 'worker_0', directiveComplete: true }],
     });
+  });
+
+  it('gives Zero bounded, event-derived worker threat and capture context', async () => {
+    const threatenedObservation = zeroStrategicObservationSchema.parse({
+      ...observation,
+      agents: observation.agents.map((agent) =>
+        agent.agentId === worker
+          ? {
+              ...agent,
+              localPressure: 'high',
+              pressureDirection: 'NE',
+              pressureDistance: 'adjacent',
+            }
+          : agent,
+      ),
+      recentCaptures: [
+        {
+          capturedAgentId: worker,
+          cell,
+          originatingTick: 1,
+          abandonedCellCount: 3,
+        },
+      ],
+    });
+    const fetchImplementation = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(plannerResponse(compactPlan));
+    await new OpenRouterSwarmPlanner({
+      apiKey: 'test-key',
+      fetchImplementation,
+    }).plan(threatenedObservation, 'test-model');
+    const body = JSON.parse(
+      String(fetchImplementation.mock.calls[0]?.[1]?.body),
+    ) as { messages: Array<{ content: string }> };
+    expect(body.messages[0]?.content).toContain(
+      'permanently captured and removed',
+    );
+    expect(body.messages[0]?.content).toContain(
+      'Hold under high pressure only as an intentional defensive or sacrifice choice',
+    );
+    expect(JSON.parse(body.messages[1]!.content)).toMatchObject({
+      workers: [
+        {
+          workerId: 'worker_0',
+          localPressure: 'high',
+          pressureDirection: 'NE',
+          pressureDistance: 'adjacent',
+        },
+      ],
+      recentCaptures: [
+        {
+          capturedAgentId: worker,
+          cell,
+          originatingTick: 1,
+          abandonedCellCount: 3,
+        },
+      ],
+    });
+    expect(body.messages[1]?.content).not.toContain('targetingState');
+    expect(body.messages[1]?.content).not.toContain('simulatedPlayerPosition');
   });
 
   it('rejects unknown compact choices with a safe specific reason', async () => {

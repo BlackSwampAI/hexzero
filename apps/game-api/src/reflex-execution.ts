@@ -10,6 +10,7 @@ import {
   swarmDirectiveSchema,
   type H3Cell,
   type CaptureAlert,
+  type SimulatedPlayerEvent,
   type ProviderFailure,
   type ProviderMetadata,
   type ReflexDecision,
@@ -23,10 +24,16 @@ import {
 } from '@hexzero/world-engine';
 import { AttemptAccounting } from './attempt-accounting';
 import { geographicDirectionBetweenCells } from './geographic-direction';
+import { localPressureAtCell, localPressureFromCells } from './swarm-pressure';
 
 export interface ReflexLocalHistory {
   previousCell?: H3Cell;
   recentCleanedCells?: readonly H3Cell[];
+  /** Public disinfection effects, already bounded by the tick executor. */
+  pressureEvents?: readonly Extract<
+    SimulatedPlayerEvent,
+    { type: 'hex-disinfected' }
+  >[];
   territoryDelta?: number;
   recentActionOutcome?: 'success' | 'rejected' | 'unknown';
   captureAlerts?: readonly CaptureAlert[];
@@ -145,15 +152,12 @@ export function compileReflexObservation(
     directiveProgress = 'advancing';
   else if (directive.targetCell && currentDistance !== 0 && !hasForwardMove)
     directiveProgress = 'blocked';
-  const nearbyCleaned = (history.recentCleanedCells ?? [])
-    .slice(-6)
-    .map((cell) => distance(current, h3CellSchema.parse(cell)))
-    .filter((value): value is number => value !== null);
-  const nearbyPressure = nearbyCleaned.some((value) => value <= 1)
-    ? ('high' as const)
-    : nearbyCleaned.some((value) => value <= 2)
-      ? ('rising' as const)
-      : ('low' as const);
+  const nearbyPressure = history.pressureEvents
+    ? localPressureAtCell(current, history.pressureEvents).localPressure
+    : localPressureFromCells(
+        current,
+        (history.recentCleanedCells ?? []).slice(-6),
+      ).localPressure;
   const territoryTrend =
     (history.territoryDelta ?? 0) > 0
       ? ('growing' as const)

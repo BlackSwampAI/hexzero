@@ -681,6 +681,30 @@ export type CompletedSwarmDirective = z.infer<
   typeof completedSwarmDirectiveSchema
 >;
 
+export const localPressureSchema = z.enum(['low', 'rising', 'high']);
+export type LocalPressure = z.infer<typeof localPressureSchema>;
+
+/**
+ * Bounded, event-derived spatial context for Agent Zero. These categories are
+ * deliberately coarser than H3 cells or simulated-player state.
+ */
+export const pressureDirectionSchema = z.enum([
+  'N',
+  'NE',
+  'SE',
+  'S',
+  'SW',
+  'NW',
+]);
+export type PressureDirection = z.infer<typeof pressureDirectionSchema>;
+
+export const pressureDistanceSchema = z.enum([
+  'same-cell',
+  'adjacent',
+  'nearby',
+]);
+export type PressureDistance = z.infer<typeof pressureDistanceSchema>;
+
 export const swarmSignalSchema = z
   .object({
     type: z.literal('worker-replan-requested'),
@@ -719,6 +743,9 @@ export const zeroStrategicObservationSchema = z
             position: h3CellSchema,
             controlledCellCount: z.number().int().nonnegative(),
             territoryDelta: z.number().int(),
+            localPressure: localPressureSchema,
+            pressureDirection: pressureDirectionSchema.nullable(),
+            pressureDistance: pressureDistanceSchema.nullable(),
             workerStatus: z
               .enum(['advancing', 'at-target', 'stalled', 'blocked', 'unknown'])
               .optional(),
@@ -729,6 +756,7 @@ export const zeroStrategicObservationSchema = z
       .min(1)
       .max(WORLD_SCENARIO_LIMITS.maximumAgents),
     recentPlayerPressure: z.array(z.string().trim().min(1).max(180)).max(12),
+    recentCaptures: z.array(captureAlertSchema).max(4).optional(),
     replanReasons: z.array(swarmReplanReasonSchema).max(10).optional(),
     completedDirectives: z
       .array(completedSwarmDirectiveSchema)

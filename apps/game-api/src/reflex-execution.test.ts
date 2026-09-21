@@ -6,7 +6,11 @@ import {
   TypeSafeJevReflexProvider,
   type ReflexProvider,
 } from '@hexzero/agent-runtime';
-import { type SwarmDirective } from '@hexzero/shared';
+import {
+  simulatedPlayerEventSchema,
+  type SimulatedPlayerEvent,
+  type SwarmDirective,
+} from '@hexzero/shared';
 import {
   applyWorldAction,
   createDevelopmentWorld,
@@ -116,6 +120,25 @@ describe('zero-swarm reflex execution seam', () => {
       ),
     ).toEqual([1, 2, 3, 4]);
     expect(compiled.observation).not.toHaveProperty('simulatedPlayer');
+  });
+
+  it('uses a current public disinfection for immediate pressure without exposing player state', () => {
+    const { state, directive, targetCell } = fixture();
+    const event = simulatedPlayerEventSchema.parse({
+      id: '00000000-0000-4000-8000-000000000020',
+      occurredAt: '2026-08-13T12:00:00.000Z',
+      profile: 'trail-hunter-v1',
+      originatingTick: 1,
+      type: 'hex-disinfected',
+      cell: targetCell,
+      previousControllerAgentId: null,
+    }) as Extract<SimulatedPlayerEvent, { type: 'hex-disinfected' }>;
+    const compiled = compileReflexObservation(state, directive, {
+      pressureEvents: [event],
+    });
+    expect(compiled.observation.currentSituation.nearbyPressure).toBe('high');
+    expect(compiled.observation).not.toHaveProperty('simulatedPlayer');
+    expect(compiled.observation).not.toHaveProperty('pressureEvents');
   });
 
   it('retains a completed provider attempt even when no world state is committed', async () => {
