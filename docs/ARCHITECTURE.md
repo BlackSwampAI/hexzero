@@ -187,8 +187,9 @@ World reset reconstructs deterministic positions, 127 open cells, empty events a
 
 Agent Zero is the generative planner for the roster; every applied scenario
 designates one roster agent for the role through `patientZeroAgentId`, which
-World Lab badges HEX-0. One OpenRouter call per
-tick, under the `swarm-planner-v1` contract, produces a strategy summary,
+World Lab badges HEX-0. One OpenRouter call under the `swarm-planner-v1`
+contract is made only when strategic replanning is required; otherwise the
+last directive set is reused. When called, it produces a strategy summary,
 per-worker directives, and Agent Zero's own action candidate. Workers resolve
 their directives with TypeSafe Jev reflex cognition; Agent Zero receives no
 extra movement, action, infection, capture, or ownership authority beyond the
