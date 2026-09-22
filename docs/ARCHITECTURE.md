@@ -172,7 +172,7 @@ Equivalent legal moves are ordered reproducibly from world seed, stable agent ID
 - `POST /api/simulation/experiment/setup/roster/generate` — generate a deterministic roster
 - `POST /api/simulation/experiment/setup/location-search` — resolve a location query via the Nominatim adapter
 - `POST /api/simulation/experiment/export/preview` — validate filters and report subset size, retention, and cost
-- `POST /api/simulation/experiment/export` — construct one schema-v12 safe JSON document
+- `POST /api/simulation/experiment/export` — construct one schema-v13 safe JSON document
 - `POST /api/simulation/experiment/export/archive` — import the exact generated safe document into the configured local SQLite archive
 - `GET /api/simulation/models` — return the cached, sanitized compatible model catalog
 - `POST /api/simulation/models/refresh` — explicitly refresh that catalog
@@ -187,10 +187,11 @@ World reset reconstructs deterministic positions, 127 open cells, empty events a
 
 Agent Zero is the generative planner for the roster; every applied scenario
 designates one roster agent for the role through `patientZeroAgentId`, which
-World Lab badges HEX-0. One OpenRouter call under the `swarm-planner-v1`
+World Lab badges HEX-0. One OpenRouter call under the `swarm-planner-v2`
 contract is made only when strategic replanning is required; otherwise the
-last directive set is reused. When called, it produces a strategy summary,
-per-worker directives, and Agent Zero's own action candidate. Workers resolve
+last directive set is reused. When called, it selects one opaque `optionId`
+per worker (from server-compiled semantic options) and Agent Zero's own action
+candidate; the server resolves each `optionId` to `(mission, targetCell)`. Workers resolve
 their directives with TypeSafe Jev reflex cognition; Agent Zero receives no
 extra movement, action, infection, capture, or ownership authority beyond the
 action candidate it selects like any other agent.
@@ -229,9 +230,12 @@ One tick executes as follows:
 4. **Zero planning.** The service builds Zero's strategic observation from the
    frozen candidate world — including pressure events, completed directives, and
    legal Zero action candidates — then calls Agent Zero via the OpenRouter
-   `swarm-planner-v1` contract. Zero returns a strategy summary, per-worker
-   directives, and its own action candidate ID. On failure the service falls
-   back to a deterministic plan; the planner attempt is still recorded.
+   `swarm-planner-v2` contract. The observation contains semantic strategic
+   options (opaque `optionId` per worker, no raw H3 cell IDs or agent IDs) and a
+   coarse `worldSummary`; Zero selects an `optionId` per worker and a Zero action
+   candidate ID. The server resolves each `optionId` → `(mission, targetCell)`
+   authoritatively. On failure the service falls back to a deterministic plan;
+   the planner attempt is still recorded.
 
 5. **Worker reflex dispatch (sequential).** For each worker in seeded order:
    compile a local observation with the assigned directive and history; call
@@ -283,13 +287,13 @@ The agent runtime follows [OpenRouter's usage-accounting contract](https://openr
 
 `packages/world-engine` remains deterministic and has no model, HTTP, UI, storage, or credential dependency. It validates world actions independently. Direct proximity is derived from a separately supplied pre-action state.
 
-`packages/agent-runtime` contains the OpenRouter swarm planner, the TypeSafe Jev reflex adapter, and the server-only catalog client. The planner contract (`swarm-planner-v1`) requires text input/output, chat completions, `max_tokens`, non-streaming operation, and at least 16,384 context tokens. The centralized floor covers the bounded complete observation and fixed prompt while reserving a 4,096-token completion ceiling for the JSON decision. Catalog requests use matching server filters, then locally validate every entry. Inference requests deliberately omit tools, `tool_choice`, `response_format`, and `provider.require_parameters`. Provider-default reasoning omits `reasoning`; Off sends `{ enabled: false, exclude: true }`; an advertised effort sends `{ enabled: true, effort, exclude: true }`. No model-family logic, allowlist, compatibility flag, or model default exists.
+`packages/agent-runtime` contains the OpenRouter swarm planner, the TypeSafe Jev reflex adapter, and the server-only catalog client. The planner contract (`swarm-planner-v2`) requires text input/output, chat completions, `max_tokens`, non-streaming operation, and at least 16,384 context tokens. The centralized floor covers the bounded complete observation and fixed prompt while reserving a 4,096-token completion ceiling for the JSON decision. Catalog requests use matching server filters, then locally validate every entry. Inference requests deliberately omit tools, `tool_choice`, `response_format`, and `provider.require_parameters`. Provider-default reasoning omits `reasoning`; Off sends `{ enabled: false, exclude: true }`; an advertised effort sends `{ enabled: true, effort, exclude: true }`. No model-family logic, allowlist, compatibility flag, or model default exists.
 
 The catalog has an eight-second timeout and five-minute in-memory TTL. A successful response replaces the cache. A timeout, transport/HTTP failure, or malformed response retains the last successful catalog and marks it stale with a safe error; without a prior success it returns an empty error state. Manual refresh bypasses TTL while coalescing concurrent refreshes.
 
 Agent Zero resolves its model from the global assignment before each planning call, including its reasoning profile. Assignments may change while playback is paused and no provider/reset mutation is active. Each change is exported with timestamp, scope, prior/new slug, prior/new reasoning profile, and the first globally unique record ordinal at which it is effective; tick execution applies the configuration to the next committed tick group. No unavailable model/profile or missing model is substituted.
 
-The centralized 75-second provider abort timeout covers the complete response lifecycle, including body reading, response decoding, bounded JSON extraction/repair, normalization, and schema validation, and is cleared after every outcome. The same AbortController supports an explicit non-tick-consuming operator cancellation. Safe records expose only bounded status/code/message/request ID/model/finish-reason/latency/usage fields. Scripted providers are explicit deterministic seams selected only by tests or `HEXZERO_PROVIDER=scripted`; there is no automatic fallback. Manual probes use the `swarm-planner-v1` contract and selected reasoning profile, never mutate or advance the world, may incur a small charge, and are cached only for the current server session by model ID, reasoning profile, and contract version.
+The centralized 75-second provider abort timeout covers the complete response lifecycle, including body reading, response decoding, bounded JSON extraction/repair, normalization, and schema validation, and is cleared after every outcome. The same AbortController supports an explicit non-tick-consuming operator cancellation. Safe records expose only bounded status/code/message/request ID/model/finish-reason/latency/usage fields. Scripted providers are explicit deterministic seams selected only by tests or `HEXZERO_PROVIDER=scripted`; there is no automatic fallback. Manual probes use the `swarm-planner-v2` contract and selected reasoning profile, never mutate or advance the world, may incur a small charge, and are cached only for the current server session by model ID, reasoning profile, and contract version.
 
 The deadline is shared across the planning call and all worker reflex calls in one tick rather than renewed per call. Tick browser mutations carry bounded client operation IDs and repeated delivery is coalesced server-side. When a proxy connection resets or a response is otherwise lost, World Lab clears its local guard, refetches the authoritative snapshot, and shows a height-stable reconciling state while polling an active tick. It never resubmits merely because a response was ambiguous.
 

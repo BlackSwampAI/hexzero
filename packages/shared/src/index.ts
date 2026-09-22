@@ -15,7 +15,7 @@ export const OPENROUTER_MAX_OUTPUT_TOKENS = 4_096;
 export const OPENROUTER_PROVIDER_TIMEOUT_MS = 75_000;
 export const OPENROUTER_429_FALLBACK_BACKOFF_MS = 1_500;
 /** Versioned provenance for Agent Zero's structured planning contract. */
-export const SWARM_PLANNER_CONTRACT_VERSION = 'swarm-planner-v1';
+export const SWARM_PLANNER_CONTRACT_VERSION = 'swarm-planner-v2';
 export const swarmPlannerContractVersionSchema = z.literal(
   SWARM_PLANNER_CONTRACT_VERSION,
 );
@@ -317,6 +317,56 @@ export const swarmSignalSchema = z
 export type SwarmSignal = z.infer<typeof swarmSignalSchema>;
 
 /**
+ * A server-compiled, worker-relative strategic option offered to Agent Zero.
+ * The `targetCell` field is SERVER-ONLY and must never be sent to the model.
+ */
+export const strategicOptionSchema = z
+  .object({
+    /** Globally unique within one observation tick. Format: `w{workerIndex}_o{optionIndex}`. */
+    optionId: z.string().regex(/^w[0-9]+_o[0-9]+$/),
+    mission: z.enum(['expand', 'hold', 'relocate', 'reinforce', 'evade']),
+    /** SERVER-ONLY — resolved from this opaque id; never sent to the model. */
+    targetCell: h3CellSchema.nullable(),
+    direction: pressureDirectionSchema.nullable(),
+    distance: z.number().int().nonnegative(),
+    targetState: z.enum(['open', 'infected', 'abandoned']).nullable(),
+    territoryRelation: z
+      .enum([
+        'extends-own-territory',
+        'open-frontier',
+        'isolated-open',
+        'own-territory',
+        'other-swarm-territory',
+        'abandoned-territory',
+      ])
+      .nullable(),
+    pressureAtTarget: localPressureSchema,
+    pressureEffect: z.enum([
+      'increases-separation',
+      'preserves-separation',
+      'reduces-separation',
+      'none',
+    ]),
+    crowding: z.number().int().nonnegative(),
+    continuesActiveDirective: z.boolean(),
+    description: z.string().trim().min(1).max(160),
+  })
+  .strict();
+export type StrategicOption = z.infer<typeof strategicOptionSchema>;
+
+/** Coarse world-level counts included in the model request instead of the raw cell list. */
+export const worldSummarySchema = z
+  .object({
+    totalCells: z.number().int().nonnegative(),
+    openCells: z.number().int().nonnegative(),
+    swarmInfectedCells: z.number().int().nonnegative(),
+    abandonedInfectedCells: z.number().int().nonnegative(),
+    openFrontierCells: z.number().int().nonnegative(),
+  })
+  .strict();
+export type WorldSummary = z.infer<typeof worldSummarySchema>;
+
+/**
  * Strategic input for Agent Zero. This deliberately carries only authoritative
  * world facts and bounded choices; it contains no social or prose-memory data.
  */
@@ -325,6 +375,10 @@ export const zeroStrategicObservationSchema = z
     zeroAgentId: agentIdSchema,
     tickNumber: z.number().int().nonnegative(),
     virtualTime: z.iso.datetime(),
+    /**
+     * Full cell list retained for server-side test planners.
+     * Must NOT be sent to the model — use worldSummary instead.
+     */
     cells: z
       .array(
         z
@@ -336,6 +390,8 @@ export const zeroStrategicObservationSchema = z
           .strict(),
       )
       .min(1),
+    /** Coarse world counts sent to the model in place of the raw cell list. */
+    worldSummary: worldSummarySchema,
     agents: z
       .array(
         z
@@ -368,7 +424,21 @@ export const zeroStrategicObservationSchema = z
       .max(WORLD_SCENARIO_LIMITS.maximumAgents)
       .optional(),
     legalZeroActions: z.array(zeroActionCandidateSchema).min(1).max(9),
-    strategicTargetCells: z.array(h3CellSchema).max(80),
+    /**
+     * Server-compiled semantic options offered per worker.
+     * Options include a hold (targetCell=null) and bounded mission choices.
+     * The model receives a projection without `targetCell`.
+     */
+    workerOptions: z
+      .array(
+        z
+          .object({
+            agentId: agentIdSchema,
+            options: z.array(strategicOptionSchema).min(1).max(8),
+          })
+          .strict(),
+      )
+      .max(WORLD_SCENARIO_LIMITS.maximumAgents),
   })
   .strict()
   .superRefine((observation, context) => {
@@ -399,18 +469,32 @@ export const zeroStrategicObservationSchema = z
         path: ['legalZeroActions'],
         message: 'Zero action candidate IDs must be unique.',
       });
-    const targets = new Set(observation.strategicTargetCells);
-    if (
-      observation.agents.some(
-        ({ directive }) =>
-          directive?.targetCell && !targets.has(directive.targetCell),
-      )
-    )
+    // Validate workerOptions structural integrity.
+    const workerAgents = new Set(
+      agents.filter((id) => id !== observation.zeroAgentId),
+    );
+    const allOptionIds: string[] = [];
+    for (const [entryIndex, wo] of observation.workerOptions.entries()) {
+      if (!workerAgents.has(wo.agentId))
+        context.addIssue({
+          code: 'custom',
+          path: ['workerOptions', entryIndex, 'agentId'],
+          message: 'Worker options must belong to a non-zero agent.',
+        });
+      const holdCount = wo.options.filter((o) => o.mission === 'hold').length;
+      if (holdCount !== 1)
+        context.addIssue({
+          code: 'custom',
+          path: ['workerOptions', entryIndex, 'options'],
+          message: 'Each worker must have exactly one hold option.',
+        });
+      for (const opt of wo.options) allOptionIds.push(opt.optionId);
+    }
+    if (new Set(allOptionIds).size !== allOptionIds.length)
       context.addIssue({
         code: 'custom',
-        path: ['agents'],
-        message:
-          'Active directive targets must be in the strategic target allowlist.',
+        path: ['workerOptions'],
+        message: 'Strategic option IDs must be unique across all workers.',
       });
   });
 export type ZeroStrategicObservation = z.infer<
@@ -2626,7 +2710,7 @@ export type ExperimentExportWorldState = z.infer<
 
 const experimentExportDocumentObjectSchema = z
   .object({
-    schemaVersion: z.literal(12),
+    schemaVersion: z.literal(13),
     generatedAt: z.iso.datetime(),
     experiment: experimentManifestSchema,
     retention: experimentRetentionSchema,

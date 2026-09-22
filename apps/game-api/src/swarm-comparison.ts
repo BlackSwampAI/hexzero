@@ -13,7 +13,6 @@ import {
   type SwarmPlan,
   type ZeroStrategicObservation,
 } from '@hexzero/shared';
-import { gridDistance } from 'h3-js';
 import { generateDeterministicRoster } from '@hexzero/world-engine';
 import { SimulationService } from './simulation-service';
 import type { CompiledReflexObservation } from './reflex-execution';
@@ -153,31 +152,26 @@ class OfflinePlanner implements SwarmPlanner {
         ({ action }) => action.type === 'wait',
       ) ??
       observation.legalZeroActions[0]!;
-    const openTargets = observation.strategicTargetCells.filter((cell) =>
-      observation.cells.some(
-        ({ cell: knownCell, state }) => knownCell === cell && state === 'open',
-      ),
-    );
     const plan: SwarmPlan = {
       strategySummary: 'Deterministic offline perimeter expansion.',
       zeroActionCandidateId: zeroAction.id,
-      directives: observation.agents
-        .filter(({ agentId }) => agentId !== observation.zeroAgentId)
-        .map((agent, index) => {
-          const openTarget = nearestTarget(agent.position, openTargets);
-          return {
-            id: `offline-${observation.tickNumber}-${index}`,
-            agentId: agent.agentId,
-            mission: openTarget ? ('expand' as const) : ('hold' as const),
-            targetCell: openTarget ?? agent.position,
-            priority: 'normal' as const,
-            riskTolerance: 'medium' as const,
-            issuedAtTick: observation.tickNumber,
-            // PR D cadence: directives normally cover five ticks, with events
-            // still able to bring Zero back sooner.
-            expiresAtTick: observation.tickNumber + 4,
-          };
-        }),
+      directives: observation.workerOptions.map((wo, index) => {
+        const expandOpt = wo.options.find((o) => o.mission === 'expand');
+        const holdOpt = wo.options.find((o) => o.mission === 'hold')!;
+        const chosen = expandOpt ?? holdOpt;
+        return {
+          id: `offline-${observation.tickNumber}-${index}`,
+          agentId: wo.agentId,
+          mission: chosen.mission,
+          targetCell: chosen.targetCell,
+          priority: 'normal' as const,
+          riskTolerance: 'medium' as const,
+          issuedAtTick: observation.tickNumber,
+          // PR D cadence: directives normally cover five ticks, with events
+          // still able to bring Zero back sooner.
+          expiresAtTick: observation.tickNumber + 4,
+        };
+      }),
     };
     finalize?.({
       outcome: 'completed',
@@ -185,25 +179,6 @@ class OfflinePlanner implements SwarmPlanner {
       swarmPlan: plan,
     });
     return { plan, metadata: metadata(selectedModel) };
-  }
-}
-
-function nearestTarget(
-  position: ZeroStrategicObservation['agents'][number]['position'],
-  targets: readonly ZeroStrategicObservation['strategicTargetCells'][number][],
-) {
-  return [...targets].sort((left, right) => {
-    const leftDistance = safeDistance(position, left);
-    const rightDistance = safeDistance(position, right);
-    return leftDistance - rightDistance || left.localeCompare(right);
-  })[0];
-}
-
-function safeDistance(left: string, right: string): number {
-  try {
-    return gridDistance(left, right);
-  } catch {
-    return Number.MAX_SAFE_INTEGER;
   }
 }
 

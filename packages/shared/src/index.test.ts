@@ -411,7 +411,7 @@ describe('Patient Zero player-threat feed', () => {
 
 describe('engine contract identifiers', () => {
   it('preserves established engine contract identifiers through branding changes', () => {
-    expect(SWARM_PLANNER_CONTRACT_VERSION).toBe('swarm-planner-v1');
+    expect(SWARM_PLANNER_CONTRACT_VERSION).toBe('swarm-planner-v2');
     expect(OBJECTIVE_PROMPT_VERSION).toBe('durable-influence-v3');
     expect(
       modelVerificationSchema.parse({
@@ -597,7 +597,34 @@ describe('Zero strategic observation schema', () => {
         description: 'Wait on the current cell.',
       },
     ],
-    strategicTargetCells: [cell],
+    worldSummary: {
+      totalCells: 1,
+      openCells: 0,
+      swarmInfectedCells: 1,
+      abandonedInfectedCells: 0,
+      openFrontierCells: 0,
+    },
+    workerOptions: [
+      {
+        agentId: scoreboard[1]!.agentId,
+        options: [
+          {
+            optionId: 'w0_o0',
+            mission: 'hold' as const,
+            targetCell: null,
+            direction: null,
+            distance: 0,
+            targetState: null,
+            territoryRelation: null,
+            pressureAtTarget: 'low' as const,
+            pressureEffect: 'none' as const,
+            crowding: 0,
+            continuesActiveDirective: false,
+            description: 'Hold current position.',
+          },
+        ],
+      },
+    ],
   };
 
   it('requires bounded semantic worker threat fields and caps recent captures', () => {
