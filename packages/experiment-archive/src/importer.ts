@@ -418,7 +418,6 @@ function importProviderAttempts(
   document: ExperimentExportDocument,
   report: ImportReport,
 ): void {
-  if (document.schemaVersion !== 11) return;
   const statement = archive.database.prepare(`
     INSERT OR IGNORE INTO provider_attempts(
       id, experiment_id, agent_id, intended_turn_number, intended_tick_number,

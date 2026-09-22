@@ -28,7 +28,7 @@ import {
 } from '@hexzero/shared';
 
 export interface ExperimentSource {
-  schemaVersion: 9 | 10 | 11;
+  schemaVersion: 12;
   id: ExperimentId;
   startedAt: string;
   providerMode: 'openrouter' | 'scripted-test';
@@ -41,11 +41,11 @@ export interface ExperimentSource {
   currentWorld: WorldSnapshot;
   modelConfiguration: ExperimentModelConfiguration;
   scenario: AppliedScenario;
-  swarmTicks?: readonly SwarmTickRecord[];
+  swarmTicks: readonly SwarmTickRecord[];
   simulatedPlayerEvents: readonly SimulatedPlayerEvent[];
-  providerAttempts?: readonly ProviderAttemptRecord[];
-  attemptRetention?: ProviderAttemptRetention;
-  attemptAccounting?: ExperimentAttemptAccounting;
+  providerAttempts: readonly ProviderAttemptRecord[];
+  attemptRetention: ProviderAttemptRetention;
+  attemptAccounting: ExperimentAttemptAccounting;
 }
 
 export class ExperimentExportValidationError extends Error {
@@ -105,9 +105,7 @@ function selectTickNumbers(
   request: ExperimentExportRequest,
 ): Set<number> | 'all' {
   if (request.turns.mode === 'entire-retained') return 'all';
-  const allTicks = (source.swarmTicks ?? []).map(
-    ({ tickNumber }) => tickNumber,
-  );
+  const allTicks = source.swarmTicks.map(({ tickNumber }) => tickNumber);
   if (request.turns.mode === 'range') {
     const { fromTurn, toTurn } = request.turns;
     return new Set(allTicks.filter((n) => n >= fromTurn && n <= toTurn));
@@ -121,7 +119,7 @@ function requestFilteredActions(
   tickNumbers: Set<number> | 'all',
 ): ResolvedWorldAction[] {
   const zeroAgentId = source.scenario.patientZeroAgentId;
-  const all = resolvedActionsFromTicks(source.swarmTicks ?? [], zeroAgentId);
+  const all = resolvedActionsFromTicks(source.swarmTicks, zeroAgentId);
   return all.filter(
     ({ tickNumber, action, actionResult }) =>
       request.outcomes.includes(
@@ -162,9 +160,9 @@ export function createExperimentExport(
     selectedSet,
     tickNumbers,
   );
-  const retainedTicks = source.swarmTicks?.length ?? 0;
-  const firstRetainedTick = source.swarmTicks?.[0]?.tickNumber;
-  const lastRetainedTick = source.swarmTicks?.at(-1)?.tickNumber;
+  const retainedTicks = source.swarmTicks.length;
+  const firstRetainedTick = source.swarmTicks[0]?.tickNumber;
+  const lastRetainedTick = source.swarmTicks.at(-1)?.tickNumber;
   const droppedRecords = source.totalCompletedTicks - retainedTicks;
   const retention = {
     limit: source.retentionLimit,
@@ -186,7 +184,7 @@ export function createExperimentExport(
     source.scenario.swarmArchitectureVersion === 'zero-swarm-v1' &&
     request.agents.mode === 'all' &&
     request.turns.mode === 'entire-retained'
-      ? [...structuredClone(source.swarmTicks ?? [])]
+      ? [...structuredClone(source.swarmTicks)]
       : undefined;
   const simulatedPlayerEventsIncluded = source.simulatedPlayerEvents.filter(
     (event) =>
@@ -226,20 +224,14 @@ export function createExperimentExport(
     filters: structuredClone(request),
     selection: {
       selectedAgentIds,
-      ...(source.schemaVersion === 10 || source.schemaVersion === 11
-        ? {
-            matchingTickCount:
-              exportedSwarmTicks?.length ??
-              new Set(agentFiltered.map(({ tickNumber }) => tickNumber)).size,
-          }
-        : {}),
+      matchingTickCount:
+        exportedSwarmTicks?.length ??
+        new Set(agentFiltered.map(({ tickNumber }) => tickNumber)).size,
       ...(exportedSwarmTicks
         ? { matchingSwarmTickCount: exportedSwarmTicks.length }
         : {}),
       matchingControlChangeCount: controlChanges.length,
-      ...(source.schemaVersion === 11
-        ? { matchingProviderAttemptCount: providerAttempts.length }
-        : {}),
+      matchingProviderAttemptCount: providerAttempts.length,
       matchingSimulatedPlayerEventCount: simulatedPlayerEventsIncluded.length,
     },
     agents: selectedAgents,
@@ -293,28 +285,19 @@ export function createExperimentExport(
       ? { controlChanges: structuredClone(controlChanges) }
       : {}),
     ...(exportedSwarmTicks ? { swarmTicks: exportedSwarmTicks } : {}),
-    ...(source.schemaVersion === 10 || source.schemaVersion === 11
-      ? {
-          tickSummaries: summarizeTicks(
-            (source.swarmTicks ?? []).filter(
-              (tick) =>
-                tickNumbers === 'all' || tickNumbers.has(tick.tickNumber),
-            ),
-            providerAttempts,
-          ),
-        }
-      : {}),
-    ...(source.schemaVersion === 11
-      ? {
-          providerAttempts,
-          attemptRetention: {
-            ...source.attemptRetention!,
-            requestedRangeExtendsBeyondRetention:
-              source.attemptRetention!.droppedRecords > 0,
-          },
-          attemptAccounting: source.attemptAccounting!,
-        }
-      : {}),
+    tickSummaries: summarizeTicks(
+      source.swarmTicks.filter(
+        (tick) => tickNumbers === 'all' || tickNumbers.has(tick.tickNumber),
+      ),
+      providerAttempts,
+    ),
+    providerAttempts,
+    attemptRetention: {
+      ...source.attemptRetention,
+      requestedRangeExtendsBeyondRetention:
+        source.attemptRetention.droppedRecords > 0,
+    },
+    attemptAccounting: source.attemptAccounting,
   };
   return experimentExportDocumentSchema.parse(document);
 }
@@ -362,9 +345,7 @@ export function createExperimentPreview(
   ).length;
   return experimentExportPreviewSchema.parse({
     experimentId: source.id,
-    ...(document.selection.matchingTickCount === undefined
-      ? {}
-      : { matchingTickCount: document.selection.matchingTickCount }),
+    matchingTickCount: document.selection.matchingTickCount,
     ...(document.selection.matchingSwarmTickCount === undefined
       ? {}
       : { matchingSwarmTickCount: document.selection.matchingSwarmTickCount }),
@@ -373,14 +354,8 @@ export function createExperimentPreview(
       document.selection.matchingProviderAttemptCount ?? 0,
     selectedAgentCount: document.selection.selectedAgentIds.length,
     retention: document.retention,
-    knownCostCredits:
-      document.schemaVersion === 11
-        ? ledgerKnownCost
-        : (document.metrics?.aggregate.knownCostCredits ?? 0),
-    attemptsWithUnknownCost:
-      document.schemaVersion === 11
-        ? ledgerUnknownCost
-        : (document.metrics?.aggregate.attemptsWithUnknownCost ?? 0),
+    knownCostCredits: ledgerKnownCost,
+    attemptsWithUnknownCost: ledgerUnknownCost,
     serializedUtf8Bytes,
     approximateAiInputTokens: Math.ceil(serializedUtf8Bytes / 4),
     tokenEstimateMethod: 'ceil(UTF-8 bytes / 4)',
@@ -411,7 +386,7 @@ function filterProviderAttempts(
   selected: Set<AgentId>,
   tickNumbers: Set<number> | 'all',
 ): ProviderAttemptRecord[] {
-  let attempts = (source.providerAttempts ?? []).filter(({ agentId }) =>
+  let attempts = source.providerAttempts.filter(({ agentId }) =>
     selected.has(agentId),
   );
   if (tickNumbers !== 'all')
@@ -457,7 +432,7 @@ function rangeExtendsBeyondRetention(
   last?: number,
 ): boolean {
   if (request.turns.mode === 'entire-retained')
-    return source.totalCompletedTicks > (source.swarmTicks?.length ?? 0);
+    return source.totalCompletedTicks > source.swarmTicks.length;
   if (request.turns.mode !== 'range') return false;
   if (!first || !last) return true;
   return request.turns.fromTurn < first || request.turns.toTurn > last;

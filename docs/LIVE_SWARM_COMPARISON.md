@@ -5,14 +5,14 @@
 - `live-zero-jev`: OpenRouter Agent Zero planning plus live TypeSafe Jev worker cognition.
 - `live-zero-deterministic-workers`: the same OpenRouter Agent Zero planning with the server's deterministic legal-candidate selector and no TypeSafe calls.
 
-This is a Jev ablation, not a general claim that zero-swarm is better than legacy multi-agent mode. Legacy is deliberately not included in the first live command because its provider-call pattern and cognition are different.
+This is a Jev ablation, not a general claim that zero-swarm is better than the retired legacy multi-agent mode. Legacy mode was deliberately not included in the first live command because its provider-call pattern and cognition were different; it has since been removed entirely (see ADR 0033), and zero-swarm is now the only cognition architecture Hex Zero runs.
 
 ## Observe one swarm in World Lab
 
-World Lab opens in the legacy mode by default. To watch one zero-swarm experiment:
+World Lab now always runs zero-swarm; there is no cognition-mode selector. To watch one zero-swarm experiment:
 
 1. Set `OPENROUTER_API_KEY` and `TYPESAFE_API_KEY` for the Game API process, then run `pnpm dev`. The keys are server-only. `pnpm dev:test-provider` does not make real provider calls.
-2. Open World Lab at `http://localhost:3000`. In the top-right **More World Lab actions** menu, open **World setup**. Set **Cognition mode** to **Zero swarm v1 (Agent Zero + Jev)**. Enable simulated player pressure and select **Trail hunter v1** if you want capture pressure. Set bounded provider attempt and credit admission limits.
+2. Open World Lab at `http://localhost:3000`. In the top-right **More World Lab actions** menu, open **World setup**. Enable simulated player pressure and select **Trail hunter v1** if you want capture pressure. Set bounded provider attempt and credit admission limits.
 3. Select **Preview**, then **Apply / Create Experiment**. The header will say **Zero swarm v1 experiment**. In **Agents**, select an available model for Agent Zero.
 4. Use **Single tick** to start. The **Scoreboard** tab shows Zero's strategy and worker directives; selecting a worker shows its chosen action, confidence, and probabilities. The **Swarm** activity tab shows the tick history. A provider fallback notice means the corresponding key or provider is unavailable.
 
@@ -56,6 +56,6 @@ Do not reduce a run to final territory. Review these questions after the first b
 4. How often does Zero need generative replanning, and why?
 5. What are the measured OpenRouter costs, Jev token volume, clearly labeled TypeSafe estimate if configured, and unknown cost fields?
 6. Inspect low-confidence choices, high-confidence bad-looking choices, repeated stalls, capture-alert response, and high trail-hunter-pressure response. Does the narrow Jev state/question keep deterministic work in code and confidence routing meaningful?
-7. Is Jev worth its complexity against deterministic workers, and does zero-swarm offer more compelling gameplay than legacy mode?
+7. Is Jev worth its complexity against deterministic workers?
 
-Do not retire legacy systems from this experiment alone.
+This experiment's results, together with earlier offline comparisons, informed the decision to retire the legacy multi-agent architecture (see ADR 0033).

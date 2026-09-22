@@ -36,7 +36,7 @@ async function currentExport(): Promise<ExperimentExportDocument> {
 describe('experiment archive', () => {
   it('archives a current swarm export with swarm-native provenance', async () => {
     const document = await currentExport();
-    expect(document.schemaVersion).toBe(11);
+    expect(document.schemaVersion).toBe(12);
     expect(document.experiment).toMatchObject({
       swarmPlannerContractVersion: 'swarm-planner-v1',
       scenario: { swarmArchitectureVersion: 'zero-swarm-v1' },
@@ -105,5 +105,27 @@ describe('experiment archive', () => {
     };
     raw.experiment.scenario!.swarmArchitectureVersion = 'other-architecture';
     expect(experimentExportDocumentSchema.safeParse(raw).success).toBe(false);
+  });
+
+  it('rejects an export document with a non-v12 schema version', async () => {
+    const raw = structuredClone(await currentExport()) as unknown as Record<
+      string,
+      unknown
+    >;
+    raw.schemaVersion = 11;
+    expect(experimentExportDocumentSchema.safeParse(raw).success).toBe(false);
+    const archive = new ArchiveDatabase({ path: ':memory:' });
+    expect(() =>
+      importExperimentExport(
+        archive,
+        raw as unknown as ExperimentExportDocument,
+      ),
+    ).toThrow(ExperimentImportError);
+    expect(
+      archive.database
+        .prepare('SELECT COUNT(*) AS count FROM experiments')
+        .get(),
+    ).toEqual({ count: 0 });
+    archive.close();
   });
 });

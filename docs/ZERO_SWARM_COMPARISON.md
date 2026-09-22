@@ -1,7 +1,15 @@
 # Zero-swarm offline comparison
 
-PR F compares three cognition variants with the same seeded scenario and the
-same optional `trail-hunter-v1` pressure profile:
+> **Historical migration experiment.** This report originally compared three
+> cognition variants, including `legacy-multi-agent`. That variant has since
+> been removed (see ADR 0033); Hex Zero now runs only zero-swarm. The current
+> comparison tooling (`swarm-comparison.ts`/`swarm-comparison-cli.ts`) compares
+> Zero+Jev (`zero-swarm-jev`) against Zero+deterministic workers
+> (`zero-swarm-deterministic-workers`) only. The historical findings below are
+> preserved as evidence of the experiment and are not rewritten.
+
+PR F originally compared three cognition variants with the same seeded
+scenario and the same optional `trail-hunter-v1` pressure profile:
 
 - `legacy-multi-agent`
 - `zero-swarm-v1`
@@ -56,9 +64,10 @@ reproducibility and exposes comparable telemetry; it does not demonstrate
 real-model quality, production latency, or provider cost. Real-provider studies
 remain explicitly opted in and should archive their safe exports separately.
 
-The existing archive comparison command is currently legacy-turn-centric. It
-can retain schema-v11 swarm tick records and independent provider attempts, but
-it does not replace this same-scenario, per-tick swarm harness.
+The experiment archive importer now accepts only schema-v12 swarm-native
+exports, which always carry swarm tick records and independent provider
+attempt accounting; it does not replace this same-scenario, per-tick swarm
+harness.
 
 ## Results
 
@@ -90,8 +99,12 @@ counts remain in the JSON report. Across the three seeds, Zero made 13 reviews
 after its initial plans in the scripted swarm and 20 in the greedy baseline;
 the fake reflex policy raised no worker replan signal.
 
-**Retirement decision:** retain `legacy-multi-agent` for now. The offline run
-proves the accounting and comparison path, but it does not establish better
-survival or cost for live Zero/Jev cognition. Revisit retirement after
-reproducible real-provider trials, credible pressure outcomes, and authoritative
-cost or clearly labeled pricing estimates.
+**Retirement decision (at the time of this run):** retain `legacy-multi-agent`
+for now. The offline run proves the accounting and comparison path, but it
+does not establish better survival or cost for live Zero/Jev cognition.
+Revisit retirement after reproducible real-provider trials, credible pressure
+outcomes, and authoritative cost or clearly labeled pricing estimates.
+
+**Update:** the live Zero/Jev trials referenced above were subsequently run
+(see `docs/LIVE_SWARM_COMPARISON.md`) and `legacy-multi-agent` was retired; see
+ADR 0033.

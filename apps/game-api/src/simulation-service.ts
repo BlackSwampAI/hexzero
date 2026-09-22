@@ -1654,7 +1654,7 @@ export class SimulationService {
       currentWorld: this.#worldSnapshot(),
       modelConfiguration: this.#modelConfiguration,
       scenario: this.#scenario,
-      schemaVersion: 11,
+      schemaVersion: 12,
       providerAttempts: this.#attemptAccounting.ledger(),
       attemptRetention: this.#attemptAccounting.retention(),
       attemptAccounting: this.#attemptAccounting.snapshot(),
