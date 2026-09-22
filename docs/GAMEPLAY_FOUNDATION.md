@@ -2,10 +2,10 @@
 
 > **Delivery status (2026-08-23, updated for zero-swarm migration):** the
 > simultaneous agent tick, deterministic virtual clock, shared-deadline
-> dispatcher, phased resolution, schema-v12 experiment attribution, and the
+> dispatcher, phased resolution, schema-v13 experiment attribution, and the
 > optional seeded D1 casual cleaner and trail-hunter-v1 simulated-player
 > profiles are delivered. `zero-swarm-v1` is the only cognition architecture:
-> one generative planner (Agent Zero, contract `swarm-planner-v1`) issues
+> one generative planner (Agent Zero, contract `swarm-planner-v2`) issues
 > structured directives; workers resolve them via TypeSafe Jev reflex cognition.
 > Personalities, agent-to-agent communication, formal alliances, per-worker
 > goals, and prose memories are removed. Real Player Mode, capture, respawn,

@@ -45,19 +45,21 @@ bounded capture context comes from public capture events. Neither projection
 reads the hunter's selected target, planned route, or hidden state. Current
 events are projected before worker decisions without being committed early.
 
-In `zero-swarm-v1`, a separate OpenRouter planner receives bounded strategic
-facts, an engine-generated target allowlist, and opaque legal Zero action IDs.
-The service validates every returned directive and action selection before
-worker dispatch. A rejected plan causes an explicit deterministic fallback;
-it never grants world mutation authority. Safe swarm tick records contain
-structured plans and outcomes, while raw planner messages and responses remain
-server-private. Legacy social and prose-memory cognition does not run in this
-mode.
-The planner's preferred wire response contains only opaque worker, target, and
-Zero-action choices. The server maps them to authorized agent/cell/action IDs
-and issues directive IDs and lifetimes. Invalid outputs record only a bounded
-validation category such as an unknown target choice; they do not retain or
-echo the raw model response. When a worker has no unexpired directive from a
+In `zero-swarm-v1`, a separate OpenRouter planner (`swarm-planner-v2` contract)
+receives bounded strategic facts and opaque legal Zero action IDs. The model
+never sees raw H3 cell IDs or agent IDs: it receives pre-compiled semantic
+options with opaque `optionId` labels per worker and a coarse `worldSummary`
+in place of the raw cell list. The server maps each returned `optionId` to an
+authorized `(mission, targetCell)` pair server-side. The service validates
+every returned directive and action selection before worker dispatch. A rejected
+plan causes an explicit deterministic fallback; it never grants world mutation
+authority. Safe swarm tick records contain structured plans and outcomes, while
+raw planner messages and responses remain server-private. Legacy social and
+prose-memory cognition does not run in this mode.
+The planner wire response contains only opaque `optionId` and Zero-action
+choices. The server maps them to authorized agent/cell/action IDs and issues
+directive IDs and lifetimes. Invalid outputs record only a bounded validation
+category; they do not retain or echo the raw model response. When a worker has no unexpired directive from a
 prior valid Zero plan, it uses deterministic legal local expansion without a
 Jev request until planning recovers.
 

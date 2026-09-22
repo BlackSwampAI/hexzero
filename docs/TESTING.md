@@ -48,16 +48,20 @@ preservation.
 
 ### Agent runtime (`packages/agent-runtime`)
 
-`swarm-planner.test.ts` covers the OpenRouter swarm planner: repeatable
-observation-derived plans, bounded worker and target choices mapped to
-authoritative directives, completed-directive marking in the compact Zero
-request, event-derived worker threat and capture context, unknown-choice
-rejection, missing-directive reporting, deterministic-plan bounds checking,
-ten-tick lifetime enforcement, invented-candidate and omitted-directive
-rejection, overloaded-response retry, complete provider accounting (cost,
-tokens, usage retention for invalid or unparseable plans, optional cost
-omission), non-OK attempt attribution, cancellation safety, and secret/
-observation-data exclusion from response metadata.
+`swarm-planner.test.ts` covers the OpenRouter swarm planner (`swarm-planner-v2`
+contract): repeatable observation-derived plans, opaque `optionId` selection
+mapped to authoritative directives server-side, no raw H3 cell IDs or agent
+IDs in the model request, `worldSummary` present, completed-directive marking
+in the compact Zero request, event-derived worker threat and capture context,
+unknown-option-choice rejection, cross-worker optionId rejection (optionId
+belonging to a different worker), v1-shaped plan rejection (agentId/mission/
+targetCell/no optionId format rejected — the model can never return raw H3),
+repeated-workerId rejection, missing-directive reporting, deterministic-plan
+bounds checking, ten-tick lifetime enforcement, invented-candidate and
+omitted-directive rejection, overloaded-response retry, complete provider
+accounting (cost, tokens, usage retention for invalid or unparseable plans,
+optional cost omission), non-OK attempt attribution, cancellation safety, and
+secret/observation-data exclusion from response metadata.
 
 `typesafe-jev-reflex-provider.test.ts` covers the TypeSafe Jev reflex provider:
 current-legal-candidate reuse across calls, pinned model and opaque criteria
@@ -90,6 +94,37 @@ endpoint, and absence of legacy sequential-turn routes.
 directives and worker reflex actions in one tick, and reset without retained
 ticks.
 
+`strategic-options.test.ts` covers the deterministic semantic-option compiler:
+hold always first (targetCell=null), Zero excluded from worker options, at-most-8
+cap, at-most-3 sector-diversified expand options, stable opaque optionIds,
+greedy deconfliction across workers, continuesActiveDirective marking, evade
+only under pressure (never reduces separation), unique optionIds across workers,
+no raw H3 cell IDs or agent IDs in descriptions, all non-hold options in the
+20-worker/radius-12 world with pressure and abandoned cell pass swarmDirectiveIssue,
+reinforce-reclaim-abandoned survives priority bounding under pressure with a
+continue option, expand candidate scan widens beyond radius-4 when no local
+open cells exist, real `buildSwarmPlannerRequest` prompt-size diagnostic using
+three scenarios (numbers measured 2026-09-22):
+
+| Scenario | Config                                                   | v2 message bytes | ≈ tokens |
+| -------- | -------------------------------------------------------- | ---------------- | -------- |
+| (a)      | 8 workers / radius 6 / 127 cells                         | 13,047 B         | ~3,262   |
+| (b)      | 20 workers / radius 12 / 469 cells                       | 29,478 B         | ~7,370   |
+| (c)      | 8 workers / radius 12 / 469 cells                        | 13,281 B         | ~3,320   |
+| v1 est.  | 20 workers / 469 cells (full cells + UUIDs + 80 targets) | 39,567 B         | ~9,892   |
+
+Assertions: (c) within 10 % of (a) (world-cell count does not drive message
+size at fixed roster), per-worker bytes in (b) ≤ 2,500 (measured: 1,474 B/worker),
+(b) < v1 estimate.
+
+**Option compaction (scenario b):** before compaction (all option fields
+included) = 38,374 B (~9,594 tokens); after (defaults omitted) = 29,478 B
+(~7,370 tokens); saved = 8,896 B (~2,224 tokens, 23 % reduction).
+
+And 20-worker radius-12 top-expand targets are diverse (≥70%
+distinct targets, ≥2 direction sectors; typically 3 directions observed
+because ring-12 workers all expand inward).
+
 `simulation-service.swarm.test.ts` covers full swarm tick scenarios using
 scripted providers: conservative and elevated-pressure replan thresholds,
 current-tick disinfection escalation into the next Zero replan, terminal
@@ -99,10 +134,10 @@ valid API response without legacy turn records, frozen-facts ordering and
 physical-action engine resolution, first-plan failure with one billed Zero
 attempt and deterministic local expansion, directive reuse for four ticks
 followed by replanning on the fifth, worker replan request, retained-directive
-expiry, at-target and advancing-toward-target Zero reporting, reuse-tick
-reservation release on cancellation, simulated-player event export, failed-Jev
-wait fallback, cancellation without committed world, relocate completion and
-completed-directive identification, and expand completion only after
+expiry, hold-waiting-worker stalled status, advancing-toward-target Zero
+reporting, reuse-tick reservation release on cancellation, simulated-player
+event export, failed-Jev wait fallback, cancellation without committed world,
+completed-directive identity reporting to Zero, and expand completion only after
 worker control.
 
 `reflex-execution.test.ts` covers the reflex execution seam: scripted end-to-

@@ -1,4 +1,4 @@
-import { gridDistance } from 'h3-js';
+import { gridDisk, gridDistance } from 'h3-js';
 import {
   SwarmPlannerError,
   type ReflexProvider,
@@ -73,6 +73,7 @@ import {
   boundedRecentCaptures,
   localPressureAtCell,
 } from './swarm-pressure';
+import { compileStrategicOptions } from './strategic-options';
 import { AttemptAccounting } from './attempt-accounting';
 import {
   chooseReflexWorldAction,
@@ -1286,15 +1287,43 @@ export class SimulationService {
           hex.controllerAgentId,
           (counts.get(hex.controllerAgentId) ?? 0) + 1,
         );
-    const strategicTargetCells = [
-      ...new Set([
-        ...(this.#lastValidSwarmPlan?.directives.flatMap(({ targetCell }) =>
-          targetCell ? [targetCell] : [],
-        ) ?? []),
-        ...[...state.agents.values()].map(({ currentCell }) => currentCell),
-        ...[...state.hexes.keys()].sort(),
-      ]),
-    ].slice(0, 80);
+    // Compute world summary (sent to model in place of raw cell list).
+    let openCells = 0;
+    let swarmInfectedCells = 0;
+    let abandonedInfectedCells = 0;
+    let openFrontierCells = 0;
+    const infectedCellSet = new Set<H3Cell>();
+    for (const [cell, hex] of state.hexes.entries()) {
+      if (hex.state === 'open') {
+        openCells++;
+      } else {
+        infectedCellSet.add(cell);
+        if (hex.controllerAgentId === null) abandonedInfectedCells++;
+        else swarmInfectedCells++;
+      }
+    }
+    for (const cell of state.hexes.keys()) {
+      if (state.hexes.get(cell)?.state !== 'open') continue;
+      let isFrontier = false;
+      try {
+        for (const neighbor of gridDisk(cell, 1) as H3Cell[]) {
+          if (neighbor !== cell && infectedCellSet.has(neighbor)) {
+            isFrontier = true;
+            break;
+          }
+        }
+      } catch {
+        /* ignore bad cells */
+      }
+      if (isFrontier) openFrontierCells++;
+    }
+    const worldSummary = {
+      totalCells: state.hexes.size,
+      openCells,
+      swarmInfectedCells,
+      abandonedInfectedCells,
+      openFrontierCells,
+    };
     const zero = state.agents.get(zeroAgentId)!;
     const legalZeroActions = enumerateLegalWorldActions(state, zeroAgentId).map(
       (action, index) => ({
@@ -1321,6 +1350,23 @@ export class SimulationService {
       playerEvents,
       tickNumber,
     );
+    // Compile semantic strategic options per worker.
+    const pressureEventCells = pressureEvents.map(({ cell }) => cell);
+    const optionMap = compileStrategicOptions({
+      state,
+      zeroAgentId,
+      tickNumber,
+      pressureEventCells,
+      lastPlanDirectives: this.#lastValidSwarmPlan?.directives ?? null,
+    });
+    // Build workerOptions in stable sorted-agentId order (same order compileStrategicOptions uses).
+    const sortedWorkerIds = [...state.agents.keys()]
+      .filter((id) => id !== zeroAgentId)
+      .sort((a, b) => a.localeCompare(b));
+    const workerOptions = sortedWorkerIds.map((agentId) => ({
+      agentId,
+      options: optionMap.get(agentId) ?? [],
+    }));
     return {
       zeroAgentId,
       tickNumber,
@@ -1331,6 +1377,7 @@ export class SimulationService {
         controllerAgentId:
           hex.state === 'infected' ? hex.controllerAgentId : null,
       })),
+      worldSummary,
       agents: [...state.agents.values()].map((agent) => {
         const localThreat = localPressureAtCell(
           agent.currentCell,
@@ -1348,7 +1395,10 @@ export class SimulationService {
           'advancing' | 'at-target' | 'stalled' | 'blocked' | 'unknown' =
           'unknown';
         if (priorWorker) {
-          if (directive?.targetCell === agent.currentCell)
+          if (
+            directive?.targetCell === agent.currentCell ||
+            (directive?.mission === 'hold' && directive.targetCell === null)
+          )
             workerStatus = 'at-target';
           else if (
             directive?.targetCell &&
@@ -1381,7 +1431,7 @@ export class SimulationService {
           : event.type === 'simulated-player-clean-blocked'
             ? 'Cleaning pressure was blocked by an occupied infected cell.'
             : event.type === 'simulated-player-agent-captured'
-              ? `Worker ${event.capturedAgentId} was captured at ${event.cell}; ${event.abandonedCellCount} controlled cells became abandoned.`
+              ? `A worker was captured; ${event.abandonedCellCount} controlled cells became abandoned.`
               : 'The simulated player moved this tick.',
       ),
       ...(recentCaptures.length ? { recentCaptures } : {}),
@@ -1391,7 +1441,7 @@ export class SimulationService {
         : {}),
       ...(workerReplanRequests.length ? { workerReplanRequests } : {}),
       legalZeroActions,
-      strategicTargetCells,
+      workerOptions,
     };
   }
 
@@ -1557,14 +1607,34 @@ export class SimulationService {
         (directive) =>
           directive.issuedAtTick !== tickNumber ||
           directive.expiresAtTick < tickNumber ||
-          directive.expiresAtTick > tickNumber + 9 ||
-          (directive.targetCell !== null &&
-            !observation.strategicTargetCells.includes(directive.targetCell)),
+          directive.expiresAtTick > tickNumber + 9,
       )
     )
       throw new Error(
-        'The Zero plan does not contain one current, allowlisted directive per worker.',
+        'The Zero plan does not contain one current directive per worker.',
       );
+    // Verify each directive's (mission, targetCell) was offered to that agent.
+    for (const directive of directives) {
+      const wo = observation.workerOptions.find(
+        (w) => w.agentId === directive.agentId,
+      );
+      if (!wo) {
+        throw new Error(
+          `The Zero plan contains a directive for an agent with no offered options.`,
+        );
+      }
+      const matchingOption = wo.options.find(
+        (opt) =>
+          opt.mission === directive.mission &&
+          opt.targetCell === directive.targetCell,
+      );
+      if (!matchingOption)
+        throw new SwarmPlannerError({
+          code: 'invalid-decision',
+          message: `Agent Zero assigned a directive not in the offered options for ${directive.agentId}.`,
+          retryable: false,
+        });
+    }
     for (const directive of directives) {
       const issue = swarmDirectiveIssue(state, directive);
       if (issue)
@@ -1655,7 +1725,7 @@ export class SimulationService {
       currentWorld: this.#worldSnapshot(),
       modelConfiguration: this.#modelConfiguration,
       scenario: this.#scenario,
-      schemaVersion: 12,
+      schemaVersion: 13,
       providerAttempts: this.#attemptAccounting.ledger(),
       attemptRetention: this.#attemptAccounting.retention(),
       attemptAccounting: this.#attemptAccounting.snapshot(),

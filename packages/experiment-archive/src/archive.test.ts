@@ -36,9 +36,9 @@ async function currentExport(): Promise<ExperimentExportDocument> {
 describe('experiment archive', () => {
   it('archives a current swarm export with swarm-native provenance', async () => {
     const document = await currentExport();
-    expect(document.schemaVersion).toBe(12);
+    expect(document.schemaVersion).toBe(13);
     expect(document.experiment).toMatchObject({
-      swarmPlannerContractVersion: 'swarm-planner-v1',
+      swarmPlannerContractVersion: 'swarm-planner-v2',
       scenario: { swarmArchitectureVersion: 'zero-swarm-v1' },
     });
     expect(document.swarmTicks).toHaveLength(1);
@@ -52,7 +52,7 @@ describe('experiment archive', () => {
           'SELECT decision_contract_version FROM experiments WHERE id = ?',
         )
         .get(document.experiment.id),
-    ).toEqual({ decision_contract_version: 'swarm-planner-v1' });
+    ).toEqual({ decision_contract_version: 'swarm-planner-v2' });
     archive.close();
   });
 
