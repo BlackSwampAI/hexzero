@@ -1,10 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   SWARM_PLANNER_CONTRACT_VERSION,
-  WORLD_SCENARIO_LIMITS,
   OBJECTIVE_PROMPT_VERSION,
   apiErrorSchema,
-  agentIdSchema,
   agentObservationSchema,
   captureEligibilitySchema,
   experimentExportWorldStateSchema,
@@ -107,7 +105,7 @@ const snapshot = {
     spawnSeed: 'spawn',
     minimumSpawnSeparation: 0,
     patientZeroAgentId: worldAgents[0]!.id,
-    roster: worldAgents.map(({ currentCell: _currentCell, ...agent }) => agent),
+    roster: worldAgents.map(({ id, name, color }) => ({ id, name, color })),
     modelConfiguration: {
       globalModelId: 'author/compatible-model',
       globalReasoningProfile: 'provider-default',

@@ -1,4 +1,4 @@
-import { gridDisk, gridDistance } from 'h3-js';
+import { gridDistance } from 'h3-js';
 import {
   SwarmPlannerError,
   type ReflexProvider,
@@ -11,9 +11,7 @@ import {
   experimentModelConfigurationSchema,
   modelSupportsReasoningProfile,
   updateExperimentModelsRequestSchema,
-  h3CellSchema,
   OPENROUTER_PROVIDER_TIMEOUT_MS,
-  WORLD_SCENARIO_LIMITS,
   PATIENT_ZERO_PLAYER_THREAT_FEED_LIMIT,
   PATIENT_ZERO_PRESSURE_WINDOW_TICKS,
   swarmDirectiveSchema,
