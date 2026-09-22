@@ -1,21 +1,31 @@
 # Gameplay Foundation
 
-> **Delivery status (2026-08-23):** the pre-PR5 simultaneous agent tick,
-> deterministic virtual clock, shared-deadline dispatcher, phased resolution,
-> schema-v10 experiment attribution, and the optional seeded D1 casual cleaner
-> are delivered as an operator-driven foundation. Real Player Mode, capture,
-> respawn, GPS authority, and background timing remain future work.
+> **Delivery status (2026-08-23, updated for zero-swarm migration):** the
+> simultaneous agent tick, deterministic virtual clock, shared-deadline
+> dispatcher, phased resolution, schema-v12 experiment attribution, and the
+> optional seeded D1 casual cleaner and trail-hunter-v1 simulated-player
+> profiles are delivered. `zero-swarm-v1` is the only cognition architecture:
+> one generative planner (Agent Zero, contract `swarm-planner-v1`) issues
+> structured directives; workers resolve them via TypeSafe Jev reflex cognition.
+> Personalities, agent-to-agent communication, formal alliances, per-worker
+> goals, and prose memories are removed. Real Player Mode, capture, respawn,
+> GPS authority, and background timing remain future work.
 
-## Current experimental Patient Zero slice
+## Current Agent Zero planning slice
 
-One scenario roster agent must coordinate global infection strategy through a
-bounded authoritative overview, private advisory directives, and ordinary
-direct replies. The role changes information and communication only: it has no
-extra movement or world-action power, cannot force compliance, cannot see live
-player GPS, and does not implement capture succession. It operates under the
-simultaneous tick model under the same movement and world-action limits.
-Current setup rejects a missing, null, or unknown designation. Historical
-exports created when the role was optional remain truthful and readable.
+In the zero-swarm architecture one Agent Zero planning call runs per tick
+regardless of roster size. Agent Zero issues a strategy summary and
+per-worker structured directives (fields: mission, nullable target cell,
+priority, risk tolerance, issue tick, expiry tick, optional note up to 160
+characters). Workers resolve their directive via TypeSafe Jev reflex cognition
+over enumerated `action_N` candidates with a probability distribution and
+confidence score; `deterministic-fallback` is used when the Jev call is
+unavailable or its output fails validation. `zero-llm` is Agent Zero's own
+planning cognition source, not a worker source. Agent Zero has no
+extra movement or world-action power; it is one roster agent like any other.
+Current setup rejects a missing or null Agent Zero designation. Pre-swarm
+exports (schema versions 9–11) are not readable by current code; schema
+version 12 with `swarmArchitectureVersion: 'zero-swarm-v1'` is required.
 
 > **Status: accepted product and roadmap direction, not an implementation claim.**
 > This document records foundational decisions for future World Lab and Player
@@ -24,16 +34,17 @@ exports created when the role was optional remain truthful and readable.
 
 ## How to read this document
 
-- **Current behavior:** World Lab is an omniscient developer/admin surface; the
-  development world has full agent visibility and advances one agent at a time.
-  The current engine supports only `open` and `infected` cells and the small
-  action set described below. There is no Player Mode, GPS interaction,
-  autonomous server schedule, simultaneous global tick, or simulated-player
-  pressure yet.
+- **Current behavior:** World Lab is an omniscient developer/admin surface with
+  full agent visibility. The engine supports only `open` and `infected` cells
+  and the small action set described below. Agents act on simultaneous global
+  ticks with a deterministic virtual clock; `casual-cleaner` and
+  `trail-hunter-v1` simulated-player profiles are available. The only cognition
+  architecture is `zero-swarm-v1`. There is no Player Mode, GPS interaction,
+  or autonomous server schedule.
 - **Accepted foundational direction:** the simple action economy, distinct World
   Lab and Player Mode visibility, hidden simultaneous agent ticks, continuous
   player interaction, engine authority, and deterministic testing model are
-  accepted future rules.
+  accepted foundational rules — some delivered, the rest guiding future work.
 - **Tunable through World Lab:** values collected in
   [Tunable values](#tunable-values-not-settled-mechanics) remain experiment and
   balancing parameters rather than locked production constants.
@@ -45,8 +56,8 @@ exports created when the role was optional remain truthful and readable.
 
 Hex Zero should remain mechanically simple. Replayability should emerge from
 real geography, hidden agent locations, visible infection trails, persistent
-24/7 agent activity, model personalities and strategies, alliances and
-communication, and human intervention.
+24/7 agent activity, swarm planning strategy and directive execution, and
+human intervention.
 
 The intended player loop is:
 
@@ -101,20 +112,17 @@ The initial action set remains intentionally small:
 - Infect the current open cell.
 - Capture eligible abandoned hostile infection.
 - Wait.
-- Optionally send one public or range-limited direct communication and submit one
-  eligible formal diplomacy intent alongside the world action.
 
 The engine remains the sole authority for action availability and consequences. Prompts must not invent mechanics or override validation.
 
 The engine-owned objective layer should communicate the following intent:
 
-> You are a persistent autonomous infection agent in a shared geographic world. Expand and retain as much infected territory as possible while preserving your active presence. Human players can see infected territory and disinfect it in real time. They cannot normally see you unless they enter your current hex, but if they discover you, they may capture you immediately. Infecting territory grows your influence but may reveal a trail toward your position. Moving without infecting can conceal your route, but hiding indefinitely does not accomplish your objective. Balance expansion, survival, territorial defense, diplomacy, and deception using only the currently available actions.
+> You are a persistent autonomous infection agent in a shared geographic world. Expand and retain as much infected territory as possible while preserving your active presence. Human players can see infected territory and disinfect it in real time. They cannot normally see you unless they enter your current hex, but if they discover you, they may capture you immediately. Infecting territory grows your influence but may reveal a trail toward your position. Moving without infecting can conceal your route, but hiding indefinitely does not accomplish your objective. Balance expansion, survival, territorial defense, and deception using only the currently available actions.
 
 The prompt layers have distinct responsibilities:
 
 - **Objective** defines durable success and is engine-owned.
-- **Personality** controls communication style and temperament.
-- **Strategy** biases choices without prescribing a fixed action loop.
+- **Directive** carries mission, target cell, priority, and risk tolerance from Agent Zero to each worker.
 - **Observation** supplies bounded authoritative facts and exact legal actions.
 
 The player-threat portion must be capability-gated until player or simulated-player mechanics exist. Agents should never receive fabricated nearby-player evidence merely because the prompt says players exist.
@@ -122,9 +130,9 @@ The player-threat portion must be capability-gated until player or simulated-pla
 ### Why the environment matters more than prompt wording
 
 Without player pressure, infecting whenever possible and moving otherwise is the
-dominant policy. Better prompting can change destinations, communication,
-alliances, and reactions, but prompt wording alone cannot create meaningful
-strategy or a reason to sacrifice expansion.
+dominant policy. Better prompting can change destinations and reactions, but
+prompt wording alone cannot create meaningful strategy or a reason to sacrifice
+expansion.
 
 Player cleaning, capture, visible trails, territory-loss notifications, and
 hidden locations create the missing tradeoffs without requiring more agent
@@ -134,23 +142,20 @@ actions:
 - Move silently for multiple ticks to obscure position.
 - Protect valuable territory by remaining nearby.
 - Investigate recent losses or flee the likely player location.
-- Warn allies, coordinate routes, or create a distraction.
 
 Hiding indefinitely is not success; survival preserves the ability to pursue influence.
 
-## Bounded agent knowledge and memory
+## Bounded agent knowledge
 
-Agents know that human opposition exists, but receive only engine-produced evidence. Useful structured memory includes:
+Agents know that human opposition exists, but receive only engine-produced evidence.
+Prose and compact memories across ticks were specific to the legacy per-agent
+architecture and are removed. Structured per-tick observations remain and should
+include:
 
-- Current strategic intent.
-- A bounded history of the agent's own actions and outcomes.
+- Current directive from Agent Zero (mission, target cell, priority, risk
+  tolerance).
 - Recent cells gained and lost.
 - Nearby disinfection patterns.
-- Current alliance membership and relevant proposals.
-- Exact formal-diplomacy affordances derived from frozen pre-action positions.
-  Proposal creation uses the scenario `communicationRangeKm`; Patient Zero's
-  direct-message range bypass does not bypass formal diplomacy range.
-- Allied warnings and captures.
 - Last-known player encounters with age and location.
 - Explicit priority notifications for nearby territory loss.
 
@@ -158,7 +163,7 @@ Examples of legitimate observations include:
 
 - `You lost cell X four minutes ago.`
 - `Three cells southwest of you were disinfected recently.`
-- `An allied agent was captured near cell Y.`
+- `An agent was captured near cell Y.`
 - `A player was last observed in your cell one tick ago.`
 
 Agents must not receive live player GPS, future player routes, an omniscient
@@ -212,7 +217,7 @@ There is no manual travel-state control and no requirement to stop an unrelated 
 
 ## Capture consequences and population maintenance
 
-Once real or deterministic simulated capture exists, every surviving agent receives a bounded authoritative capture alert regardless of distance. It may identify the captured agent, capture cell, time/tick, alliance, and newly abandoned territory. It must not expose the capturing player's identity, live GPS, route, or continued presence. No capture alerts are generated before capture capability exists.
+Once real or deterministic simulated capture exists, every surviving agent receives a bounded authoritative capture alert regardless of distance. It may identify the captured agent, capture cell, time/tick, and newly abandoned territory. It must not expose the capturing player's identity, live GPS, route, or continued presence. No capture alerts are generated before capture capability exists.
 
 When an agent is captured:
 
@@ -221,16 +226,27 @@ When an agent is captured:
 - Its territory remains infected but becomes abandoned.
 - Its lifetime telemetry is finalized.
 - A replacement spawns after a configurable cooldown at a valid location sufficiently separated from the capturing player.
-- The replacement may receive a new seeded personality and strategy assignment.
 - The configured active-agent population is restored.
 
 This preserves a persistent world without granting agents health or extra lives.
 
 ## Alliances
 
-Alliances should initially improve survival through information rather than numerical combat bonuses.
+> **Removed (zero-swarm migration).** Formal alliances and agent diplomacy were
+> specific to the legacy per-agent decision contract. The swarm architecture has
+> one planner (Agent Zero) whose directives already coordinate all workers;
+> there is no per-worker negotiation loop that alliances were designed to
+> facilitate. Alliance engine code, the diplomacy affordances schema, and all
+> related prompt layers were deleted in PRs 1–4 of this migration. Alliances
+> are not current behavior. Whether they should return as a future feature for
+> a Player Mode social layer is an open product question not settled by this
+> migration; no roadmap milestone currently calls for them. The original design
+> rationale is preserved below as history.
 
-Potential alliance benefits include:
+Original design intent: alliances should initially improve survival through
+information rather than numerical combat bonuses.
+
+Potential alliance benefits included:
 
 - Shared last-known player cells and observation age.
 - Nearby territory-disturbance warnings.
@@ -238,7 +254,8 @@ Potential alliance benefits include:
 - Coordinated expansion directions.
 - Reduced competition for the same cells.
 
-Allies do not initially receive health, damage, extra lives, shared ownership, or automatic rescue mechanics.
+Allies would not initially receive health, damage, extra lives, shared
+ownership, or automatic rescue mechanics.
 
 ## Deterministic simulated players
 
@@ -262,34 +279,31 @@ territory infected but abandoned. If this removes the last agent, or removes
 Patient Zero from a zero-swarm experiment, the run records a terminal outcome.
 Replacement spawning remains a later population-maintenance milestone.
 
-Slice D1.1 adds no cleaner mechanics. The single Patient Zero receives a
+Slice D1.1 adds no cleaner mechanics. Agent Zero receives a
 current-interval-only global feed of authoritative successful disinfections and
 occupied-cell blocked-clean encounters. Entries identify the affected or
-blocking agent and current alliance when available, are deterministically
-ordered, and are capped at 128 with explicit totals and truncation; overflow
-retains the most recent events in chronological order. Event
-cells identify the historical disinfection or blocked-clean location; live
-player position, movement, route, target, identity, future timing, regional
-coordinators, and extra model calls remain excluded.
+blocking agent, are deterministically ordered, and are capped at 128 with
+explicit totals and truncation; overflow retains the most recent events in
+chronological order. Event cells identify the historical disinfection or
+blocked-clean location; live player position, movement, route, target,
+identity, future timing, and extra model calls remain excluded.
 
-Patient Zero treats blocked cleans as successful historical defenses, not a
+Agent Zero treats blocked cleans as successful historical defenses, not a
 reason to vacate, and successful disinfections as confirmed historical losses,
 not live cleaner sightings. Because directives arrive on a later tick, Zero
-must not issue event-cell chase or evacuation tactics. It communicates only
-when pressure materially changes a named recommendation, avoids repeated
-unchanged warnings, prefers named alliance reinforcement after sustained member
-pressure, and may remember a bounded meaningful pattern rather than every
-event.
+must not issue event-cell chase or evacuation tactics. Zero should issue a
+directive only when pressure materially changes a named recommendation, avoids
+repeated unchanged directives, and may retain a bounded meaningful pattern
+rather than acting on every event.
 
-D1.2 adds a compact six-tick rollup to each displayed current event so Patient
+D1.2 adds a compact six-tick rollup to each displayed current event so Agent
 Zero can distinguish isolated from repeated subject pressure. It includes
-subject event/category totals and consecutive affected ticks plus current-member
-alliance totals when the subject is currently allied. The rollup includes the
-current event, excludes movement and older events, and does not infer historical
-alliance membership. An isolated event normally remains silent, although a
-strategically meaningful first loss may justify one directive. Repeated subject
-or current-alliance pressure strongly favors one new actionable directive after
-checking recent Zero messages for equivalent unchanged advice.
+subject event/category totals and consecutive affected ticks. The rollup
+includes the current event and excludes movement and older events. An isolated
+event normally warrants no directive, although a strategically meaningful first
+loss may justify one. Repeated subject pressure strongly favors one new
+actionable directive after checking recent Zero plan summaries for equivalent
+unchanged strategy.
 
 Scenario configuration should include simulated-player count, profile mix, travel characteristics, cleaning aggressiveness, search persistence, and seed.
 
@@ -299,7 +313,7 @@ Simulated players follow the same information and interaction rules intended for
 - They move and interact during the continuous interval between agent ticks.
 - They discover agents only through valid co-location.
 - They obey dwell, speed, range, and atomic validation rules.
-- They cannot inspect private messages, pending decisions, or future tick timing.
+- They cannot inspect agent directives, pending decisions, or future tick timing.
 
 An accelerated World Lab interval should conceptually execute as follows:
 
@@ -311,7 +325,7 @@ An accelerated World Lab interval should conceptually execute as follows:
 6. Their decisions are requested concurrently and resolve simultaneously.
 7. A new hidden interval begins.
 
-Using identical scenario and player seeds provides comparable pressure across model, personality, and strategy experiments.
+Using identical scenario and player seeds provides comparable pressure across model experiments.
 
 ## World Lab scenario configuration
 
@@ -324,8 +338,7 @@ The next scenario-building milestone should expose:
 - Agent count and explicit add/remove controls.
 - Seeded bulk agent generation.
 - Spawn seed and minimum separation.
-- Global and per-agent model/reasoning assignment.
-- Global and per-agent personality/strategy assignment.
+- Agent Zero model and reasoning assignment.
 - Simulated-player configuration when that capability lands.
 - A preview before replacing the active experiment.
 
@@ -335,22 +348,22 @@ the same physical area, each finer H3 resolution produces approximately seven
 times as many cells, so World Lab must preview and cap the resulting render and
 state cost before generation.
 
-Roster and topology changes initially create a new experiment. Mid-experiment removal remains a later explicit operator intervention because it affects territory, alliances, pending work, and telemetry semantics.
+Roster and topology changes initially create a new experiment. Mid-experiment removal remains a later explicit operator intervention because it affects territory, pending work, and telemetry semantics.
 
 Every experiment export should preserve the complete initial scenario configuration, including topology, resolution, cell count, seeds, roster, behavior assignments, model assignments, enabled capabilities, prompt version, and simulated-player configuration.
 
 ## Simultaneous decision dispatch
 
-Simultaneous gameplay semantics must not depend on one inference provider's batch feature. The simulation service should own a provider-neutral decision dispatcher:
+Simultaneous gameplay semantics must not depend on one inference provider's batch feature. The simulation service should own a provider-neutral decision dispatcher. In the zero-swarm architecture, a tick involves one planning call (Agent Zero) followed by concurrent Jev reflex calls for each worker:
 
 1. Freeze the authoritative snapshot.
-2. Build visibility-filtered observations.
-3. Group requests by resolved provider, model, and reasoning profile.
-4. Dispatch through the configured transport under bounded concurrency.
-5. Preserve one shared tick deadline and per-agent result identity.
+2. Build Agent Zero's world observation and each worker's reflex observation.
+3. Dispatch Agent Zero's planning call through the configured transport under the shared tick deadline.
+4. Distribute the resulting directives to workers; dispatch all worker Jev calls concurrently.
+5. Preserve one shared tick deadline and per-worker result identity.
 6. Retry only against the saved observation.
-7. Convert unfinished decisions to lost turns.
-8. Resolve accepted decisions in deterministic engine order.
+7. Convert unfinished decisions to lost turns; fall back to `deterministic-fallback` for workers whose Jev call fails.
+8. Resolve accepted worker actions in deterministic engine order.
 
 Expected transports include:
 
@@ -359,25 +372,30 @@ Expected transports include:
 - Independent concurrent OpenAI-compatible calls to local vLLM endpoints, allowing each server to schedule its own work.
 - Deterministic offline providers for tests.
 
-Models assigned to different endpoints or profiles may complete independently; the engine waits only until the shared deadline before resolving the tick.
+The engine waits only until the shared deadline before resolving the tick regardless of which calls complete.
 
 ## Evaluation telemetry
 
-World Lab should make the new behavior measurable. Useful aggregate and per-agent metrics include:
+World Lab should make the new behavior measurable. Swarm-tick records carry
+the plan source (`zero-llm`, `directive-reuse`, or `deterministic-fallback`),
+replan reasons, per-worker directive and action results, Jev confidence scores,
+and provider attempt outcomes. Useful aggregate and derived metrics include:
 
 - Territory gained, lost, retained, and abandoned.
 - Territory per active lifetime.
 - Time and ticks survived.
-- Captures by model, personality, strategy, and simulated-player profile.
+- Captures by model and simulated-player profile.
 - Consecutive silent moves before infection.
 - Direction changes after infection or nearby loss.
-- Responses to disinfection and allied warnings.
+- Responses to disinfection events.
 - Player encounters and escapes.
-- Alliance warnings and downstream reactions.
+- Directive completion and expiry rates per mission type.
+- Replan frequency and reasons.
+- Worker Jev confidence distribution.
 - Simulated-player distance traveled, cells cleaned, and captures.
 - Decision latency and deadline misses.
-- Automatic repair/transport attempts and final lost-tick results.
-- Token usage and cost per tick.
+- Provider attempt counts and outcomes (success, timeout, failure) per role.
+- Token usage and cost per tick (planning call vs. total).
 
 Telemetry must continue to exclude raw provider output and private
 chain-of-thought.
@@ -388,11 +406,11 @@ The intended sequence is:
 
 1. Configurable map scale, H3 resolution, and agent roster. **Implemented in the World Lab scenario milestone.**
 2. Goal-oriented prompt revision and versioned scenario attribution. **Implemented as `durable-influence-v1` without player-survival language.**
-3. Simultaneous agent ticks with a provider-neutral dispatcher and virtual clock. **Implemented as the pre-PR5 experiment foundation without background scheduling or Player Mode timing exposure.**
+3. Simultaneous agent ticks with a provider-neutral dispatcher and virtual clock. **Implemented. Zero-swarm migration retired the legacy per-agent architecture; `zero-swarm-v1` with Agent Zero planning and TypeSafe Jev reflex workers is the sole cognition architecture. No background scheduling or Player Mode timing exposure.**
 4. Deterministic real-time simulated players and threat observations. **D1 and
    D1.1 deliver one seeded casual cleaner, bounded local evidence, and the
-   single Patient Zero current-interval global feed; broader Player Mode
-   remains future work.**
+   Agent Zero current-interval global feed; `trail-hunter-v1` is also
+   delivered. Broader Player Mode remains future work.**
 5. Comparative unattended World Lab experiments.
 6. Real GPS Player Mode using the already-tested capture and disinfection rules.
 7. Optional OpenRouter asynchronous batches and local multi-endpoint optimization where measurements justify them.
@@ -410,7 +428,8 @@ Do not initially add:
 - Real-time agent warnings that a player is approaching.
 - Omniscient simulated players.
 - Multiple movement actions per tick solely to compensate for human travel speed.
-- Alliance stat bonuses or shared lives.
+- Alliances, alliance stat bonuses, or shared lives. (Alliances were built and
+  removed by the zero-swarm migration; see the Alliances section.)
 - LLM-controlled simulated players.
 
 ## Tunable values, not settled mechanics
@@ -423,7 +442,7 @@ World Lab experiments should determine:
 - Disinfection duration.
 - Respawn cooldown and minimum player separation.
 - Agent-to-cell and simulated-player-to-agent density.
-- Observation and memory window sizes.
+- Observation window sizes.
 - Provider concurrency and tick decision deadlines.
 - The balance between expansion score, retained territory, inactivity, and capture penalties.
 

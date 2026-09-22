@@ -1,12 +1,8 @@
 # Local experiment archive
 
-> **Note:** this document predates the zero-swarm migration and still describes
-> several removed legacy features (per-agent communications, diplomacy,
-> alliances, and the schema-v9/v10/v11 compatibility described below). The
-> archive now accepts only schema-v12 exports and rejects anything else; see
-> ADR 0033. A full rewrite of this document is tracked separately.
-
 The archive accepts only schema-v12 exports and rejects any other schema version outright.
+Pre-swarm exports (schema versions 9, 10, and 11) are rejected with no migration path; reading them
+requires checking out the Git revision before PR 1 of the zero-swarm migration.
 Migration 2 adds nullable tick number, deterministic tick position, virtual
 time, and interval columns. Bounded queries order tick-attributed records by
 tick and tick position where exposed; the CLI still provides no arbitrary SQL
@@ -15,6 +11,15 @@ Migration 3 adds aggregate simulated-player metrics to experiments and the
 `simulated_player_activity` table. Every metrics-bearing safe export preserves
 movement/clean/block totals; Full Safe additionally preserves tick-attributed
 activity without deriving player behavior from agent turns.
+Migration 4 adds the independent `provider_attempts` table and per-experiment
+attempt-accounting and attempt-retention columns.
+Migration 5 adds the `swarm_ticks` table for safe committed zero-swarm plans,
+directives, physical action results, and worker choice telemetry.
+Migration 6 removes all legacy per-agent-LLM social-system tables: `turns`,
+`model_attempts`, `communications`, `communication_recipients`,
+`diplomacy_attempts`, and `alliance_events`. The `world_events` table's
+`turn_number` column is renamed `tick_number`. Personality and behavior columns
+are dropped from `agents` and `experiments`.
 
 The experiment archive is a durable, local research surface for completed or partially retained exports. It does not participate in an active simulation: the Game API's in-memory engine remains authoritative, and an archive write cannot change an accepted game outcome. It imports schema-v12 JSON exports only; it is not crash recovery, restartable simulation state, or a scheduler.
 
@@ -73,9 +78,8 @@ Prefer bounded Markdown or JSON over a multi-megabyte export:
 
 ```bash
 pnpm experiment:db summary <experiment-id> --format markdown
-pnpm experiment:db patient-zero <experiment-id> --limit 30 --format markdown
 pnpm experiment:db failures <experiment-id> --limit 20 --format json
-pnpm experiment:db notes search "communication hypothesis" --status accepted --limit 10 --format markdown
+pnpm experiment:db notes search "directive expiry hypothesis" --status accepted --limit 10 --format markdown
 ```
 
 Example comparison workflow:
@@ -84,7 +88,6 @@ Example comparison workflow:
 pnpm experiment:db import ./exports/run-a.json
 pnpm experiment:db import ./exports/run-b.json
 pnpm experiment:db summary <run-a-id> --format markdown
-pnpm experiment:db patient-zero <run-a-id> --limit 40 --format markdown
 pnpm experiment:db compare <run-a-id> <run-b-id> --format markdown
 ```
 
@@ -94,7 +97,7 @@ The archive stores only schema-validated safe export fields and curated notes. I
 
 MCP and embeddings are deferred because bounded local retrieval solves the immediate need without a network/tool authorization surface or derived semantic store. `ExperimentQueryService` and `ResearchNoteService` are the future extension point for a read-only MCP adapter; write/import authority remains outside that adapter.
 
-# Provider attempts
+## Provider attempts
 
 Archive schema v4 stores `providerAttempts` independently. Use
 `pnpm experiment:db provider-attempts <experiment-id>` to inspect committed and

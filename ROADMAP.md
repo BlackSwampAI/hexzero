@@ -1,37 +1,79 @@
 # Roadmap
 
-## Active migration: one intelligence, many bodies
+## Active migration: one intelligence, many bodies — delivered
 
-The active zero-swarm sequence supersedes the earlier social-agent direction
-for new experiments while retaining `legacy-multi-agent` as a comparison mode.
-PRs A-C established the Jev reflex seam, Agent Zero planner/tick, and World Lab
-presentation. PR D makes directives persistent across ticks and wakes Zero on
-fixed review and material events. PR E added optional deterministic
-`trail-hunter-v1` capture pressure while retaining `casual-cleaner`. PR F adds
-seeded offline comparisons of zero-swarm, legacy, and deterministic worker
-policies. The first comparison retains legacy mode pending real-provider trials;
-see `docs/ZERO_SWARM_COMPARISON.md`. See ADRs 0028-0032. Historical milestones
-below remain as implementation history.
+PRs A–F of the zero-swarm sequence established the architecture: the Jev reflex
+seam, Agent Zero planner/tick, World Lab presentation, persistent directives
+with material-event replanning, the `trail-hunter-v1` simulated-player profile,
+and offline swarm comparisons. PRs #58–#59 closed the pre-live Jev
+capture-context and Agent Zero cost-accounting gaps and added the explicitly
+opted-in live Jev-vs-deterministic-worker comparison. See ADRs 0028–0032.
 
-PR #58 closes the pre-live Jev capture-context and Agent Zero cost-accounting
-gaps. PR #59 adds an explicitly opted-in live comparison of Jev workers against
-deterministic workers while holding the Zero model and scenario inputs constant.
-Legacy retirement remains a later decision after measured live results.
+The subsequent retirement sequence made zero-swarm the sole cognition
+architecture and removed all legacy infrastructure:
 
-## Experimental Patient Zero coordinator
+- **PR #65** (`refactor: make zero swarm the sole cognition architecture`):
+  removed `legacy-multi-agent` as a runnable mode, leaving zero-swarm as the
+  only path a tick can take.
+- **PR #66** (`refactor: remove legacy social agent systems`): deleted the
+  machinery that mode had required — personalities, agent-to-agent
+  communication, alliances and diplomacy, worker goals, prose memories, the
+  `text-flat-json-v8` per-agent decision contract, observation history, the
+  Behavior Trace, and the legacy experiment-import route.
+- **PR #67** (`refactor: make experiment telemetry swarm-native`): advanced
+  export schema to version 12 with `swarmArchitectureVersion: 'zero-swarm-v1'`
+  always present; removed compatibility branches for schema versions 9–11.
+- **PR #68** (`refactor(world-lab): remove legacy agent controls`): removed
+  per-agent model selectors and the legacy World Lab UI controls tied to the old
+  architecture.
+- **Documentation pass** (`docs: document the Zero swarm architecture`):
+  brought README, this roadmap, architecture, gameplay foundation, security,
+  testing, and the experiment-archive guide in line with the delivered
+  architecture. See ADR 0033.
 
-The current focused slice requires one normal physical agent, provides a
-bounded global strategic summary, and adds private advisory Zero broadcasts
-plus direct replies. It intentionally excludes extra movement/actions,
-numerical bonuses, forced compliance, live player GPS, capture succession,
-and simulated players. The coordinator participates in the same frozen-world,
-simultaneous tick transaction as every other active agent.
+The retirement case is structural rather than measured: the legacy path made one
+full generative provider call per active agent per tick, so provider attempts,
+cost, and tick latency all scaled linearly with roster size. The zero-swarm path
+makes one Agent Zero planning call per tick regardless of roster size. No run in
+this repository has compared legacy cognition against zero-swarm cognition on
+real providers for cost, latency, or quality; that difference follows from the
+call pattern itself. See ADR 0033 for the full record.
 
-Post-foundation milestone 0024 makes the designation mandatory for every new
-or live scenario and replaces the roster-sized Patient Zero diplomacy expansion
-with a deterministic fixed-cap sparse summary. Historical null attribution
-remains readable. Proposal-outcome memory, Patient Zero analytics corrections,
-and further communication tuning remain separate milestones.
+The deterministic-worker baseline (workers resolving directives without a model
+call) is retained as the ablation control for the swarm comparisons, not as a
+second production architecture. Historical milestones below remain as
+implementation history.
+
+## Known open work
+
+The following issues are known and owned by a follow-on pull request:
+
+- `simulation-service.ts` passes an empty resolved-action array to
+  `calculateExperimentMetrics`, so all live World Lab experiment metrics read
+  zero even though `swarmTicks` now carries the data needed to populate them.
+- `movementDirectionDistribution`, `longestRepeatedDirectionStreak`, and
+  `recentCellRevisits` are declared in the shared metrics schema but nothing
+  ever assigns them, so they always fall back to their schema defaults. The
+  direction helper itself already exists
+  (`geographicDirectionBetweenCells` in `apps/game-api/src/geographic-direction.ts`,
+  used by swarm pressure and reflex execution); what is missing is the
+  originating cell on the resolved-action record — which carries only the move
+  target — and the metric computation itself.
+
+## Agent Zero planner
+
+Agent Zero is the sole generative planner. It makes one OpenRouter call per
+tick regardless of roster size, under the versioned contract `swarm-planner-v1`.
+Each plan carries a strategy summary and one directive per active worker;
+directives persist across ticks and are reused when no replan is triggered.
+Agent Zero participates in the same frozen-world, simultaneous-tick transaction
+as the workers whose directives it issues. The Jev worker model is pinned
+server-side and is not a configurable per-worker selector.
+
+_The legacy "Experimental Patient Zero coordinator" role described here before
+PR #65 — which provided bounded global strategic information and sent private
+advisory directives while remaining subject to normal world-action rules — is
+superseded. See ADR 0033._
 
 Player development begins only after the agent milestones below demonstrate compelling behavior. Each milestone is intended to remain a focused pull request; do not implement ahead of the current milestone.
 
@@ -60,6 +102,8 @@ By the end of PR 2, a human must be able to watch real agents independently move
 
 Implementation scope: six fixed agent profiles, a 61-cell Toledo development world, server-owned in-memory round-robin turns, OpenRouter strict structured decisions, live World Lab controls/markers/inspector, and deterministic offline automation. Persistence, autonomous scheduling, messaging, and player systems remain explicitly out of scope.
 
+_Note: agent personalities and the per-agent inspector personality display introduced here were subsequently removed. See ADR 0033._
+
 ## PR 3 — Personality Lab
 
 Prompt/personality editing, presets, cloning, respawning, reproducible starting worlds, provider/model configuration, and cost visibility.
@@ -67,6 +111,8 @@ Prompt/personality editing, presets, cloning, respawning, reproducible starting 
 First focused slice: server-owned session personality editing for the six existing agents, five bounded presets, world reset that preserves active personality configuration, and a separate confirmed restore-default action. Persistence across process restarts, cloning, respawning, provider/model configuration, cost visibility, and social mechanics remain deferred to later focused slices or milestones.
 
 Second focused slice: server-owned safe experiment telemetry, actual OpenRouter usage/cost visibility, filtered tiered JSON export, and automatic browser playback pause when all 61 development cells are infected. The active experiment retains 5,000 complete safe records independently of the 120-turn browser snapshot; reset creates a new experiment and process restart still loses all telemetry. Persistence, multiple stored experiments, upload/sharing, provider configuration, and budget enforcement remain deferred.
+
+_Note: personality editing, presets, and all per-agent prompt configuration introduced in this milestone were subsequently removed. See ADR 0033._
 
 ## PR 4 — Social agents
 
@@ -98,6 +144,8 @@ Eleventh focused slice: redesign World Lab as a persistent long-running experime
 
 Twelfth focused slice: add scenario-owned physical communication range, private alliance communications, bounded nearby awareness, deterministic legal-move ordering variety, neutral unaffiliated presentation, and operator-only private-communication observability without adding world actions or player mechanics.
 
+_Note: agent-to-agent messaging, public world chat, formal alliances and diplomacy, per-agent model overrides, communication range, and all agent personality and strategy configuration introduced across these slices were subsequently removed. The individual-hex controller and territory scoreboard mechanics (second focused slice) remain current. See ADR 0033._
+
 ## Pre-PR 5 — Simultaneous tick experiment foundation
 
 Replace sequential agent turns with operator-driven simultaneous ticks. Every
@@ -123,13 +171,17 @@ paths or SQL, recovery, scheduling, MCP, and archive authority remain deferred.
 
 Persistent short- and long-term objectives, compact memories, plan revision, summaries, and longer simulation runs.
 
+_Note: per-agent strategic goals, the compact memory ledger, and the Behavior Trace introduced in this milestone were subsequently removed. The SQLite experiment archive (pre-PR-5 observability slice) remains current, updated to schema version 12. See ADR 0033._
+
 ## PR 6 — Persistent autonomous world
 
 Scheduled turns, snapshots, replay, retries, idempotency, durable budget/attempt
 ledgers, failure recovery, and operation without the World Lab browser being
 open. The current process-local attempt and credit-admission ceilings are an
-operator safety boundary, and their schema-v11 safe ledger can be exported to
+operator safety boundary, and their schema-v12 safe ledger can be exported to
 the analysis archive even when no turn committed. This is not active runtime
 persistence, restart recovery, or provider-account balance enforcement.
+
+This milestone also owns the two known open metrics defects noted above.
 
 Player development begins only after these agent milestones demonstrate compelling behavior.

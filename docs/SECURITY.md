@@ -10,32 +10,19 @@ agent positions as targets. Capture events and abandoned controllers are
 authoritative state and are safe to export without exposing player routing
 internals to agent providers.
 Patient Zero alone additionally receives a bounded current-interval feed of
-successful disinfections and occupied-cell blocks. Its named agent/alliance
-attribution is engine-authored; it contains no movement events, player ID,
+successful disinfections and occupied-cell blocks. Its named-agent attribution
+is engine-authored; it contains no movement events, player ID,
 live/current cleaner position, route, target, or future interval information.
 Each event cell intentionally identifies the historical disinfection or
 occupied-cell blocked-clean location and must not be interpreted as live GPS.
-
-Public messages are untrusted claims visible to all agents and classified for future player visibility. Direct, alliance, and Zero messages are player-hidden. Only participants receive them in agent observations; the omniscient Private comms feed is restricted to World Lab operator contracts. Only the designated Patient Zero may send a Zero broadcast. Its sender role is authoritative but its strategy remains advisory. Messages never contain raw reasoning, pending decisions, credentials, player GPS, or fabricated threat evidence.
-
-Patient Zero's global view is bounded to active agent identity/current cells,
-allowlisted behavior attribution, territory/alliance totals, proposals, and
-recent authoritative events. It never serializes the complete world, future
-turn information, provider payloads, credentials, or live player GPS. Direct
-range bypass is engine-authoritative and applies only when Patient Zero is one
-endpoint; invalid channel/recipient combinations do not mutate state.
-The diplomacy portion has roster-independent caps: at most 12 displayed legal
-pairs, eight acceptable proposals, eight leave IDs, and eight prioritized
-blocker examples, plus aggregate stable blocker counts and explicit truncation.
-The cleaner-threat portion contains the most recent 128 current-interval events
-in chronological order plus an authoritative total and explicit truncation.
-Custom exports that omit recent
-control-change evidence clear both local and Patient Zero global threat arrays.
-Per-event pressure context is engine-derived from only the current and prior
-five ticks. Alliance totals use current membership only. The context contains
-counts and tick bounds, not historical event arrays, cleaner movement, live
-position, or inferred historical membership; removing feed events also removes
-their nested rollups.
+The cleaner-threat feed caps at the most recent 128 current-interval events
+in chronological order with an authoritative total and explicit truncation.
+Custom exports that omit recent control-change evidence clear both local and
+Patient Zero global threat arrays. Per-event pressure context is engine-derived
+from only the current and prior five ticks. The context contains counts and
+tick bounds, not historical event arrays, cleaner movement, live position, or
+inferred historical membership; removing feed events also removes their nested
+rollups.
 
 ## Secrets and deployment
 
@@ -100,7 +87,7 @@ profile, abort signal, and the tick's shared deadline. Agent-authored output
 cannot mutate the world directly or enter another same-tick observation.
 Cancellation discards every result from the uncommitted tick.
 
-OpenRouter receives one immutable structured observation and is instructed to return exactly one plain JSON object as text, containing a required world action plus at most one optional communication and one optional diplomacy intent. Its flat required fields use explicit empty-string and `none` sentinels. The runtime performs bounded extraction and conservative repair for wrappers such as code fences, surrounding prose, and trailing commas, then rejects missing text, unusable JSON, unknown fields, contradictory sentinels, or output truncation before the deterministic world engine validates all normalized components independently.
+The OpenRouter planner receives one bounded strategic observation per tick and is instructed to return exactly one plain JSON object naming opaque worker and target choices plus a Zero-action selection. TypeSafe Jev receives a compact semantic observation with opaque legal candidate IDs per worker and returns a probability distribution over candidates; a second question in the same request returns an optional bounded replan probability. The runtime performs bounded extraction and conservative repair for wrappers such as code fences, surrounding prose, and trailing commas, then rejects missing text, unusable JSON, unknown fields, or output truncation before the deterministic world engine validates all resolved components independently.
 
 The request uses the selected model, messages, `max_tokens`, `stream: false`, and at most one normalized reasoning object selected from sanitized model metadata. Provider default omits the object. Off is offered only for non-mandatory reasoning and sends `{ enabled: false, exclude: true }`; an advertised effort sends `{ enabled: true, effort, exclude: true }`. It deliberately sends no tools, `tool_choice`, `response_format`, `provider.require_parameters`, standalone `reasoning_effort`, or model-specific parameter. Model IDs are never inspected or special-cased. Transport/provider failures, unavailable-model/profile failures, text/JSON contract failures, and later simulation-rule rejection remain distinct safe outcomes. The adapter never silently substitutes a model or scripted behavior.
 
@@ -123,28 +110,20 @@ but never both, and all calls share the original 75-second deadline. A
 corrective request contains the same authoritative observation plus only
 allowlisted validation codes; it never contains the raw invalid response, raw
 Zod issues, stack traces, provider bodies, or copied diagnostic text.
-Engine-rejected normalized decisions are not retried. Manual Retry exists only
-for legacy sequential/schema-v9 compatibility. Tick recovery is limited to one
-bounded in-deadline automatic repair or transient retry; an unresolved decision
-becomes a final attributed lost tick.
+Engine-rejected normalized decisions are not retried. Tick recovery is limited
+to one bounded in-deadline automatic repair or transient retry; an unresolved
+decision becomes a final attributed lost tick.
 
 The model is explicitly instructed to return only one flat JSON decision with one concise visible summary and no hidden reasoning or chain-of-thought. Optional reasoning configuration always sets `exclude: true`; Provider default sends no reasoning instruction. Only numeric reasoning-token billing metadata is retained if OpenRouter reports it. The application stores no raw prompts, raw provider payloads, reasoning text, or private reasoning.
 
-Agent-authored messages, personalities, summaries, scoreboards, alliance events, proposals, and natural-language alliance claims are bounded untrusted data. They appear only inside the immutable user observation, never the fixed system instruction. Direct eligibility is derived from the pre-action snapshot. Recipient/range, infection, controller-presence, alliance membership, proposal eligibility, system ID/color allocation, and capture validation remain authoritative in the world engine. Models cannot choose alliance IDs, colors, membership lists, or metadata. Only accepted typed diplomacy changes alliance state, and rejected components cannot partially mutate or corrupt one another. World Lab renders model text through React text nodes and never raw HTML.
-
-Frozen observations expose only runtime-validated exact diplomacy IDs and
-bounded stable blocker codes. Patient Zero's sparse global diplomacy summary
-uses fixed caps, aggregate counts, deterministic priority, and explicit
-truncation; it contains neither pending decisions nor future same-tick actions.
-These affordances avoid a provider-controlled tool boundary; submitted
-intents still pass authoritative engine validation during deterministic
-resolution.
-
-World Lab personality edits are also untrusted, bounded text. The Game API trims and runtime-validates them before changing the authoritative session, and rejects changes during active model execution. The runtime supplies the active personality only inside the immutable observation as subordinate behavioral context. It is never interpolated into the fixed system instruction and cannot grant actions, weaken engine validation, request secrets, or authorize prompt/reasoning disclosure. React renders active and historical personality text as text rather than HTML.
-
-Personality mutation errors use typed, generic response bodies. They do not expose raw prompts, provider responses, credentials, diagnostics, stack traces, or internal service details. There is still no authentication or persistence; these endpoints remain limited to the loopback development surface.
-
-Behavior profile IDs are allowlisted at every boundary and resolve only to application-owned registry fragments. Imports cannot supply profile prompt text. The prompt explicitly separates untrusted chat invitations from engine-authoritative formal proposal IDs, and exact legal diplomacy IDs are derived from current state. Seed values select registry entries only and are never interpreted as prompt text.
+Agent Zero's strategy summary and directive notes (at most 160 characters each)
+and Jev's structured reflex output are bounded, agent-authored, untrusted data.
+They appear only inside the immutable user observation, never the fixed system
+instruction. There is no agent chat, diplomacy text, or memory prose. The engine
+validates every world action, infection, and capture before committing state;
+agent-authored outputs cannot grant engine authority, weaken validation, or
+authorize prompt or reasoning disclosure. World Lab renders model text through
+React text nodes and never raw HTML.
 
 ## Experiment telemetry and exports
 
@@ -153,13 +132,17 @@ timestamps, and the safe frozen observation. A resolved lost tick is final and
 has no manual retry/skip path. Raw provider responses, reasoning text,
 credentials, and authorization headers are not retained.
 
-The Game API captures only schema-validated safe observations, requested world actions, optional communication and diplomacy intents, separate result records, visible concise summaries, bounded message text, typed alliance events, sanitized rejected attempts, bounded provider failures, and normalized usage metadata. Malformed identifiers use nullable or absent sanitized representations; raw provider output is never retained. It never records or exports API keys, authorization data, fixed or hidden prompts, raw provider request/response bodies, private chain-of-thought, hidden analysis, secrets, or unbounded diagnostics. Historical records are cloned and immutable.
+The Game API captures only schema-validated safe observations, requested world actions, separate result records, visible concise summaries, sanitized rejected attempts, bounded provider failures, and normalized usage metadata. Malformed identifiers use nullable or absent sanitized representations; raw provider output is never retained. It never records or exports API keys, authorization data, fixed or hidden prompts, raw provider request/response bodies, private chain-of-thought, hidden analysis, secrets, or unbounded diagnostics. Historical records are cloned and immutable.
 
-Export requests, agent IDs, levels, ranges, outcome/world-action filters, communication channel/status filters, and Custom dependencies are runtime-validated. Filtering and metrics remain server-owned. Schema v11 preserves schema-v10 tick attribution plus the independent safe provider-attempt ledger; schema-v9/v10 imports remain supported by the Game API. Selected-agent exports use sender/recipient-aware communication filtering and direct multi-agent relevance for proposals and membership changes; unrelated direct messages and rejected diplomacy are excluded. Reset clears communications, alliances, proposals, alliance events, and their metrics while preserving active personality values and unlocking preserved assignments for the new experiment.
+Export requests, agent IDs, levels, ranges, and Custom dependencies are
+runtime-validated. Filtering and metrics remain server-owned. The export schema
+is exclusively version 12; exports carrying schema version 9, 10, or 11 are
+rejected outright with no migration path. Reset clears swarm tick history and
+metrics while unlocking preserved roster assignments for the new experiment.
 
 Actual cost is accepted only from OpenRouter's safe `usage.cost`. Missing cost is unknown, never zero; scripted-test providers explicitly report zero. The active Game API enforces experiment-scoped attempt and conservative credit-admission ceilings, but has no authentication, provider-account balance enforcement, restartable persistence, provider-management endpoint, upload, or sharing link. Credit admission is not an upstream billing guarantee. The loopback-only boundary remains mandatory.
 
-The offline experiment archive adds local persistence only for complete schema-validated safe exports and explicitly curated Markdown notes. Imports scan for prohibited credential/private-reasoning fields and recognizable credential values before a transaction begins; failures roll back. Both the canonical `.hexzero/` and compatible legacy `.agentborne/` database locations are ignored. The CLI exposes bounded typed queries, not arbitrary SQL, and adds no MCP, embedding, vector-store, or network-listener surface.
+The offline experiment archive adds local persistence only for complete schema-validated safe exports and explicitly curated Markdown notes. Imports scan for prohibited credential/private-reasoning fields and recognizable credential values before a transaction begins; failures roll back. The canonical `.hexzero/` database location is never exposed to callers. The CLI exposes bounded typed queries, not arbitrary SQL, and adds no MCP, embedding, vector-store, or network-listener surface.
 
 World Lab may manually submit only the exact current generated export artifact
 to a narrow archive endpoint. The browser cannot supply a database path or SQL.
@@ -171,15 +154,7 @@ errors without underlying diagnostics.
 
 This is a private repository. Report suspected vulnerabilities privately to the repository owners rather than opening a public issue.
 
-## Agent goal text
-
-Strategic goals and revision reasons are bounded, agent-authored, untrusted data. They are supplied only inside immutable user-observation data, never interpolated into system instructions. The contract requests concise visible summaries and prohibits private chain-of-thought. Goal operations grant no engine authority and cannot bypass world, communication, or diplomacy validation.
-
-## Compact memory text
-
-Compact memories are bounded self-authored recollections, not authoritative facts. They remain subordinate observation data and are never interpolated into system instructions. Memory may not retain raw prompts, provider payloads, credentials, or private chain-of-thought. Server-issued IDs and tick attribution are authoritative; memory prose is not.
-
-# Safe provider-attempt records
+## Safe provider-attempt records
 
 Attempt records may contain sanitized provider metadata and bounded failures,
 but never prompts, raw requests/responses, headers, credentials, or private
