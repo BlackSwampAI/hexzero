@@ -9,11 +9,7 @@ export interface DetailFilters {
   agent?: string;
   fromTurn?: number;
   toTurn?: number;
-  action?: string;
   outcome?: string;
-  channel?: string;
-  sender?: string;
-  recipient?: string;
   reason?: string;
   limit?: number;
 }
@@ -22,11 +18,6 @@ export interface QueryPage<T> {
   rows: T[];
   limit: number;
   truncated: boolean;
-}
-
-interface SqlFilter {
-  clauses: string[];
-  values: Array<string | number>;
 }
 
 function boundedLimit(limit?: number): number {
@@ -38,27 +29,6 @@ function boundedLimit(limit?: number): number {
 
 function page<T>(rows: T[], limit: number): QueryPage<T> {
   return { rows: rows.slice(0, limit), limit, truncated: rows.length > limit };
-}
-
-function turnFilter(filters: DetailFilters, alias = ''): SqlFilter {
-  const prefix = alias ? `${alias}.` : '';
-  const clauses: string[] = [];
-  const values: Array<string | number> = [];
-  const add = (
-    column: string,
-    value: string | number | undefined,
-    operator = '=',
-  ) => {
-    if (value === undefined) return;
-    clauses.push(`${prefix}${column} ${operator} ?`);
-    values.push(value);
-  };
-  add('agent_id', filters.agent);
-  add('turn_number', filters.fromTurn, '>=');
-  add('turn_number', filters.toTurn, '<=');
-  add('action', filters.action);
-  add('outcome', filters.outcome);
-  return { clauses, values };
 }
 
 function asObject(value: unknown): Record<string, unknown> | null {
@@ -110,14 +80,13 @@ export class ExperimentQueryService {
       .prepare(
         `
         SELECT e.id, e.started_at AS startedAt, e.provider_mode AS providerMode,
-               e.total_completed_turns AS totalCompletedTurns,
-               COUNT(DISTINCT t.id) AS archivedTurns,
+               COUNT(DISTINCT st.tick_number) AS archivedTicks,
                COUNT(DISTINCT a.agent_id) AS rosterSize,
                e.retention_complete AS retentionComplete,
                e.dropped_records AS droppedRecords,
                e.imported_at AS importedAt
         FROM experiments e
-        LEFT JOIN turns t ON t.experiment_id = e.id
+        LEFT JOIN swarm_ticks st ON st.experiment_id = e.id
         LEFT JOIN agents a ON a.experiment_id = e.id
         GROUP BY e.id
         ORDER BY e.started_at DESC, e.id ASC
@@ -128,166 +97,44 @@ export class ExperimentQueryService {
     return page(rows, limit);
   }
 
-  turns(
-    experimentId: string,
-    filters: DetailFilters = {},
-  ): QueryPage<Record<string, unknown>> {
-    const limit = boundedLimit(filters.limit);
-    const built = turnFilter(filters);
-    const rows = this.#db
-      .prepare(
-        `
-        SELECT turn_number AS turn, tick_number AS tick,
-               tick_position AS tickPosition, virtual_time AS virtualTime,
-               tick_interval_minutes AS tickIntervalMinutes,
-               agent_id AS agent, outcome, action,
-               action_accepted AS actionAccepted, action_reason AS reason,
-               position_before AS positionBefore, position_after AS positionAfter,
-               model_id AS model, reasoning_profile AS reasoning,
-               latency_ms AS latencyMs, total_tokens AS totalTokens,
-               cost_credits AS costCredits, summary
-        FROM turns
-        WHERE experiment_id = ?
-          ${built.clauses.map((clause) => `AND ${clause}`).join('\n')}
-        ORDER BY turn_number ASC, id ASC
-        LIMIT ?
-      `,
-      )
-      .all(experimentId, ...built.values, limit + 1) as Array<
-      Record<string, unknown>
-    >;
-    return page(rows, limit);
-  }
-
-  communications(
-    experimentId: string,
-    filters: DetailFilters = {},
-  ): QueryPage<Record<string, unknown>> {
-    const limit = boundedLimit(filters.limit);
-    const clauses: string[] = [];
-    const values: Array<string | number> = [];
-    const add = (
-      column: string,
-      value: string | number | undefined,
-      operator = '=',
-    ) => {
-      if (value === undefined) return;
-      clauses.push(`${column} ${operator} ?`);
-      values.push(value);
-    };
-    add('turn_number', filters.fromTurn, '>=');
-    add('turn_number', filters.toTurn, '<=');
-    add('channel', filters.channel);
-    add('sender_agent_id', filters.sender ?? filters.agent);
-    if (filters.recipient !== undefined) {
-      clauses.push(`(
-        recipient_agent_id = ? OR EXISTS (
-          SELECT 1 FROM communication_recipients cr
-          WHERE cr.communication_id = communications.id AND cr.recipient_agent_id = ?
-        )
-      )`);
-      values.push(filters.recipient, filters.recipient);
-    }
-    add('rejection_reason', filters.reason);
-    add('status', filters.outcome);
-    const rows = this.#db
-      .prepare(
-        `
-        SELECT id, turn_number AS turn, occurred_at AS occurredAt,
-               sender_agent_id AS sender, channel,
-               recipient_agent_id AS recipient, status,
-               rejection_reason AS reason, message
-        FROM communications
-        WHERE experiment_id = ?
-          ${clauses.map((clause) => `AND ${clause}`).join('\n')}
-        ORDER BY turn_number ASC, occurred_at ASC, id ASC
-        LIMIT ?
-      `,
-      )
-      .all(experimentId, ...values, limit + 1) as Array<
-      Record<string, unknown>
-    >;
-    return page(rows, limit);
-  }
-
-  allianceEvents(
-    experimentId: string,
-    filters: DetailFilters = {},
-  ): QueryPage<Record<string, unknown>> {
-    const limit = boundedLimit(filters.limit);
-    const clauses: string[] = [];
-    const values: Array<string | number> = [];
-    const add = (
-      column: string,
-      value: string | number | undefined,
-      operator = '=',
-    ) => {
-      if (value === undefined) return;
-      clauses.push(`${column} ${operator} ?`);
-      values.push(value);
-    };
-    add('agent_id', filters.agent);
-    add('turn_number', filters.fromTurn, '>=');
-    add('turn_number', filters.toTurn, '<=');
-    add('type', filters.action ?? filters.outcome);
-    add('reason', filters.reason);
-    const rows = this.#db
-      .prepare(
-        `
-        SELECT id, turn_number AS turn, occurred_at AS occurredAt,
-               agent_id AS agent, type, reason, source_json AS source
-        FROM alliance_events
-        WHERE experiment_id = ?
-          ${clauses.map((clause) => `AND ${clause}`).join('\n')}
-        ORDER BY turn_number ASC, occurred_at ASC, id ASC
-        LIMIT ?
-      `,
-      )
-      .all(experimentId, ...values, limit + 1) as Array<
-      Record<string, unknown>
-    >;
-    for (const row of rows) row.source = parseJson(row.source, null);
-    return page(rows, limit);
-  }
-
   failures(
     experimentId: string,
     filters: DetailFilters = {},
   ): QueryPage<Record<string, unknown>> {
     const limit = boundedLimit(filters.limit);
-    const built: SqlFilter = { clauses: [], values: [] };
+    const clauses: string[] = [];
+    const values: Array<string | number> = [];
     if (filters.agent !== undefined) {
-      built.clauses.push('m.agent_id = ?');
-      built.values.push(filters.agent);
+      clauses.push('agent_id = ?');
+      values.push(filters.agent);
     }
     if (filters.fromTurn !== undefined) {
-      built.clauses.push('m.turn_number >= ?');
-      built.values.push(filters.fromTurn);
+      clauses.push('intended_turn_number >= ?');
+      values.push(filters.fromTurn);
     }
     if (filters.toTurn !== undefined) {
-      built.clauses.push('m.turn_number <= ?');
-      built.values.push(filters.toTurn);
+      clauses.push('intended_turn_number <= ?');
+      values.push(filters.toTurn);
     }
     if (filters.reason !== undefined) {
-      built.clauses.push('m.failure_code = ?');
-      built.values.push(filters.reason);
+      clauses.push('failure_code = ?');
+      values.push(filters.reason);
     }
     const rows = this.#db
       .prepare(
         `
-        SELECT m.id, m.turn_number AS turn, m.agent_id AS agent,
-               m.attempt_number AS attempt, m.kind, m.model_id AS model,
-               m.failure_code AS code, m.failure_message AS message,
-               m.validation_codes_json AS validationCodes,
-               m.latency_ms AS latencyMs
-        FROM model_attempts m
-        WHERE m.experiment_id = ? AND m.failure_code IS NOT NULL
-          ${built.clauses.map((clause) => `AND ${clause}`).join('\n')}
-        ORDER BY m.turn_number ASC, m.attempt_number ASC, m.id ASC
+        SELECT id, intended_turn_number AS turn, intended_tick_number AS tick,
+               agent_id AS agent, kind, model_id AS model,
+               failure_code AS code, failure_message AS message,
+               validation_codes_json AS validationCodes, latency_ms AS latencyMs
+        FROM provider_attempts
+        WHERE experiment_id = ? AND failure_code IS NOT NULL
+          ${clauses.map((clause) => `AND ${clause}`).join('\n')}
+        ORDER BY started_at ASC, id ASC
         LIMIT ?
       `,
       )
-      .all(experimentId, ...built.values, limit + 1) as Array<
+      .all(experimentId, ...values, limit + 1) as Array<
       Record<string, unknown>
     >;
     for (const row of rows)
@@ -338,151 +185,37 @@ export class ExperimentQueryService {
     return page(rows, limit);
   }
 
-  patientZero(
-    experimentId: string,
-    filters: DetailFilters = {},
-  ): QueryPage<Record<string, unknown>> {
-    const limit = boundedLimit(filters.limit);
-    const patientZero = this.#db
+  /** Zero's directive issuance and completion, derived from archived swarm ticks. */
+  directives(experimentId: string): Record<string, unknown> {
+    const rows = this.#db
       .prepare(
-        'SELECT agent_id AS agentId FROM agents WHERE experiment_id = ? AND is_patient_zero = 1',
+        'SELECT source_json AS source FROM swarm_ticks WHERE experiment_id = ? ORDER BY tick_number ASC',
       )
-      .get(experimentId) as { agentId: string } | undefined;
-    if (!patientZero) return page([], limit);
-    const communications = this.#db
-      .prepare(
-        `
-        SELECT c.id, c.turn_number AS turn, c.occurred_at AS occurredAt,
-               c.sender_agent_id AS sender, c.channel, c.recipient_agent_id AS recipient,
-               c.message, c.status
-        FROM communications c
-        WHERE c.experiment_id = ? AND c.status = 'accepted'
-        ORDER BY c.turn_number ASC, c.occurred_at ASC, c.id ASC
-      `,
-      )
-      .all(experimentId) as Array<Record<string, unknown>>;
-    const turns = this.#db
-      .prepare(
-        `
-        SELECT turn_number AS turn, agent_id AS agent, action, outcome, completed_at AS completedAt
-        FROM turns WHERE experiment_id = ? ORDER BY turn_number ASC, id ASC
-      `,
-      )
-      .all(experimentId) as Array<Record<string, unknown>>;
-    const recipients = this.#db
-      .prepare(
-        `
-        SELECT cr.communication_id AS communicationId, cr.recipient_agent_id AS recipient
-        FROM communication_recipients cr
-        JOIN communications c ON c.id = cr.communication_id
-        WHERE c.experiment_id = ?
-      `,
-      )
-      .all(experimentId) as Array<{
-      communicationId: string;
-      recipient: string;
-    }>;
-    const recipientMap = new Map<string, string[]>();
-    for (const entry of recipients)
-      recipientMap.set(entry.communicationId, [
-        ...(recipientMap.get(entry.communicationId) ?? []),
-        entry.recipient,
-      ]);
-    const directives = communications.filter(
-      ({ channel, sender }) =>
-        channel === 'zero' && sender === patientZero.agentId,
-    );
-    const rows: Array<Record<string, unknown>> = [];
-    for (const directive of directives) {
-      const addressed = recipientMap.get(String(directive.id)) ?? [];
-      rows.push({
-        kind: 'directive',
-        id: directive.id,
-        turn: directive.turn,
-        agent: directive.sender,
-        message: directive.message,
-        recipients: addressed,
-      });
-      for (const agent of addressed) {
-        const reply = communications.find(
-          (entry) =>
-            entry.channel === 'direct' &&
-            entry.sender === agent &&
-            entry.recipient === patientZero.agentId &&
-            Number(entry.turn) > Number(directive.turn) &&
-            !directives.some(
-              (later) =>
-                Number(later.turn) > Number(directive.turn) &&
-                Number(later.turn) < Number(entry.turn) &&
-                (recipientMap.get(String(later.id)) ?? []).includes(agent),
-            ),
-        );
-        if (reply)
-          rows.push({
-            kind: 'reply-after-directive',
-            id: reply.id,
-            turn: reply.turn,
-            agent,
-            directiveId: directive.id,
-            message: reply.message,
-          });
-        const nextTurn = turns.find(
-          (turn) =>
-            turn.agent === agent && Number(turn.turn) > Number(directive.turn),
-        );
-        if (nextTurn) {
-          const requested = directiveAction(String(directive.message));
-          rows.push({
-            kind: 'observable-compliance',
-            id: `${String(directive.id)}:${agent}`,
-            turn: nextTurn.turn,
-            agent,
-            directiveId: directive.id,
-            requestedAction: requested,
-            observedAction: nextTurn.action,
-            classification:
-              requested === null
-                ? 'indeterminate'
-                : requested === nextTurn.action &&
-                    nextTurn.outcome === 'accepted'
-                  ? 'compliant'
-                  : 'noncompliant',
-          });
-        }
+      .all(experimentId) as Array<{ source: string }>;
+    let directivesIssued = 0;
+    let directivesCompleted = 0;
+    const missionCounts: Record<string, number> = {};
+    for (const row of rows) {
+      const tick = parseJson<Record<string, unknown>>(row.source, {});
+      const plan = asObject(tick.plan);
+      const planned = Array.isArray(plan?.directives) ? plan.directives : [];
+      directivesIssued += planned.length;
+      for (const directive of planned) {
+        const mission = asObject(directive)?.mission;
+        if (typeof mission === 'string')
+          missionCounts[mission] = (missionCounts[mission] ?? 0) + 1;
       }
+      const completed = Array.isArray(tick.completedDirectives)
+        ? tick.completedDirectives
+        : [];
+      directivesCompleted += completed.length;
     }
-    for (const message of communications.filter(
-      (entry) =>
-        entry.channel === 'direct' && entry.recipient === patientZero.agentId,
-    ))
-      if (!rows.some(({ id }) => id === message.id))
-        rows.push({
-          kind: 'message-to-patient-zero',
-          id: message.id,
-          turn: message.turn,
-          agent: message.sender,
-          message: message.message,
-        });
-    const filtered = rows
-      .filter(
-        (row) => filters.agent === undefined || row.agent === filters.agent,
-      )
-      .filter(
-        (row) =>
-          filters.fromTurn === undefined ||
-          Number(row.turn) >= filters.fromTurn,
-      )
-      .filter(
-        (row) =>
-          filters.toTurn === undefined || Number(row.turn) <= filters.toTurn,
-      )
-      .sort(
-        (a, b) =>
-          Number(a.turn) - Number(b.turn) ||
-          String(a.kind).localeCompare(String(b.kind)) ||
-          String(a.id).localeCompare(String(b.id)),
-      );
-    return page(filtered.slice(0, limit + 1), limit);
+    return {
+      ticksWithPlans: rows.length,
+      directivesIssued,
+      directivesCompleted,
+      missionCounts,
+    };
   }
 
   summary(experimentId: string): Record<string, unknown> {
@@ -490,12 +223,10 @@ export class ExperimentQueryService {
       .prepare('SELECT * FROM experiments WHERE id = ?')
       .get(experimentId) as Record<string, unknown> | undefined;
     if (!experiment) throw new Error(`Unknown experiment: ${experimentId}`);
-    const hasIndependentAttempts = Number(experiment.schema_version) >= 11;
     const roster = this.#db
       .prepare(
         `
         SELECT agent_id AS id, name, model_id AS model, reasoning_profile AS reasoning,
-               personality_id AS personality, strategy_id AS strategy,
                is_patient_zero AS patientZero
         FROM agents WHERE experiment_id = ? ORDER BY agent_id ASC
       `,
@@ -517,40 +248,10 @@ export class ExperimentQueryService {
       filters: parseJson(source.filters, null),
       retention: parseJson(source.retention, null),
     }));
-    const turnMetrics = this.#db
-      .prepare(
-        `
-        SELECT COUNT(*) AS requested,
-          SUM(outcome = 'accepted') AS accepted,
-          SUM(outcome = 'rejected') AS rejected,
-          SUM(outcome = 'provider-error') AS failed,
-          SUM(outcome IN ('operator-skipped', 'lost-tick')) AS lost,
-          SUM((SELECT COUNT(*) FROM model_attempts m WHERE m.turn_id = turns.id) > 1) AS retried
-        FROM turns WHERE experiment_id = ?
-      `,
-      )
-      .get(experimentId);
-    const actions = this.#db
-      .prepare(
-        `
-        SELECT COALESCE(action, 'none') AS action, COUNT(*) AS count
-        FROM turns WHERE experiment_id = ? GROUP BY action ORDER BY action ASC
-      `,
-      )
-      .all(experimentId);
     const ticks = this.#db
       .prepare(
-        hasIndependentAttempts
-          ? `
-        WITH turn_totals AS (
-          SELECT tick_number AS tick, MIN(virtual_time) AS virtualTime,
-                 MIN(tick_interval_minutes) AS intervalMinutes,
-                 COUNT(*) AS agentRecords,
-                 SUM(outcome = 'lost-tick') AS lostTicks,
-                 SUM(outcome = 'lost-tick' AND json_extract(failure_json, '$.code') = 'timeout') AS deadlineMisses
-          FROM turns WHERE experiment_id = ? AND tick_number IS NOT NULL
-          GROUP BY tick_number
-        ), attempt_totals AS (
+        `
+        WITH attempt_totals AS (
           SELECT intended_tick_number AS tick, COUNT(*) AS providerCallCount,
                  SUM(latency_ms) AS aggregateLatencyMs,
                  MAX(latency_ms) AS maximumLatencyMs,
@@ -560,81 +261,24 @@ export class ExperimentQueryService {
           WHERE experiment_id = ? AND intended_tick_number IS NOT NULL
           GROUP BY intended_tick_number
         )
-        SELECT t.*, COALESCE(a.providerCallCount, 0) AS providerCallCount,
+        SELECT st.tick_number AS tick, st.virtual_time AS virtualTime,
+               st.plan_source AS planSource,
+               COALESCE(a.providerCallCount, 0) AS providerCallCount,
                COALESCE(a.knownCostCredits, 0) AS knownCostCredits,
                COALESCE(a.attemptsWithUnknownCost, 0) AS attemptsWithUnknownCost,
                COALESCE(a.aggregateLatencyMs, 0) AS aggregateLatencyMs,
                COALESCE(a.maximumLatencyMs, 0) AS maximumLatencyMs
-        FROM turn_totals t LEFT JOIN attempt_totals a ON a.tick = t.tick
-        ORDER BY t.tick ASC LIMIT ?
-      `
-          : `
-        WITH attempt_totals AS (
-          SELECT turn_id, COUNT(*) AS providerCalls,
-                 SUM(latency_ms) AS aggregateLatencyMs,
-                 MAX(latency_ms) AS maximumLatencyMs,
-                 SUM(cost_credits) AS knownCostCredits,
-                 SUM(cost_credits IS NULL) AS attemptsWithUnknownCost
-          FROM model_attempts WHERE experiment_id = ? GROUP BY turn_id
-        )
-        SELECT tick_number AS tick, MIN(virtual_time) AS virtualTime,
-               MIN(tick_interval_minutes) AS intervalMinutes,
-               COUNT(*) AS agentRecords,
-               SUM(outcome = 'lost-tick') AS lostTicks,
-               SUM(outcome = 'lost-tick' AND json_extract(failure_json, '$.code') = 'timeout') AS deadlineMisses,
-               SUM(COALESCE(a.providerCalls, 0)) AS providerCallCount,
-               ROUND(SUM(COALESCE(a.knownCostCredits, 0)), 8) AS knownCostCredits,
-               SUM(COALESCE(a.attemptsWithUnknownCost, 0)) AS attemptsWithUnknownCost,
-               SUM(COALESCE(a.aggregateLatencyMs, 0)) AS aggregateLatencyMs,
-               MAX(COALESCE(a.maximumLatencyMs, 0)) AS maximumLatencyMs
-        FROM turns t LEFT JOIN attempt_totals a ON a.turn_id = t.id
-        WHERE t.experiment_id = ? AND tick_number IS NOT NULL
-        GROUP BY tick_number ORDER BY tick_number ASC
-        LIMIT ?
+        FROM swarm_ticks st LEFT JOIN attempt_totals a ON a.tick = st.tick_number
+        WHERE st.experiment_id = ?
+        ORDER BY st.tick_number ASC LIMIT ?
       `,
       )
       .all(experimentId, experimentId, MAX_DETAIL_LIMIT);
-    const communications = this.#db
-      .prepare(
-        `
-        SELECT channel, status, COUNT(*) AS count FROM communications
-        WHERE experiment_id = ? GROUP BY channel, status ORDER BY channel, status
-      `,
-      )
-      .all(experimentId);
-    const allianceLifecycle = this.#db
-      .prepare(
-        `
-        SELECT type, COALESCE(reason, '') AS reason, COUNT(*) AS count
-        FROM alliance_events WHERE experiment_id = ?
-        GROUP BY type, reason ORDER BY type, reason
-      `,
-      )
-      .all(experimentId);
-    const diplomacyRejections = this.#db
-      .prepare(
-        `
-        SELECT rejection_reason AS reason, COUNT(*) AS count
-        FROM diplomacy_attempts WHERE experiment_id = ? AND accepted = 0
-        GROUP BY rejection_reason ORDER BY rejection_reason
-      `,
-      )
-      .all(experimentId);
-    const diplomacyOutcomes = this.#db
-      .prepare(
-        `
-        SELECT type, accepted, COUNT(*) AS count
-        FROM diplomacy_attempts WHERE experiment_id = ?
-        GROUP BY type, accepted ORDER BY type, accepted DESC
-      `,
-      )
-      .all(experimentId);
     const usageByAgent = this.#db
       .prepare(
-        hasIndependentAttempts
-          ? `
+        `
         SELECT agent_id AS agent,
-               COUNT(*) AS modelAttempts,
+               COUNT(*) AS providerAttempts,
                SUM(latency_ms) AS latencyTotalMs,
                SUM(latency_ms IS NOT NULL) AS attemptsWithKnownLatency,
                ROUND(AVG(latency_ms), 2) AS averageLatencyMs,
@@ -646,34 +290,18 @@ export class ExperimentQueryService {
                SUM(CASE WHEN actual_cost_credits IS NULL THEN CAST(reserved_credits AS REAL) ELSE 0 END) AS reservedUnknownExposure
         FROM provider_attempts WHERE experiment_id = ?
         GROUP BY agent_id ORDER BY agent_id
-      `
-          : `
-        SELECT agent_id AS agent,
-               COUNT(*) AS modelAttempts,
-               SUM(latency_ms) AS latencyTotalMs,
-               SUM(latency_ms IS NOT NULL) AS attemptsWithKnownLatency,
-               ROUND(AVG(latency_ms), 2) AS averageLatencyMs,
-               SUM(prompt_tokens) AS promptTokens,
-               SUM(completion_tokens) AS completionTokens,
-               SUM(total_tokens) AS totalTokens,
-               ROUND(SUM(cost_credits), 8) AS knownCostCredits,
-               SUM(cost_credits IS NULL) AS attemptsWithUnknownCost
-        FROM model_attempts WHERE experiment_id = ?
-        GROUP BY agent_id ORDER BY agent_id
       `,
       )
       .all(experimentId) as Array<Record<string, unknown>>;
     const usageAggregate = aggregateUsage(usageByAgent);
-    const independentAttemptRows = hasIndependentAttempts
-      ? (this.#db
-          .prepare(
-            `SELECT agent_id AS agent, outcome, reserved_credits AS reservedCredits,
-                    actual_cost_credits AS actualCostCredits
-             FROM provider_attempts WHERE experiment_id = ?
-             ORDER BY started_at, id`,
-          )
-          .all(experimentId) as Array<Record<string, unknown>>)
-      : [];
+    const independentAttemptRows = this.#db
+      .prepare(
+        `SELECT agent_id AS agent, outcome, reserved_credits AS reservedCredits,
+                actual_cost_credits AS actualCostCredits
+         FROM provider_attempts WHERE experiment_id = ?
+         ORDER BY started_at, id`,
+      )
+      .all(experimentId) as Array<Record<string, unknown>>;
     const attemptOutcomes = countBy(independentAttemptRows, 'outcome');
     const attemptOutcomesByAgent = [
       ...new Set(independentAttemptRows.map(({ agent }) => String(agent))),
@@ -698,16 +326,13 @@ export class ExperimentQueryService {
           : addDecimalStrings(sum, String(row.reservedCredits)),
       '0',
     );
-    const sizeTrends = this.#db
+    const promptTokenTrends = this.#db
       .prepare(
         `
-        SELECT MIN(observation_size_bytes) AS minObservationBytes,
-               ROUND(AVG(observation_size_bytes), 2) AS averageObservationBytes,
-               MAX(observation_size_bytes) AS maxObservationBytes,
-               MIN(prompt_tokens) AS minPromptTokens,
+        SELECT MIN(prompt_tokens) AS minPromptTokens,
                ROUND(AVG(prompt_tokens), 2) AS averagePromptTokens,
                MAX(prompt_tokens) AS maxPromptTokens
-        FROM turns WHERE experiment_id = ?
+        FROM provider_attempts WHERE experiment_id = ?
       `,
       )
       .get(experimentId);
@@ -764,10 +389,7 @@ export class ExperimentQueryService {
       ),
     };
     const sourceTerritory = parseJson(experiment.source_territory_json, []);
-    const directions = canonicalDirectionChanges(this.#db, experimentId);
-    const patientZero = this.patientZero(experimentId, {
-      limit: MAX_DETAIL_LIMIT,
-    }).rows;
+    const directives = this.directives(experimentId);
     const sourceInconsistencies = parseJson<Array<Record<string, unknown>>>(
       experiment.metric_inconsistencies_json,
       [],
@@ -777,15 +399,8 @@ export class ExperimentQueryService {
       missing.push(
         `source retention is incomplete (${String(experiment.dropped_records)} dropped records)`,
       );
-    if (
-      Number(turnMetrics && asObject(turnMetrics)?.requested) <
-      Number(experiment.retained_turns)
-    )
-      missing.push('not all retained turns are present in imported selections');
     if (!experiment.scenario_json)
       missing.push('scenario configuration absent');
-    if (sizeTrends && asObject(sizeTrends)?.minObservationBytes === null)
-      missing.push('retained observations absent');
     const availableSections = sourceCompleteness(sourceExports);
     for (const [section, available] of Object.entries(availableSections))
       if (!available)
@@ -801,57 +416,29 @@ export class ExperimentQueryService {
       },
       roster,
       sourceExports,
-      turns: turnMetrics,
       ticks,
-      actions,
+      directives,
       territory: {
         current: territoryRows.length > 0 ? territoryRows : sourceTerritory,
         changes: territoryChanges,
       },
       simulatedPlayer,
-      communications,
-      alliances: {
-        lifecycle: allianceLifecycle,
-        attempts: diplomacyOutcomes,
-        rejections: diplomacyRejections,
-      },
-      patientZero: {
-        directives: patientZero.filter(({ kind }) => kind === 'directive')
-          .length,
-        messagesToPatientZero:
-          patientZero.filter(({ kind }) => kind === 'message-to-patient-zero')
-            .length +
-          patientZero.filter(({ kind }) => kind === 'reply-after-directive')
-            .length,
-        repliesAfterDirective: patientZero.filter(
-          ({ kind }) => kind === 'reply-after-directive',
-        ).length,
-        observableCompliance: countBy(
-          patientZero.filter(({ kind }) => kind === 'observable-compliance'),
-          'classification',
-        ),
-      },
       usage: { aggregate: usageAggregate, byAgent: usageByAgent },
-      ...(hasIndependentAttempts
-        ? {
-            providerAttempts: {
-              total: independentAttemptRows.length,
-              outcomes: attemptOutcomes,
-              byAgent: attemptOutcomesByAgent,
-              exactKnownCostCredits,
-              exactReservedUnknownExposure,
-              retention: parseJson(experiment.attempt_retention_json, null),
-              accounting: parseJson(experiment.attempt_accounting_json, null),
-            },
-          }
-        : {}),
-      promptAndObservationSizeTrends: sizeTrends,
-      directionChangesAfterCommunication: directions,
+      providerAttempts: {
+        total: independentAttemptRows.length,
+        outcomes: attemptOutcomes,
+        byAgent: attemptOutcomesByAgent,
+        exactKnownCostCredits,
+        exactReservedUnknownExposure,
+        retention: parseJson(experiment.attempt_retention_json, null),
+        accounting: parseJson(experiment.attempt_accounting_json, null),
+      },
+      promptTokenTrends,
       retention: {
         limit: experiment.retention_limit,
         totalCompletedTurns: experiment.total_completed_turns,
         retainedTurns: experiment.retained_turns,
-        archivedTurns: asObject(turnMetrics)?.requested ?? 0,
+        archivedTicks: ticks.length,
         droppedRecords: experiment.dropped_records,
         complete: Boolean(experiment.retention_complete),
         requestedRangeExtendsBeyondRetention: Boolean(
@@ -871,23 +458,14 @@ export class ExperimentQueryService {
     const right = comparisonMetrics(this.#db, rightId);
     return {
       normalization: {
-        perTurn: 'total / archived turn',
-        perAgentTurn: 'total / archived agent-turn',
-        perActiveAgent: 'total / agent with at least one archived turn',
-        perPatientZeroTurn: 'Patient Zero total / archived Patient Zero turn',
+        perTick: 'total / archived swarm tick',
+        perActiveAgent: 'total / agent with at least one provider attempt',
       },
       left,
       right,
       delta: metricDelta(left, right),
     };
   }
-}
-
-function directiveAction(message: string): string | null {
-  const matches = ['move', 'infect', 'capture', 'wait'].filter((action) =>
-    new RegExp(`\\b${action}\\b`, 'i').test(message),
-  );
-  return matches.length === 1 ? matches[0]! : null;
 }
 
 function countBy(rows: Array<Record<string, unknown>>, key: string) {
@@ -900,7 +478,7 @@ function countBy(rows: Array<Record<string, unknown>>, key: string) {
 }
 
 interface UsageTotals {
-  modelAttempts: number;
+  providerAttempts: number;
   latencyTotalMs: number;
   attemptsWithKnownLatency: number;
   promptTokens: number;
@@ -913,7 +491,8 @@ interface UsageTotals {
 function aggregateUsage(rows: Array<Record<string, unknown>>) {
   const totals = rows.reduce<UsageTotals>(
     (aggregate, row) => ({
-      modelAttempts: aggregate.modelAttempts + Number(row.modelAttempts ?? 0),
+      providerAttempts:
+        aggregate.providerAttempts + Number(row.providerAttempts ?? 0),
       latencyTotalMs:
         aggregate.latencyTotalMs + Number(row.latencyTotalMs ?? 0),
       attemptsWithKnownLatency:
@@ -930,7 +509,7 @@ function aggregateUsage(rows: Array<Record<string, unknown>>) {
         Number(row.attemptsWithUnknownCost ?? 0),
     }),
     {
-      modelAttempts: 0,
+      providerAttempts: 0,
       latencyTotalMs: 0,
       attemptsWithKnownLatency: 0,
       promptTokens: 0,
@@ -960,7 +539,7 @@ function sourceCompleteness(sources: Array<Record<string, unknown>>) {
   const includes = (
     standardLevels: readonly string[],
     customKey: string,
-    selection: 'turns' | 'communications' | 'none' = 'none',
+    selection: 'ticks' | 'none' = 'none',
   ): boolean =>
     filters.some((filter) => {
       const level = filter.level;
@@ -973,120 +552,43 @@ function sourceCompleteness(sources: Array<Record<string, unknown>>) {
       const turns = asObject(filter.turns);
       const outcomes = Array.isArray(filter.outcomes) ? filter.outcomes : [];
       const actions = Array.isArray(filter.actions) ? filter.actions : [];
-      const completeTurns =
+      return (
         agents?.mode === 'all' &&
         turns?.mode === 'entire-retained' &&
         outcomes.length === 4 &&
-        actions.length === 4;
-      if (selection === 'turns') return completeTurns;
-      const communication = asObject(filter.communications);
-      return (
-        completeTurns &&
-        communication?.channel === 'all' &&
-        communication.status === 'all'
+        actions.length === 4
       );
     });
   return {
     observations: includes(
       ['standard', 'full-safe'],
       'turnObservations',
-      'turns',
+      'ticks',
     ),
-    metrics: includes(
-      ['minimal', 'standard', 'full-safe'],
-      'computedMetrics',
-      'turns',
-    ),
-    communications: includes(
-      ['minimal', 'standard', 'full-safe'],
-      'communications',
-      'communications',
-    ),
+    metrics: includes(['minimal', 'standard', 'full-safe'], 'computedMetrics'),
     currentWorld: includes(['full-safe'], 'currentWorldState'),
     initialWorld: includes(['full-safe'], 'initialWorldState'),
   };
 }
 
-interface DirectionTurn {
-  turn: number;
-  agent: string;
-  direction: string;
-  inboundSincePreviousMove: number;
-}
-
-function canonicalDirectionChanges(db: DatabaseSync, experimentId: string) {
-  const rows = db
-    .prepare(
-      `
-      SELECT turn_number AS turn, agent_id AS agent, move_direction AS direction,
-             inbound_communication_since_previous_move AS inboundSincePreviousMove
-      FROM turns
-      WHERE experiment_id = ? AND move_direction IS NOT NULL
-      ORDER BY agent_id, turn_number, id
-    `,
-    )
-    .all(experimentId) as unknown as DirectionTurn[];
-  const byAgent: Array<{ agent: string; count: number }> = [];
-  for (const agent of [...new Set(rows.map(({ agent }) => agent))].sort()) {
-    let previousDirection: string | null = null;
-    let count = 0;
-    for (const row of rows.filter((entry) => entry.agent === agent)) {
-      if (
-        previousDirection &&
-        row.direction !== previousDirection &&
-        Boolean(row.inboundSincePreviousMove)
-      )
-        count += 1;
-      previousDirection = row.direction;
-    }
-    byAgent.push({ agent, count });
-  }
-  return {
-    canonicalDefinition:
-      'For each agent independently, count an accepted move whose direction differs from that agent previous accepted move when the retained observation contains an inbound direct or alliance message after the previous move and no later than the current turn. Aggregate is the sum of per-agent counts.',
-    aggregate: byAgent.reduce((sum, entry) => sum + entry.count, 0),
-    byAgent,
-    agreement: true,
-  };
-}
-
 function comparisonMetrics(db: DatabaseSync, experimentId: string) {
-  const base = db
+  const ticks = db
+    .prepare(
+      'SELECT COUNT(*) AS count FROM swarm_ticks WHERE experiment_id = ?',
+    )
+    .get(experimentId) as { count: number };
+  const attempts = db
     .prepare(
       `
-      SELECT COUNT(*) AS turns,
-             COUNT(DISTINCT tick_number) AS ticks,
+      SELECT COUNT(*) AS total,
              COUNT(DISTINCT agent_id) AS activeAgents,
              SUM(outcome = 'accepted') AS accepted,
              SUM(outcome = 'provider-error') AS failed,
              SUM(outcome IN ('operator-skipped', 'lost-tick')) AS lost
-      FROM turns WHERE experiment_id = ?
+      FROM provider_attempts WHERE experiment_id = ?
     `,
     )
     .get(experimentId) as Record<string, unknown>;
-  const communicationCount = db
-    .prepare(
-      "SELECT COUNT(*) AS count FROM communications WHERE experiment_id = ? AND status = 'accepted'",
-    )
-    .get(experimentId) as { count: number };
-  const patientZeroTurns = db
-    .prepare(
-      `
-      SELECT COUNT(*) AS count FROM turns t JOIN agents a
-        ON a.experiment_id = t.experiment_id AND a.agent_id = t.agent_id
-      WHERE t.experiment_id = ? AND a.is_patient_zero = 1
-    `,
-    )
-    .get(experimentId) as { count: number };
-  const patientZeroMessages = db
-    .prepare(
-      `
-      SELECT COUNT(*) AS count FROM communications c JOIN agents a
-        ON a.experiment_id = c.experiment_id AND a.agent_id = c.sender_agent_id
-      WHERE c.experiment_id = ? AND a.is_patient_zero = 1 AND c.status = 'accepted'
-    `,
-    )
-    .get(experimentId) as { count: number };
   const simulatedPlayer = db
     .prepare(
       `
@@ -1111,34 +613,33 @@ function comparisonMetrics(db: DatabaseSync, experimentId: string) {
   );
   const playerMetric = (key: string) =>
     Number(simulatedPlayer[key] ?? sourceSimulatedPlayer[key] ?? 0);
-  const turns = Number(base.turns);
-  const activeAgents = Number(base.activeAgents);
-  const messages = Number(communicationCount.count);
-  const zeroTurns = Number(patientZeroTurns.count);
+  const tickCount = Number(ticks.count);
+  const activeAgents = Number(attempts.activeAgents);
+  const totalAttempts = Number(attempts.total);
   return {
     experimentId,
     absolute: {
-      ...base,
-      communications: messages,
-      patientZeroMessages: patientZeroMessages.count,
-      patientZeroTurns: zeroTurns,
+      ticks: tickCount,
+      activeAgents,
+      providerAttempts: totalAttempts,
+      accepted: Number(attempts.accepted),
+      failed: Number(attempts.failed),
+      lost: Number(attempts.lost),
       simulatedPlayerMovements: playerMetric('movements'),
       cellsDisinfected: playerMetric('cellsDisinfected'),
       blockedDisinfections: playerMetric('blockedDisinfections'),
     },
     normalized: {
-      communicationsPerTurn: rate(messages, turns),
-      communicationsPerAgentTurn: rate(messages, turns),
-      communicationsPerActiveAgent: rate(messages, activeAgents),
-      patientZeroMessagesPerPatientZeroTurn: rate(
-        patientZeroMessages.count,
-        zeroTurns,
+      providerAttemptsPerTick: rate(totalAttempts, tickCount),
+      providerAttemptsPerActiveAgent: rate(totalAttempts, activeAgents),
+      acceptedPerTick: rate(Number(attempts.accepted), tickCount),
+      failedOrLostPerTick: rate(
+        Number(attempts.failed) + Number(attempts.lost),
+        tickCount,
       ),
-      acceptedPerTurn: rate(Number(base.accepted), turns),
-      failedOrLostPerTurn: rate(Number(base.failed) + Number(base.lost), turns),
       cellsDisinfectedPerTick: rate(
         playerMetric('cellsDisinfected'),
-        Number(simulatedPlayer.activeTicks ?? 0) || Number(base.ticks ?? 0),
+        Number(simulatedPlayer.activeTicks ?? 0) || tickCount,
       ),
     },
   };

@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   SWARM_PLANNER_CONTRACT_VERSION,
-  assignBehavior,
   WORLD_RADIUS_PRESETS,
 } from '@hexzero/shared';
 import {
@@ -125,29 +124,17 @@ describe('configurable world scenarios', () => {
     ).toBeNull();
   });
 
-  it.each([10, 32])(
-    'supports a %s-agent roster with exact behavior coverage',
-    (agentCount) => {
-      const roster = generateDeterministicRoster(
-        agentCount,
-        `roster-${agentCount}`,
-      );
-      const request = defaultWorldSetupRequest();
-      const result = previewWorldSetup({
-        ...request,
-        radius: 12,
-        roster,
-        behaviorConfiguration: {
-          ...request.behaviorConfiguration,
-          assignments: assignBehavior(
-            roster.map(({ id }) => id),
-            request.behaviorConfiguration.seed,
-            'balanced-random',
-          ),
-        },
-      });
-      expect(result.feasible && result.world.agents).toHaveLength(agentCount);
-      expect(DEVELOPMENT_AGENT_BLUEPRINTS).toHaveLength(8);
-    },
-  );
+  it.each([10, 32])('supports a %s-agent roster', (agentCount) => {
+    const roster = generateDeterministicRoster(
+      agentCount,
+      `roster-${agentCount}`,
+    );
+    const result = previewWorldSetup({
+      ...defaultWorldSetupRequest(),
+      radius: 12,
+      roster,
+    });
+    expect(result.feasible && result.world.agents).toHaveLength(agentCount);
+    expect(DEVELOPMENT_AGENT_BLUEPRINTS).toHaveLength(8);
+  });
 });

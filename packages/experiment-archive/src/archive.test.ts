@@ -28,7 +28,6 @@ async function currentExport(): Promise<ExperimentExportDocument> {
     turns: { mode: 'entire-retained' },
     outcomes: ['accepted', 'rejected', 'provider-error', 'operator-skipped'],
     actions: ['move', 'infect', 'capture', 'wait'],
-    communications: { channel: 'all', status: 'all' },
     level: 'full-safe',
     serialization: 'compact',
   });

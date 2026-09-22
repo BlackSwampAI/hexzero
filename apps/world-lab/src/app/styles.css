@@ -1403,88 +1403,10 @@ dd {
   border-color: #79bda6;
   color: #d7e7e1;
 }
-.behavior-trace-panel,
-.agent-inspector [id$='-goals'],
-.agent-inspector [id$='-memories'],
 .agent-inspector [id$='-history'],
 .agent-inspector [id$='-configuration'],
 .agent-inspector [id$='-latest'] {
   scroll-margin-top: 46px;
-}
-.behavior-trace-panel {
-  margin-top: 14px;
-  padding-top: 2px;
-}
-.behavior-trace-heading {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 10px;
-}
-.behavior-trace-heading h3 {
-  margin-top: 0;
-}
-.behavior-trace-heading p {
-  margin: 2px 0 0;
-  color: #82938e;
-  font-size: 0.69rem;
-  line-height: 1.4;
-}
-.behavior-trace-heading > span {
-  flex: 0 0 auto;
-  color: #7f928b;
-  font-size: 0.66rem;
-}
-.behavior-trace {
-  display: grid;
-  gap: 6px;
-  margin: 8px 0 0;
-  padding: 0;
-  list-style: none;
-}
-.behavior-trace > li {
-  min-width: 0;
-  border: 1px solid #34433f;
-  border-radius: 5px;
-  background: #121917;
-}
-.behavior-trace summary {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 7px 8px;
-  color: #c9d6d1;
-  cursor: pointer;
-  font-size: 0.71rem;
-  font-weight: 650;
-}
-.behavior-trace-body {
-  display: grid;
-  gap: 7px;
-  padding: 0 8px 8px;
-  border-top: 1px solid #2b3834;
-}
-.behavior-trace-block,
-.behavior-trace-decision {
-  min-width: 0;
-  padding-top: 7px;
-  color: #aebdb8;
-  font-size: 0.71rem;
-  line-height: 1.45;
-}
-.behavior-trace-block > strong,
-.behavior-trace-decision strong {
-  color: #d5e0dc;
-}
-.behavior-trace-block ul {
-  margin: 4px 0 0;
-  padding-left: 17px;
-}
-.behavior-trace-block p,
-.behavior-trace-decision p {
-  margin: 4px 0 0;
-  overflow-wrap: anywhere;
 }
 .trace-cell-button {
   padding: 1px 4px;
@@ -1500,17 +1422,6 @@ dd {
   border-color: #80c9b0;
   color: #d9f2e9;
 }
-.personality-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-top: 17px;
-}
-.personality-heading h3 {
-  margin: 0;
-}
-.personality-heading button,
 .editor-actions button {
   padding: 5px 9px;
   border: 1px solid #465752;
@@ -1519,51 +1430,9 @@ dd {
   background: #202927;
   cursor: pointer;
 }
-.personality-heading button:disabled,
 .editor-actions button:disabled {
   color: #71807b;
   cursor: not-allowed;
-}
-.active-personality {
-  margin-top: 8px;
-}
-.active-personality p {
-  color: #d1dcd8;
-  font-size: 0.8rem;
-  line-height: 1.55;
-}
-.active-personality span {
-  display: inline-block;
-  margin-top: 7px;
-  padding: 2px 7px;
-  border: 1px solid #3c4b47;
-  border-radius: 999px;
-  color: #91a59f;
-  font-size: 0.68rem;
-}
-.personality-editor {
-  display: grid;
-  gap: 10px;
-  margin-top: 10px;
-}
-.personality-editor label {
-  display: grid;
-  gap: 5px;
-  color: #aab9b4;
-  font-size: 0.74rem;
-}
-.personality-editor select,
-.personality-editor textarea {
-  width: 100%;
-  padding: 8px;
-  border: 1px solid #43524e;
-  border-radius: 5px;
-  background: #111816;
-  color: #e0e9e6;
-}
-.personality-editor textarea {
-  resize: vertical;
-  line-height: 1.45;
 }
 .editor-meta {
   display: flex;
@@ -1638,24 +1507,6 @@ dd {
   margin: 0;
   padding-left: 18px;
 }
-.communication-history,
-.observation-communications {
-  margin: 0;
-  padding-left: 18px;
-  color: #bcc9c5;
-  font-size: 0.77rem;
-  line-height: 1.5;
-}
-.communication-history li {
-  margin-bottom: 9px;
-  overflow-wrap: anywhere;
-}
-.communication-history p {
-  margin-top: 3px;
-  color: #d8e2df;
-  white-space: pre-wrap;
-}
-.communication-history small,
 .world-chat-feed small {
   color: #82938e;
 }
@@ -1693,10 +1544,6 @@ dd {
 .component-result {
   border-left: 2px solid #4e766a;
   padding-left: 8px;
-}
-.observation-communications li {
-  margin-top: 4px;
-  overflow-wrap: anywhere;
 }
 .event-panel ol {
   list-style: none;
@@ -2246,10 +2093,6 @@ dt,
 .agent-swatch {
   border-color: color-mix(in srgb, var(--vanilla-custard) 80%, white);
   box-shadow: 0 0 0 1px #0009;
-}
-.communication-history li {
-  border-left: 3px solid transparent;
-  padding-left: 8px;
 }
 .stale-export {
   border: 1px solid color-mix(in srgb, var(--warning) 60%, var(--line));

@@ -6,7 +6,6 @@ import {
   type SwarmPlanner,
 } from '@hexzero/agent-runtime';
 import {
-  assignBehavior,
   reflexDecisionSchema,
   type CompatibleModel,
   type ProviderMetadata,
@@ -431,16 +430,6 @@ function createService(variant: OfflineComparisonVariant, seed: string) {
       globalReasoningProfile: 'low',
       overrides: [],
       locked: false,
-    },
-    // This transitional scenario field remains required until PR 2 removes
-    // legacy behavior configuration from the shared world setup schema.
-    behaviorConfiguration: {
-      ...request.behaviorConfiguration,
-      assignments: assignBehavior(
-        roster.map(({ id }) => id),
-        `offline-behavior-${seed}`,
-        'balanced-random',
-      ),
     },
   });
   return service;

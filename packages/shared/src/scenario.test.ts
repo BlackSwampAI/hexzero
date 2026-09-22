@@ -2,8 +2,6 @@ import { describe, expect, it } from 'vitest';
 import {
   appliedScenarioSchema,
   archivedAppliedScenarioSchema,
-  assignBehavior,
-  behaviorConfigurationSchema,
   experimentManifestSchema,
   worldSetupPreviewResponseSchema,
   worldSetupRequestSchema,
@@ -16,7 +14,6 @@ const roster = [
     id: '128f3f38-6b7d-4db7-9e95-751b4ce2681e',
     name: 'Ember',
     color: '#ff6b57',
-    personality: 'Adaptive.',
   },
 ] as const;
 const request = {
@@ -28,7 +25,6 @@ const request = {
   rosterSeed: 'roster',
   spawnSeed: 'spawn',
   minimumSpawnSeparation: 1,
-  communicationRangeKm: 12,
   patientZeroAgentId: roster[0].id,
   roster: [...roster],
   modelConfiguration: {
@@ -37,19 +33,8 @@ const request = {
     overrides: [],
     locked: false,
   },
-  behaviorConfiguration: {
-    registryVersion: 1 as const,
-    assignmentMode: 'balanced-random' as const,
-    seed: 'behavior',
-    assignments: assignBehavior(
-      roster.map(({ id }) => id as never),
-      'behavior',
-      'balanced-random',
-    ),
-    locked: false,
-  },
   objectiveVersion: 'durable-influence-v2' as const,
-  capabilities: { communication: true, diplomacy: true },
+  capabilities: {},
 };
 
 describe('scenario contracts', () => {
@@ -214,8 +199,6 @@ describe('scenario contracts', () => {
         ],
         agents: [{ ...parsed.roster[0], currentCell: '8928308280fffff' }],
         events: [],
-        alliances: [],
-        pendingAllianceProposals: [],
       },
     });
     expect(preview.feasible).toBe(true);
@@ -237,7 +220,7 @@ describe('scenario contracts', () => {
     });
   });
 
-  it('rejects dynamic roster overflow and behavior under-coverage', () => {
+  it('rejects dynamic roster overflow', () => {
     expect(
       worldSetupRequestSchema.safeParse({
         ...request,
@@ -246,12 +229,6 @@ describe('scenario contracts', () => {
           id: `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
           name: `Agent ${index}`,
         })),
-      }).success,
-    ).toBe(false);
-    expect(
-      behaviorConfigurationSchema.safeParse({
-        ...request.behaviorConfiguration,
-        assignments: [],
       }).success,
     ).toBe(false);
   });
@@ -357,14 +334,6 @@ describe('scenario contracts', () => {
       ...worldSetupRequestSchema.parse(request),
       patientZeroAgentId: null,
       roster: archivedRoster,
-      behaviorConfiguration: {
-        ...request.behaviorConfiguration,
-        assignments: assignBehavior(
-          archivedRoster.map(({ id }) => id as never),
-          request.behaviorConfiguration.seed,
-          'balanced-random',
-        ),
-      },
       exactCellCount: 2,
       areaSquareKilometers: 0.1,
       startingCells: ['8928308280fffff', '892a1072893ffff'],

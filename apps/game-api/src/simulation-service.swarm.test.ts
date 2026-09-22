@@ -8,7 +8,6 @@ import {
   type SwarmPlanner,
 } from '@hexzero/agent-runtime';
 import {
-  assignBehavior,
   h3CellSchema,
   type CompatibleModel,
   type SwarmPlan,
@@ -401,14 +400,6 @@ describe('zero-swarm SimulationService tick', () => {
         overrides: [],
         locked: false,
       },
-      behaviorConfiguration: {
-        ...request.behaviorConfiguration,
-        assignments: assignBehavior(
-          roster.map(({ id }) => id),
-          request.behaviorConfiguration.seed,
-          'balanced-random',
-        ),
-      },
     });
 
     await simulation.executeNextTick();
@@ -498,14 +489,6 @@ describe('zero-swarm SimulationService tick', () => {
         overrides: [],
         locked: false,
       },
-      behaviorConfiguration: {
-        ...request.behaviorConfiguration,
-        assignments: assignBehavior(
-          roster.map(({ id }) => id),
-          request.behaviorConfiguration.seed,
-          'balanced-random',
-        ),
-      },
     });
 
     await expect(simulation.executeNextTick()).resolves.toBeNull();
@@ -524,7 +507,6 @@ describe('zero-swarm SimulationService tick', () => {
       turns: { mode: 'entire-retained' },
       outcomes: ['accepted', 'rejected', 'provider-error', 'operator-skipped'],
       actions: ['move', 'infect', 'capture', 'wait'],
-      communications: { channel: 'all', status: 'all' },
       level: 'full-safe',
       serialization: 'compact',
     });
@@ -568,14 +550,6 @@ describe('zero-swarm SimulationService tick', () => {
         globalReasoningProfile: 'low',
         overrides: [],
         locked: false,
-      },
-      behaviorConfiguration: {
-        ...request.behaviorConfiguration,
-        assignments: assignBehavior(
-          roster.map(({ id }) => id),
-          request.behaviorConfiguration.seed,
-          'balanced-random',
-        ),
       },
     });
 
@@ -623,14 +597,6 @@ describe('zero-swarm SimulationService tick', () => {
         overrides: [],
         locked: false,
       },
-      behaviorConfiguration: {
-        ...request.behaviorConfiguration,
-        assignments: assignBehavior(
-          roster.map(({ id }) => id),
-          request.behaviorConfiguration.seed,
-          'balanced-random',
-        ),
-      },
     });
 
     await simulation.executeNextTick();
@@ -640,7 +606,6 @@ describe('zero-swarm SimulationService tick', () => {
       turns: { mode: 'entire-retained' },
       outcomes: ['accepted', 'rejected', 'provider-error', 'operator-skipped'],
       actions: ['move', 'infect', 'capture', 'wait'],
-      communications: { channel: 'all', status: 'all' },
       level: 'full-safe',
       serialization: 'compact',
     });
@@ -1060,7 +1025,6 @@ describe('zero-swarm SimulationService tick', () => {
       turns: { mode: 'entire-retained' },
       outcomes: ['accepted', 'rejected', 'provider-error', 'operator-skipped'],
       actions: ['move', 'infect', 'capture', 'wait'],
-      communications: { channel: 'all', status: 'all' },
       level: 'full-safe',
       serialization: 'compact',
     });

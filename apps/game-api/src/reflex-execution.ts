@@ -76,7 +76,7 @@ function actionDescription(
   if (action.type === 'infect')
     return 'Infect the current open cell and establish local territory.';
   if (action.type === 'capture')
-    return 'Capture the abandoned infected current cell from a non-allied controller.';
+    return 'Capture the abandoned infected current cell from another controller.';
   const status = cellStatus(state, action.targetCell, directive.agentId);
   const terrain =
     status === 'open'
