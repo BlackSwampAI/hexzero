@@ -261,7 +261,13 @@ archive never becomes simulation authority.
 
 The active experiment has a runtime-validated UUID, start time, versioned authoritative scenario and ordered initial roster, immutable configuration events, initial world, and up to 5,000 complete safe turns. The browser snapshot and world-event list remain capped at 120. Reset creates a new experiment from the current scenario and clears telemetry/cost; no previous experiments survive reset or process restart.
 
-Metrics and filtering are deterministic Game API responsibilities. All exports
+Metrics and filtering are deterministic Game API responsibilities. The live
+snapshot's experiment metrics use the same derivation as an all-agents,
+entire-retained export over the retained swarm ticks, so World Lab and exported
+metrics cannot drift apart. Movement-pattern metrics walk each agent's accepted
+moves separately, classifying each step with `geographicDirectionBetweenCells`;
+aggregates sum direction counts and revisits and report the longest
+single-agent streak. All exports
 use schema version 12, which carries `swarmArchitectureVersion: "zero-swarm-v1"`
 and independent provider-attempt accounting unconditionally. Pre-swarm exports
 (schema versions 9, 10, and 11) are rejected outright; there is no migration

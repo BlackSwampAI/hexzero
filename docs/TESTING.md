@@ -154,6 +154,13 @@ swarm summary showing no player pressure and fallback actions.
 boundaries with north wraparound, initial bearings across longitude wraparound,
 and same-cell/same-coordinate rejection.
 
+`experiment-export.test.ts` covers movement-pattern metrics: direction streaks
+and cell revisits walk each agent's accepted moves separately, so an interleaved
+move by another agent neither extends nor breaks a streak; aggregates sum
+direction counts and revisits and report the longest single-agent streak.
+`simulation-service.swarm.test.ts` additionally asserts that live snapshot
+metrics equal the metrics of an all-agents, entire-retained export.
+
 ### World Lab (`apps/world-lab`)
 
 `swarm-view.test.tsx` covers swarm telemetry panels: inactive pressure/action/

@@ -30,6 +30,14 @@ architecture and removed all legacy infrastructure:
   brought README, this roadmap, architecture, gameplay foundation, security,
   testing, and the experiment-archive guide in line with the delivered
   architecture. See ADR 0033.
+- **Live metrics fix** (`fix(game-api): compute live swarm experiment metrics`):
+  live World Lab metrics had read zero because the snapshot passed no resolved
+  actions to the metrics calculation; they now come from the retained swarm
+  ticks through the same derivation as an all-agents, entire-retained export.
+  The movement-pattern metrics (`movementDirectionDistribution`,
+  `longestRepeatedDirectionStreak`, `recentCellRevisits`), which nothing had
+  ever assigned since the migration, are computed per agent from accepted
+  moves.
 
 The retirement case is structural rather than measured: the legacy path made one
 full generative provider call per active agent per tick, so provider attempts,
@@ -43,22 +51,6 @@ The deterministic-worker baseline (workers resolving directives without a model
 call) is retained as the ablation control for the swarm comparisons, not as a
 second production architecture. Historical milestones below remain as
 implementation history.
-
-## Known open work
-
-The following issues are known and owned by a follow-on pull request:
-
-- `simulation-service.ts` passes an empty resolved-action array to
-  `calculateExperimentMetrics`, so all live World Lab experiment metrics read
-  zero even though `swarmTicks` now carries the data needed to populate them.
-- `movementDirectionDistribution`, `longestRepeatedDirectionStreak`, and
-  `recentCellRevisits` are declared in the shared metrics schema but nothing
-  ever assigns them, so they always fall back to their schema defaults. The
-  direction helper itself already exists
-  (`geographicDirectionBetweenCells` in `apps/game-api/src/geographic-direction.ts`,
-  used by swarm pressure and reflex execution); what is missing is the
-  originating cell on the resolved-action record — which carries only the move
-  target — and the metric computation itself.
 
 ## Agent Zero planner
 
@@ -181,7 +173,5 @@ open. The current process-local attempt and credit-admission ceilings are an
 operator safety boundary, and their schema-v12 safe ledger can be exported to
 the analysis archive even when no turn committed. This is not active runtime
 persistence, restart recovery, or provider-account balance enforcement.
-
-This milestone also owns the two known open metrics defects noted above.
 
 Player development begins only after these agent milestones demonstrate compelling behavior.

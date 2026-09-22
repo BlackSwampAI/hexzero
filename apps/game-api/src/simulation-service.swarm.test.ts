@@ -633,6 +633,50 @@ describe('zero-swarm SimulationService tick', () => {
     expect(tick.swarmTick?.tickNumber).toBe(1);
   });
 
+  it('reports live experiment metrics equal to an all-agents entire-retained export', async () => {
+    const simulation = setup(
+      new InspectingPlanner(),
+      new ScriptedReflexProvider(
+        Array.from({ length: 21 }, () => ({ chosenCandidateId: 'action_0' })),
+      ),
+    );
+
+    await simulation.executeNextTick();
+    await simulation.executeNextTick();
+    await simulation.executeNextTick();
+
+    const snapshot = simulation.getSnapshot();
+    const resolvedActionCount = (snapshot.swarmTicks ?? []).reduce(
+      (count, tick) =>
+        count +
+        (tick.zeroAction && tick.zeroActionResult ? 1 : 0) +
+        tick.workers.filter(
+          ({ action, actionResult }) => action && actionResult,
+        ).length,
+      0,
+    );
+    expect(resolvedActionCount).toBeGreaterThan(0);
+    expect(snapshot.experiment.metrics.aggregate.totalTurns).toBe(
+      resolvedActionCount,
+    );
+
+    const exported = simulation.generateExperimentExport({
+      agents: { mode: 'all' },
+      turns: { mode: 'entire-retained' },
+      outcomes: [
+        'accepted',
+        'rejected',
+        'lost-tick',
+        'provider-error',
+        'operator-skipped',
+      ],
+      actions: ['move', 'infect', 'capture', 'wait'],
+      level: 'full-safe',
+      serialization: 'compact',
+    });
+    expect(snapshot.experiment.metrics).toEqual(exported.metrics);
+  });
+
   it('freezes player-advanced facts for Zero, uses only reflex choices, and resolves physical actions in engine order', async () => {
     const planner = new InspectingPlanner();
     const simulation = setup(

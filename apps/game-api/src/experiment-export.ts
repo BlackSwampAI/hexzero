@@ -26,6 +26,10 @@ import {
   type WorldActionResult,
   type WorldSnapshot,
 } from '@hexzero/shared';
+import {
+  geographicDirectionBetweenCells,
+  type GeographicDirection,
+} from './geographic-direction';
 
 export interface ExperimentSource {
   schemaVersion: 12;
@@ -411,7 +415,14 @@ function filterControlChanges(
     !request.actions.includes('capture')
   )
     return [];
-  return requestFiltered.flatMap(({ tickNumber, actionResult }) => {
+  return capturesAffecting(requestFiltered, selected);
+}
+
+function capturesAffecting(
+  actions: readonly ResolvedWorldAction[],
+  selected: Set<AgentId>,
+): ExportedControlChange[] {
+  return actions.flatMap(({ tickNumber, actionResult }) => {
     if (!actionResult.accepted || actionResult.event.type !== 'hex-captured')
       return [];
     const event = actionResult.event;
@@ -575,6 +586,64 @@ function attemptMetrics(attempts: readonly ProviderAttemptRecord[]) {
   };
 }
 
+const movementDirections: readonly GeographicDirection[] = [
+  'N',
+  'NE',
+  'SE',
+  'S',
+  'SW',
+  'NW',
+];
+
+/**
+ * Direction streaks and revisits only mean something along one agent's own
+ * path, so each agent's accepted moves are walked separately. A scope spanning
+ * several agents sums direction counts and revisits and reports the longest
+ * single-agent streak. A revisit is an accepted move into any cell the agent
+ * has already occupied within the scope, including its first move's origin.
+ */
+function movementMetrics(scopeActions: readonly ResolvedWorldAction[]) {
+  const counts = new Map<GeographicDirection, number>();
+  const paths = new Map<
+    AgentId,
+    {
+      previous: GeographicDirection | null;
+      streak: number;
+      visited: Set<string>;
+    }
+  >();
+  let longestRepeatedDirectionStreak = 0;
+  let recentCellRevisits = 0;
+  for (const { agentId, actionResult } of scopeActions) {
+    if (!actionResult.accepted || actionResult.event.type !== 'agent-moved')
+      continue;
+    const { fromCell, toCell } = actionResult.event;
+    const direction = geographicDirectionBetweenCells(fromCell, toCell);
+    let path = paths.get(agentId);
+    if (!path) {
+      path = { previous: null, streak: 0, visited: new Set([fromCell]) };
+      paths.set(agentId, path);
+    }
+    counts.set(direction, (counts.get(direction) ?? 0) + 1);
+    path.streak = direction === path.previous ? path.streak + 1 : 1;
+    path.previous = direction;
+    longestRepeatedDirectionStreak = Math.max(
+      longestRepeatedDirectionStreak,
+      path.streak,
+    );
+    if (path.visited.has(toCell)) recentCellRevisits += 1;
+    path.visited.add(toCell);
+  }
+  return {
+    movementDirectionDistribution: movementDirections.flatMap((direction) => {
+      const count = counts.get(direction);
+      return count ? [{ direction, count }] : [];
+    }),
+    longestRepeatedDirectionStreak,
+    recentCellRevisits,
+  };
+}
+
 function metricCountsFor(
   scopeActions: readonly ResolvedWorldAction[],
   scopeAttempts: readonly ProviderAttemptRecord[],
@@ -654,6 +723,7 @@ function metricCountsFor(
     territoryGainedThroughCapture,
     territoryLostThroughCapture,
     uniqueVisitedCells: visited.size,
+    ...movementMetrics(scopeActions),
     ...attemptMetrics(scopeAttempts),
   };
 }
@@ -682,6 +752,39 @@ export function calculateExperimentMetrics(
       ),
     })),
   });
+}
+
+/**
+ * Metrics over every known agent and the entire retained experiment: the same
+ * values an all-agents, entire-retained export reports, so live World Lab
+ * metrics cannot drift from exported ones.
+ */
+export function calculateRetainedExperimentMetrics(
+  source: Pick<
+    ExperimentSource,
+    | 'swarmTicks'
+    | 'scenario'
+    | 'initialAgents'
+    | 'currentAgents'
+    | 'providerAttempts'
+  >,
+): ExperimentMetrics {
+  const agentIds = [
+    ...new Set(
+      [...source.initialAgents, ...source.currentAgents].map(({ id }) => id),
+    ),
+  ];
+  const selected = new Set(agentIds);
+  const resolved = resolvedActionsFromTicks(
+    source.swarmTicks,
+    source.scenario.patientZeroAgentId,
+  );
+  return calculateExperimentMetrics(
+    resolved.filter(({ agentId }) => selected.has(agentId)),
+    agentIds,
+    source.providerAttempts.filter(({ agentId }) => selected.has(agentId)),
+    capturesAffecting(resolved, selected),
+  );
 }
 
 export function serializeExperimentExport(
