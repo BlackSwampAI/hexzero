@@ -93,7 +93,7 @@ describe('swarm directive semantics', () => {
   });
 
   it('rejects infected expand targets while accepting open targets', () => {
-    const { state, worker, neighbor, directive } = fixture();
+    const { state, neighbor, directive } = fixture();
     const otherWorker = [...state.agents.values()][2]!;
     expect(swarmDirectiveIssue(state, directive('expand'))).toBeNull();
 

@@ -1,19 +1,10 @@
-import {
-  cellArea,
-  cellToLatLng,
-  greatCircleDistance,
-  gridDisk,
-  gridDistance,
-  latLngToCell,
-  UNITS,
-} from 'h3-js';
+import { cellArea, gridDisk, gridDistance, latLngToCell, UNITS } from 'h3-js';
 import {
   SWARM_PLANNER_CONTRACT_VERSION,
   DEVELOPMENT_WORLD_CONFIG,
   DEFAULT_MINIMUM_TICK_INTERVAL_MINUTES,
   DEFAULT_MAXIMUM_TICK_INTERVAL_MINUTES,
   DEFAULT_PROVIDER_ATTEMPT_LIMIT,
-  OBJECTIVE_PROMPT_VERSION,
   WORLD_SCENARIO_LIMITS,
   agentIdSchema,
   h3CellSchema,
