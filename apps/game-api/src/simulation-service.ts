@@ -64,7 +64,7 @@ import {
   type WorldState,
 } from '@hexzero/world-engine';
 import {
-  calculateExperimentMetrics,
+  calculateRetainedExperimentMetrics,
   createExperimentExport,
   createExperimentPreview,
   type ExperimentSource,
@@ -417,10 +417,13 @@ export class SimulationService {
         id: this.#experimentId,
         startedAt: this.#experimentStartedAt,
         attemptAccounting: this.#attemptAccounting.snapshot(),
-        metrics: calculateExperimentMetrics(
-          [],
-          agents.map(({ id }) => id),
-        ),
+        metrics: calculateRetainedExperimentMetrics({
+          swarmTicks: this.#experimentSwarmTicks,
+          scenario: this.#scenario,
+          initialAgents: this.#initialExperimentAgents,
+          currentAgents: agents,
+          providerAttempts: this.#attemptAccounting.ledger(),
+        }),
         currentTerritory: this.#territoryScoreboard(),
         simulatedPlayerMetrics: this.#state.simulatedPlayer?.metrics ?? {
           movements: 0,
