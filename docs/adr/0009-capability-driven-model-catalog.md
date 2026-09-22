@@ -4,6 +4,10 @@
 
 Accepted
 
+Superseded by ADR 0033 for its personality/message observation and
+decision-contract framing; model discovery and validation continue to apply
+to Agent Zero.
+
 ## Decision
 
 Hex Zero discovers models through OpenRouter's server-side models API and accepts a model only when local validation confirms text input, text output, chat completions, advertised `max_tokens`, and at least 16,384 context tokens. Requests are non-streaming plain-text chat completions. The prompt requires exactly one deliberately flat JSON object whose sentinel-bearing fields normalize into the existing local decision unions.

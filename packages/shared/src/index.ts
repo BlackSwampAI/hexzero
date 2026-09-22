@@ -1818,45 +1818,19 @@ export const appliedScenarioSchema = worldSetupRequestObjectSchema
   .superRefine(validateAppliedScenario);
 export type AppliedScenario = z.infer<typeof appliedScenarioSchema>;
 /**
- * Read-only translation for historical exports. Active setup never accepts
- * these retired fields; import normalizes them at the archive boundary.
+ * Read-only translation for historical exports that predate the current
+ * execution-limits and objective-attribution requirements. Active setup
+ * never accepts these relaxed defaults; import normalizes them at the
+ * archive boundary.
  */
-export const archivedAppliedScenarioSchema = z.preprocess(
-  (input) => {
-    if (typeof input !== 'object' || input === null || Array.isArray(input))
-      return input;
-    const scenario = input as Record<string, unknown>;
-    const { cognitionMode, decisionContractVersion, ...current } = scenario;
-    return {
-      ...current,
-      historicalCognitionMode:
-        scenario.historicalCognitionMode ?? cognitionMode,
-      historicalDecisionContractVersion:
-        scenario.historicalDecisionContractVersion ?? decisionContractVersion,
-      swarmArchitectureVersion:
-        scenario.swarmArchitectureVersion ?? 'zero-swarm-v1',
-      swarmPlannerContractVersion:
-        scenario.swarmPlannerContractVersion ?? SWARM_PLANNER_CONTRACT_VERSION,
-    };
-  },
-  worldSetupRequestObjectSchema
-    .extend({
-      patientZeroAgentId: agentIdSchema.nullable(),
-      historicalCognitionMode: z
-        .enum(['legacy-multi-agent', 'zero-swarm-v1'])
-        .optional(),
-      historicalDecisionContractVersion: z
-        .string()
-        .trim()
-        .min(1)
-        .max(80)
-        .optional(),
-      ...appliedScenarioShape,
-    })
-    .superRefine((scenario, context) =>
-      validateAppliedScenario(scenario, context, true),
-    ),
-);
+export const archivedAppliedScenarioSchema = worldSetupRequestObjectSchema
+  .extend({
+    patientZeroAgentId: agentIdSchema.nullable(),
+    ...appliedScenarioShape,
+  })
+  .superRefine((scenario, context) =>
+    validateAppliedScenario(scenario, context, true),
+  );
 
 export const worldSetupPreviewResponseSchema = z.discriminatedUnion(
   'feasible',
@@ -2333,9 +2307,6 @@ export const experimentManifestSchema = z.preprocess(
     const manifest = input as Record<string, unknown>;
     const resolvedVersion = SWARM_PLANNER_CONTRACT_VERSION;
     const scenario = manifest.scenario;
-    const historicalDecisionContractVersion =
-      manifest.historicalDecisionContractVersion ??
-      manifest.decisionContractVersion;
     const archivedScenarioRecord =
       typeof scenario === 'object' &&
       scenario !== null &&
@@ -2346,9 +2317,6 @@ export const experimentManifestSchema = z.preprocess(
       archivedScenarioRecord !== null
         ? {
             ...archivedScenarioRecord,
-            historicalDecisionContractVersion:
-              archivedScenarioRecord.historicalDecisionContractVersion ??
-              historicalDecisionContractVersion,
             swarmPlannerContractVersion:
               archivedScenarioRecord.swarmPlannerContractVersion ??
               resolvedVersion,
@@ -2356,7 +2324,6 @@ export const experimentManifestSchema = z.preprocess(
         : scenario;
     return {
       ...manifest,
-      historicalDecisionContractVersion,
       swarmPlannerContractVersion:
         manifest.swarmPlannerContractVersion ?? resolvedVersion,
       ...(archivedScenario === undefined ? {} : { scenario: archivedScenario }),
@@ -2368,12 +2335,6 @@ export const experimentManifestSchema = z.preprocess(
       startedAt: z.iso.datetime(),
       generatedAt: z.iso.datetime().optional(),
       providerMode: providerModeSchema,
-      historicalDecisionContractVersion: z
-        .string()
-        .trim()
-        .min(1)
-        .max(80)
-        .optional(),
       swarmPlannerContractVersion: swarmPlannerContractVersionSchema,
       modelConfiguration: experimentModelConfigurationSchema.optional(),
       scenario: archivedAppliedScenarioSchema.optional(),
@@ -2665,7 +2626,7 @@ export type ExperimentExportWorldState = z.infer<
 
 const experimentExportDocumentObjectSchema = z
   .object({
-    schemaVersion: z.union([z.literal(9), z.literal(10), z.literal(11)]),
+    schemaVersion: z.literal(12),
     generatedAt: z.iso.datetime(),
     experiment: experimentManifestSchema,
     retention: experimentRetentionSchema,
@@ -2742,80 +2703,64 @@ const experimentExportDocumentObjectSchema = z
           message: 'Zero-swarm tick count must match exported swarm telemetry.',
         });
     }
-    if (document.schemaVersion === 9 && document.tickSummaries !== undefined)
-      context.addIssue({
-        code: 'custom',
-        message: 'Schema-v9 exports cannot contain tick summaries.',
-      });
-    if (document.schemaVersion === 11) {
-      if (
-        document.providerAttempts === undefined ||
-        document.attemptRetention === undefined ||
-        document.attemptAccounting === undefined ||
-        document.selection.matchingProviderAttemptCount === undefined
-      )
-        context.addIssue({
-          code: 'custom',
-          message: 'Schema-v11 exports require independent attempt accounting.',
-        });
-      const attempts = document.providerAttempts ?? [];
-      const selectedIds = new Set(document.selection.selectedAgentIds);
-      const exportedIds = new Set(document.agents.map(({ id }) => id));
-      if (new Set(attempts.map(({ id }) => id)).size !== attempts.length)
-        context.addIssue({
-          code: 'custom',
-          path: ['providerAttempts'],
-          message: 'Provider-attempt IDs must be unique.',
-        });
-      if (
-        attempts.some(
-          ({ agentId }) =>
-            !selectedIds.has(agentId) || !exportedIds.has(agentId),
-        )
-      )
-        context.addIssue({
-          code: 'custom',
-          path: ['providerAttempts'],
-          message: 'Provider attempts must belong to selected exported agents.',
-        });
-      if (document.selection.matchingProviderAttemptCount !== attempts.length)
-        context.addIssue({
-          code: 'custom',
-          path: ['selection', 'matchingProviderAttemptCount'],
-          message: 'Provider-attempt selection count must match the export.',
-        });
-      const retention = document.attemptRetention;
-      const accounting = document.attemptAccounting;
-      if (
-        retention &&
-        (retention.totalStartedAttempts !==
-          retention.retainedAttempts + retention.droppedRecords ||
-          retention.retainedAttempts > retention.limit ||
-          retention.complete !== (retention.droppedRecords === 0))
-      )
-        context.addIssue({
-          code: 'custom',
-          path: ['attemptRetention'],
-          message: 'Provider-attempt retention totals must be consistent.',
-        });
-      if (
-        retention &&
-        accounting &&
-        retention.totalStartedAttempts !== accounting.attemptsStarted
-      )
-        context.addIssue({
-          code: 'custom',
-          path: ['attemptRetention', 'totalStartedAttempts'],
-          message: 'Attempt retention and accounting totals must agree.',
-        });
-    } else if (
-      document.providerAttempts !== undefined ||
-      document.attemptRetention !== undefined ||
-      document.attemptAccounting !== undefined
+    if (
+      document.providerAttempts === undefined ||
+      document.attemptRetention === undefined ||
+      document.attemptAccounting === undefined ||
+      document.selection.matchingProviderAttemptCount === undefined
     )
       context.addIssue({
         code: 'custom',
-        message: 'Legacy exports cannot claim schema-v11 attempt accounting.',
+        message: 'Exports require independent attempt accounting.',
+      });
+    const attempts = document.providerAttempts ?? [];
+    const selectedIds = new Set(document.selection.selectedAgentIds);
+    const exportedIds = new Set(document.agents.map(({ id }) => id));
+    if (new Set(attempts.map(({ id }) => id)).size !== attempts.length)
+      context.addIssue({
+        code: 'custom',
+        path: ['providerAttempts'],
+        message: 'Provider-attempt IDs must be unique.',
+      });
+    if (
+      attempts.some(
+        ({ agentId }) => !selectedIds.has(agentId) || !exportedIds.has(agentId),
+      )
+    )
+      context.addIssue({
+        code: 'custom',
+        path: ['providerAttempts'],
+        message: 'Provider attempts must belong to selected exported agents.',
+      });
+    if (document.selection.matchingProviderAttemptCount !== attempts.length)
+      context.addIssue({
+        code: 'custom',
+        path: ['selection', 'matchingProviderAttemptCount'],
+        message: 'Provider-attempt selection count must match the export.',
+      });
+    const retention = document.attemptRetention;
+    const accounting = document.attemptAccounting;
+    if (
+      retention &&
+      (retention.totalStartedAttempts !==
+        retention.retainedAttempts + retention.droppedRecords ||
+        retention.retainedAttempts > retention.limit ||
+        retention.complete !== (retention.droppedRecords === 0))
+    )
+      context.addIssue({
+        code: 'custom',
+        path: ['attemptRetention'],
+        message: 'Provider-attempt retention totals must be consistent.',
+      });
+    if (
+      retention &&
+      accounting &&
+      retention.totalStartedAttempts !== accounting.attemptsStarted
+    )
+      context.addIssue({
+        code: 'custom',
+        path: ['attemptRetention', 'totalStartedAttempts'],
+        message: 'Attempt retention and accounting totals must agree.',
       });
     const level = document.filters.level;
     const custom = level === 'custom' ? document.filters.custom : undefined;
@@ -2858,46 +2803,8 @@ const experimentExportDocumentObjectSchema = z
         message: 'Control-change inclusion does not match the export level.',
       });
   });
-export const experimentExportDocumentSchema = z.preprocess((input) => {
-  if (typeof input !== 'object' || input === null || Array.isArray(input))
-    return input;
-  const document = input as Record<string, unknown>;
-  const experiment =
-    typeof document.experiment === 'object' && document.experiment !== null
-      ? (document.experiment as Record<string, unknown>)
-      : undefined;
-  const scenario =
-    typeof experiment?.scenario === 'object' && experiment.scenario !== null
-      ? (experiment.scenario as Record<string, unknown>)
-      : undefined;
-  const simulatedPlayer =
-    typeof scenario?.simulatedPlayer === 'object' &&
-    scenario.simulatedPlayer !== null
-      ? (scenario.simulatedPlayer as Record<string, unknown>)
-      : undefined;
-  const capabilities =
-    typeof scenario?.capabilities === 'object' && scenario.capabilities !== null
-      ? (scenario.capabilities as Record<string, unknown>)
-      : undefined;
-  const playerPressureEnabled =
-    simulatedPlayer?.enabled === true ||
-    capabilities?.simulatedPlayerPressure === true;
-  if (
-    (document.schemaVersion === 9 || document.schemaVersion === 10) &&
-    !playerPressureEnabled &&
-    document.metrics !== undefined &&
-    document.simulatedPlayerMetrics === undefined
-  )
-    return {
-      ...document,
-      simulatedPlayerMetrics: {
-        movements: 0,
-        cellsDisinfected: 0,
-        blockedDisinfections: 0,
-      },
-    };
-  return input;
-}, experimentExportDocumentObjectSchema);
+export const experimentExportDocumentSchema =
+  experimentExportDocumentObjectSchema;
 export type ExperimentExportDocument = z.infer<
   typeof experimentExportDocumentSchema
 >;

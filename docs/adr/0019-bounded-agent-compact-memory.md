@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-08-23
+- Status: Superseded by ADR 0033
 
 ## Decision
 

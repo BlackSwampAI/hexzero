@@ -4,6 +4,9 @@
 
 Accepted for PR A. Two-stage production tick orchestration remains PR B.
 
+Superseded by ADR 0033 for its `legacy-multi-agent` compatibility default; the
+reflex seam itself is retained as part of the sole zero-swarm architecture.
+
 ## Decision
 
 Scenarios carry `cognitionMode`, with `legacy-multi-agent` as the compatibility

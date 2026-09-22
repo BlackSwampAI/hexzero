@@ -4,6 +4,8 @@
 
 Accepted for the simultaneous-tick experiment foundation.
 
+Superseded by ADR 0033.
+
 ## Context
 
 The v3 flat decision contract allowed optional communication but did not give

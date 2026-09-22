@@ -96,7 +96,7 @@ test('runs a deterministic swarm tick and exports safe telemetry', async ({
   const exported = experimentExportDocumentSchema.parse(
     JSON.parse(await readFile(downloadedPath!, 'utf8')),
   );
-  expect(exported.schemaVersion).toBe(11);
+  expect(exported.schemaVersion).toBe(12);
   expect(exported.experiment.scenario?.swarmArchitectureVersion).toBe(
     'zero-swarm-v1',
   );

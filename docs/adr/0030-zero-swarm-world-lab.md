@@ -4,6 +4,10 @@
 
 Accepted for PR C.
 
+Superseded by ADR 0033 for its dual-mode (`cognitionMode`) presentation and
+legacy agent/chat/diplomacy/personality/goal/memory views; World Lab now
+presents only the zero-swarm view.
+
 ## Decision
 
 World Lab selects its presentation from the scenario's explicit

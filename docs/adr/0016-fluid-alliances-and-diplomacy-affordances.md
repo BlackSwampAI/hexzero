@@ -5,6 +5,8 @@
 Accepted. This supersedes ADR 0008's fixed eight-member and four-active-alliance
 limits while preserving its ownership, privacy, and telemetry decisions.
 
+Superseded by ADR 0033.
+
 ## Context
 
 The former eight-member cap had no gameplay justification, and requiring a
