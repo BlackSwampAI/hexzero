@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { simulationSnapshotSchema } from '@hexzero/shared';
@@ -350,5 +350,54 @@ describe('WorldLab swarm workspace', () => {
     expect(
       screen.getByRole('button', { name: 'Download JSON' }),
     ).toBeDisabled();
+  });
+
+  it('model console shows exactly one Agent Zero planner row and no per-agent override controls', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => response(snapshot)),
+    );
+    const user = userEvent.setup();
+    render(<WorldLab />);
+    await user.click(await screen.findByLabelText('More World Lab actions'));
+    await user.click(screen.getByRole('button', { name: 'Agent setup' }));
+    const trigger = await screen.findByRole('button', {
+      name: /Agent Zero model/,
+    });
+    await user.click(trigger);
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Agent Zero model selection',
+    });
+    expect(dialog).toBeVisible();
+    await user.click(screen.getByRole('tab', { name: 'Overview' }));
+    expect(within(dialog).getByText('Agent Zero')).toBeVisible();
+    for (const { name } of world.agents) {
+      expect(within(dialog).queryByText(name)).not.toBeInTheDocument();
+    }
+    await user.click(screen.getByRole('tab', { name: 'Models' }));
+    expect(screen.queryByText('Agent overrides')).not.toBeInTheDocument();
+    expect(
+      screen.queryByText('Apply global model to all agents'),
+    ).not.toBeInTheDocument();
+  });
+
+  it('export dialog offers JSON serialization but no agent / turn / level / outcome / action filters', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => response(snapshot)),
+    );
+    const user = userEvent.setup();
+    render(<WorldLab />);
+    await user.click(await screen.findByLabelText('More World Lab actions'));
+    await user.click(screen.getByRole('button', { name: 'Export' }));
+    expect(screen.queryByText('Export level')).not.toBeInTheDocument();
+    expect(screen.queryByText('Turn range')).not.toBeInTheDocument();
+    expect(screen.queryByText('Outcomes')).not.toBeInTheDocument();
+    expect(screen.queryByText('Actions')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Preview' })).toBeVisible();
+    expect(
+      screen.getByRole('button', { name: 'Generate export' }),
+    ).toBeVisible();
+    expect(screen.getByLabelText('JSON serialization')).toBeVisible();
   });
 });
