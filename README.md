@@ -2,24 +2,24 @@
 
 Hex Zero is an agent-first geographic experiment. A configurable roster of model-backed agents moves, infects, and captures territory on a real H3 map while the World Lab exposes every safe decision record. Full agent visibility is deliberate; there is no fog of war.
 
-`zero-swarm-v1` is the sole cognition architecture. One OpenRouter generative planner, Agent Zero, makes one planning call per tick regardless of roster size, under the versioned contract `swarm-planner-v1`. Each plan carries a strategy summary and a per-worker directive set. Worker nodes resolve their directives with TypeSafe Jev reflex cognition, choosing among enumerated `action_N` candidates with a probability distribution and a confidence value, over the deterministic H3 world engine.
+`zero-swarm-v1` is the sole cognition architecture. Workers make reflex decisions each active worker tick. Agent Zero makes one OpenRouter planning call only when strategic replanning is required (for example, after roster changes, directive completions, or elevated pressure), under the versioned contract `swarm-planner-v1`; otherwise the last valid directive set is reused with no planner call. Each plan carries a strategy summary and a per-worker directive set. Worker nodes resolve their directives with TypeSafe Jev reflex cognition, choosing among enumerated `action_N` candidates with a probability distribution and a confidence value, over the deterministic H3 world engine.
 
 Directives carry: identifier, agent identifier, mission (`expand` | `hold` | `relocate` | `reinforce` | `evade`), a nullable target cell, priority (`low` | `normal` | `high`), risk tolerance (`low` | `medium` | `high`), issue and expiry ticks, and an optional note of at most 160 characters. When no replan is triggered, the previous plan's directives are reused without a planning call. Replans are triggered by: `initial`, `periodic-review`, `directive-complete`, `directive-expired`, `worker-request`, `worker-stalled`, `territory-loss`, `high-pressure`, `player-disinfection`, and `roster-changed`.
 
-Cognition sources are `zero-llm` (Agent Zero via OpenRouter), `jev-reflex` (TypeSafe Jev via OpenRouter), and `deterministic-fallback`. The deterministic-worker baseline—workers that resolve directives without a model call—is retained as the ablation control that isolates what Jev's reflex calls contribute, not as a second production architecture.
+Cognition sources are `zero-llm` (Agent Zero via OpenRouter), `jev-reflex` (TypeSafe Jev via the TypeSafe API), and `deterministic-fallback`. Routing summary: Agent Zero → OpenRouter; Workers → TypeSafe Jev API. The deterministic-worker baseline—workers that resolve directives without a model call—is retained as the ablation control that isolates what Jev's reflex calls contribute, not as a second production architecture.
 
 The capability-gated objective version is `durable-influence-v3`. Without simulated-player pressure, scenarios use a `durable-influence-v2`-compatible objective.
 
 ## Workspace
 
-| Path                          | Responsibility                                                   |
-| ----------------------------- | ---------------------------------------------------------------- |
-| `apps/world-lab`              | Next.js developer/admin map, controls, inspector, and event log  |
-| `apps/game-api`               | Hono HTTP boundary and in-memory simulation service              |
-| `packages/world-engine`       | Pure world validation and consequence application                |
-| `packages/agent-runtime`      | OpenRouter provider boundary and explicit scripted testing seams |
-| `packages/shared`             | Runtime-validated schemas and inferred domain types              |
-| `packages/experiment-archive` | Durable SQLite imports and bounded research queries              |
+| Path                          | Responsibility                                                                              |
+| ----------------------------- | ------------------------------------------------------------------------------------------- |
+| `apps/world-lab`              | Next.js developer/admin map, controls, inspector, and event log                             |
+| `apps/game-api`               | Hono HTTP boundary and in-memory simulation service                                         |
+| `packages/world-engine`       | Pure world validation and consequence application                                           |
+| `packages/agent-runtime`      | OpenRouter planner, TypeSafe Jev reflex provider, model catalog, and scripted testing seams |
+| `packages/shared`             | Runtime-validated schemas and inferred domain types                                         |
+| `packages/experiment-archive` | Durable SQLite imports and bounded research queries                                         |
 
 ## Local development
 
@@ -27,7 +27,7 @@ Requirements are Node.js 24.18.0 and pnpm 11.21.0. Copy the example environment 
 
 ```bash
 cp .env.example .env
-# Edit .env and set OPENROUTER_API_KEY.
+# Edit .env and set OPENROUTER_API_KEY and TYPESAFE_API_KEY.
 corepack enable
 pnpm install --frozen-lockfile
 pnpm dev
@@ -37,9 +37,9 @@ For deterministic local automation, `pnpm dev:test-provider` sets
 `HEXZERO_PROVIDER=scripted`. `HEXZERO_EXPERIMENT_DB` overrides the local
 experiment archive path.
 
-Open the World Lab at <http://localhost:3000>. The Game API binds to <http://127.0.0.1:8787>; Next.js narrowly proxies `/api/game/*` to it. `OPENROUTER_API_KEY` is the only required OpenRouter environment value. Select a compatible model for Agent Zero in World Lab. Each assignment may use the provider's default reasoning behavior, disable optional reasoning, or select only an effort advertised by that model's catalog metadata. The Jev worker model is pinned server-side and shown as system information.
+Open the World Lab at <http://localhost:3000>. The Game API binds to <http://127.0.0.1:8787>; Next.js narrowly proxies `/api/game/*` to it. `OPENROUTER_API_KEY` (Agent Zero) and `TYPESAFE_API_KEY` (Jev workers) are both required for real runs. Select a compatible model for Agent Zero in World Lab. Each assignment may use the provider's default reasoning behavior, disable optional reasoning, or select only an effort advertised by that model's catalog metadata. The Jev worker model is pinned server-side and shown as system information.
 
-Each tick makes one Agent Zero planning call and one Jev reflex call per active worker; each call may incur an initial third-party OpenRouter charge plus at most one in-deadline repair or transient-retry charge. All workers observe the same frozen pre-tick world; valid decisions resolve together while an individual provider failure is retained as that worker's final lost tick. Start is deliberately disabled when the server has no key. This development API has no authentication or provider-account balance enforcement. Its experiment-scoped attempt and credit-admission limits are operator safeguards, not an upstream billing guarantee, so it is not suitable for unauthenticated public deployment.
+Each tick makes one Jev reflex call per active worker; an Agent Zero planning call is made only when strategic replanning is required and may incur an OpenRouter charge plus at most one in-deadline repair or transient-retry charge. TypeSafe monetary cost is not reported. All workers observe the same frozen pre-tick world; valid decisions resolve together while an individual provider failure is retained as that worker's final lost tick. Start is deliberately disabled when the server has no key. This development API has no authentication or provider-account balance enforcement. Its experiment-scoped attempt and credit-admission limits are operator safeguards, not an upstream billing guarantee, so it is not suitable for unauthenticated public deployment.
 
 State is held only in the Game API process. The API captures one active safe experiment with bounded complete tick groups while the browser snapshot remains bounded without splitting a tick. The sole export format is schema version 12, which carries `swarmArchitectureVersion: 'zero-swarm-v1'`, an independent safe bounded provider-attempt ledger including work that did not produce a committed turn, and tick attribution. Pre-swarm exports (schema versions 9–11) are not readable by current code; inspecting them requires checking out a Git revision predating the zero-swarm migration. The Agent Zero model assignment and reasoning profile may be changed between ticks. A saved slug absent from the current compatible catalog is preserved and blocks execution until explicitly replaced. Agent Zero returns one structured plan under `swarm-planner-v1`; each Jev worker returns a candidate choice with a probability distribution and confidence value. The runtime extracts and conservatively repairs JSON before strict local schemas and the world engine apply authoritative validation.
 
@@ -62,7 +62,7 @@ reasoning profile; it may incur a small charge and is cached by model, profile,
 and contract version. `pnpm compare:live` runs the paid Jev-versus-deterministic-worker
 comparison, which requires an explicit provider-cost acknowledgement and an
 operator-selected Zero model, and enforces hard attempt and credit-admission
-caps. Both read `OPENROUTER_API_KEY` from the repository-root `.env`.
+caps. Both read `OPENROUTER_API_KEY` from the repository-root `.env`; `pnpm compare:live` also requires `TYPESAFE_API_KEY`.
 
 ## Development map source
 

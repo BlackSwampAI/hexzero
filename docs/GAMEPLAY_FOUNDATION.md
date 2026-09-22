@@ -13,8 +13,9 @@
 
 ## Current Agent Zero planning slice
 
-In the zero-swarm architecture one Agent Zero planning call runs per tick
-regardless of roster size. Agent Zero issues a strategy summary and
+In the zero-swarm architecture Agent Zero makes an OpenRouter planning call
+only when strategic replanning is required; otherwise the last valid directive
+set is reused with no planner call. Agent Zero issues a strategy summary and
 per-worker structured directives (fields: mission, nullable target cell,
 priority, risk tolerance, issue tick, expiry tick, optional note up to 160
 characters). Workers resolve their directive via TypeSafe Jev reflex cognition
@@ -354,12 +355,12 @@ Every experiment export should preserve the complete initial scenario configurat
 
 ## Simultaneous decision dispatch
 
-Simultaneous gameplay semantics must not depend on one inference provider's batch feature. The simulation service should own a provider-neutral decision dispatcher. In the zero-swarm architecture, a tick involves one planning call (Agent Zero) followed by concurrent Jev reflex calls for each worker:
+Simultaneous gameplay semantics must not depend on one inference provider's batch feature. The simulation service should own a provider-neutral decision dispatcher. In the zero-swarm architecture, a tick involves an optional planning call (Agent Zero, only when strategic replanning is required) followed by one Jev reflex call per worker (currently issued sequentially; every worker observes the same frozen pre-tick state and actions resolve together):
 
 1. Freeze the authoritative snapshot.
 2. Build Agent Zero's world observation and each worker's reflex observation.
 3. Dispatch Agent Zero's planning call through the configured transport under the shared tick deadline.
-4. Distribute the resulting directives to workers; dispatch all worker Jev calls concurrently.
+4. Distribute the resulting directives to workers; issue one Jev reflex call per worker sequentially.
 5. Preserve one shared tick deadline and per-worker result identity.
 6. Retry only against the saved observation.
 7. Convert unfinished decisions to lost turns; fall back to `deterministic-fallback` for workers whose Jev call fails.
