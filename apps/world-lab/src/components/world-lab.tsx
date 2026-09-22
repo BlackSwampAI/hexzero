@@ -3,7 +3,6 @@
 import {
   useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -32,7 +31,6 @@ import {
   defaultWorldSetupResponseSchema,
   WORLD_RADIUS_PRESETS,
   type AgentId,
-  type CustomExportOptions,
   type ExperimentExportDocument,
   type ExperimentExportPreview,
   type ExperimentExportRequest,
@@ -98,7 +96,6 @@ export function WorldLab() {
   const [uiError, setUiError] = useState<string | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [setupOpen, setSetupOpen] = useState(false);
-  const [exportAgentIds, setExportAgentIds] = useState<AgentId[]>([]);
   const [catalog, setCatalog] = useState<ModelCatalogResponse | null>(null);
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [configurationPending, setConfigurationPending] = useState(false);
@@ -115,7 +112,6 @@ export function WorldLab() {
   const mutationSequenceRef = useRef(0);
   const runningRef = useRef(false);
   const configurationPendingRef = useRef(false);
-  const exportInitializedRef = useRef(false);
   const exportTriggerRef = useRef<HTMLButtonElement>(null);
   const modeTriggerRef = useRef<HTMLButtonElement>(null);
   const setupTriggerRef = useRef<HTMLElement>(null);
@@ -595,7 +591,6 @@ export function WorldLab() {
             ? 'running'
             : 'paused';
   const activeTick = snapshot.status === 'waiting-for-model';
-  const swarmMode = true;
   const terminal =
     snapshot.status === 'patient-zero-captured' ||
     snapshot.status === 'infection-eliminated';
@@ -611,9 +606,6 @@ export function WorldLab() {
     activeTick;
   const modelsReady = Boolean(zeroModel?.available);
   const executionReady = modelsReady;
-  const reasoningUnavailable = snapshot.resolvedModels.some(
-    ({ issue }) => issue === 'reasoning-unavailable',
-  );
 
   return (
     <main
@@ -668,27 +660,10 @@ export function WorldLab() {
                 <dt>State</dt>
                 <dd>{status.replaceAll('-', ' ')}</dd>
               </div>
-              {swarmMode ? (
-                <div>
-                  <dt>Retained swarm ticks</dt>
-                  <dd>{snapshot.swarmTicks?.length ?? 0}</dd>
-                </div>
-              ) : (
-                <div>
-                  <dt>Retained turns</dt>
-                  <dd>{snapshot.swarmTicks?.length ?? 0}</dd>
-                </div>
-              )}
-              {!swarmMode && (
-                <div>
-                  <dt>Patient Zero</dt>
-                  <dd>
-                    {snapshot.world.agents.find(
-                      ({ id }) => id === snapshot.scenario.patientZeroAgentId,
-                    )?.name ?? 'None'}
-                  </dd>
-                </div>
-              )}
+              <div>
+                <dt>Retained swarm ticks</dt>
+                <dd>{snapshot.swarmTicks?.length ?? 0}</dd>
+              </div>
               <div>
                 <dt>Provider attempts</dt>
                 <dd>
@@ -768,24 +743,13 @@ export function WorldLab() {
                   </dd>
                 </div>
               )}
-              {!swarmMode && (
-                <div>
-                  <dt>Tokens</dt>
-                  <dd>
-                    {snapshot.experiment.metrics.aggregate.tokens.totalTokens ??
-                      'Unknown'}
-                  </dd>
-                </div>
-              )}
             </dl>
-            {swarmMode && (
-              <p className="field-help">
-                Jev reports tokens but no monetary cost. Its unknown-cost
-                attempts retain the configured admission reserve in exposure;
-                that reserve is not a provider bill. The reported cost above
-                includes OpenRouter amounts only when returned by the provider.
-              </p>
-            )}
+            <p className="field-help">
+              Jev reports tokens but no monetary cost. Its unknown-cost attempts
+              retain the configured admission reserve in exposure; that reserve
+              is not a provider bill. The reported cost above includes
+              OpenRouter amounts only when returned by the provider.
+            </p>
           </div>
         </div>
         <button
@@ -801,11 +765,7 @@ export function WorldLab() {
         >
           <strong>Architecture: zero-swarm-v1</strong>
           <span className="test-provider-summary">
-            {swarmMode
-              ? `Zero: ${zeroModel?.modelId ?? 'model required'} · Jev: ${snapshot.swarmProviderStatus?.reflexModel ?? 'deterministic reflex'}`
-              : snapshot.providerMode === 'openrouter'
-                ? `${new Set(snapshot.resolvedModels.map(({ modelId }) => modelId ?? 'unassigned')).size} active model assignment${snapshot.resolvedModels.length === 1 ? '' : 's'}`
-                : 'Deterministic test model'}
+            {`Zero: ${zeroModel?.modelId ?? 'model required'} · Jev: ${snapshot.swarmProviderStatus?.reflexModel ?? 'deterministic reflex'}`}
           </span>
         </button>
         <nav
@@ -1019,10 +979,6 @@ export function WorldLab() {
               data-export-trigger
               ref={exportTriggerRef}
               onClick={() => {
-                if (!exportInitializedRef.current) {
-                  setExportAgentIds(snapshot.world.agents.map(({ id }) => id));
-                  exportInitializedRef.current = true;
-                }
                 if (overflowMenuRef.current)
                   overflowMenuRef.current.open = false;
                 setExportOpen(true);
@@ -1061,21 +1017,10 @@ export function WorldLab() {
                   ? snapshot.status === 'patient-zero-captured'
                     ? 'Patient Zero was captured by the simulated player. This experiment is complete; reset or apply a new World Setup to run again.'
                     : 'All infection has been eliminated. This experiment is complete; reset or apply a new World Setup to run again.'
-                  : swarmMode
-                    ? 'Select an available model for Agent Zero before starting.'
-                    : reasoningUnavailable
-                      ? 'A saved reasoning profile is no longer advertised by its model. Select an available profile before starting.'
-                      : 'Select an available compatible model for every agent before starting.')}
+                  : 'Select an available model for Agent Zero before starting.')}
           </div>
         )}
-        {!swarmMode && !snapshot.providerConfigured && (
-          <div className="command-alert" role="alert">
-            Model calls unavailable. Set OPENROUTER_API_KEY on the Game API
-            server and restart pnpm dev.
-          </div>
-        )}
-        {swarmMode &&
-          snapshot.swarmProviderStatus &&
+        {snapshot.swarmProviderStatus &&
           (!snapshot.swarmProviderStatus.plannerConfigured ||
             !snapshot.swarmProviderStatus.reflexConfigured) && (
             <div className="command-alert" role="status">
@@ -1090,13 +1035,9 @@ export function WorldLab() {
       </div>
 
       <ExperimentExportPanel
-        snapshot={snapshot}
-        agents={snapshot.world.agents}
         disabled={exportMutationPending}
         open={exportOpen}
-        selectedAgentIds={exportAgentIds}
         onOpenChange={setExportOpen}
-        onSelectionChange={setExportAgentIds}
         returnFocusRef={exportTriggerRef}
       />
       {setupOpen && (
@@ -1111,11 +1052,6 @@ export function WorldLab() {
           onApplied={(next) => {
             applySnapshot(next);
             setSelectedCell(null);
-            setExportAgentIds((selected) =>
-              selected.filter((id) =>
-                next.world.agents.some((agent) => agent.id === id),
-              ),
-            );
             setSetupOpen(false);
           }}
         />
@@ -1331,8 +1267,9 @@ function AgentsWorkspace({
             <p className="panel-kicker">Experiment assignments</p>
             <h2>Agent configuration</h2>
             <p className="muted">
-              Global assignments and explicit overrides apply through the
-              existing server-authoritative configuration boundary.
+              The Agent Zero planner model applies through the
+              server-authoritative configuration boundary. Jev workers run the
+              runtime reflex model.
             </p>
           </div>
           <button type="button" onClick={onOpenWorldSetup}>
@@ -2238,7 +2175,6 @@ function ModelConsole({
   catalog,
   loading,
   snapshot,
-  swarmMode = true,
   disabled,
   verifications,
   verifyingModelId,
@@ -2249,7 +2185,6 @@ function ModelConsole({
   catalog: ModelCatalogResponse | null;
   loading: boolean;
   snapshot: SimulationSnapshot;
-  swarmMode?: boolean;
   disabled: boolean;
   verifications: Record<string, ModelVerification>;
   verifyingModelId: string | null;
@@ -2264,7 +2199,7 @@ function ModelConsole({
   ) => Promise<void>;
 }) {
   const [open, setOpen] = useState(false);
-  const [tab, setTab] = useState<'overview' | 'models' | 'behavior'>('models');
+  const [tab, setTab] = useState<'overview' | 'models'>('models');
   const toggleRef = useRef<HTMLButtonElement>(null);
   const [search, setSearch] = useState('');
   const models = useMemo(() => {
@@ -2279,11 +2214,9 @@ function ModelConsole({
   }, [catalog, search]);
   const modelOptions = useMemo(() => buildModelOptions(models), [models]);
   const configuration = snapshot.modelConfiguration;
-  const zeroAssignment = swarmMode
-    ? snapshot.resolvedModels.find(
-        ({ agentId }) => agentId === snapshot.scenario.patientZeroAgentId,
-      )
-    : undefined;
+  const zeroAssignment = snapshot.resolvedModels.find(
+    ({ agentId }) => agentId === snapshot.scenario.patientZeroAgentId,
+  );
   const displayedModelId =
     zeroAssignment?.modelId ?? configuration.globalModelId;
   const displayedReasoningProfile =
@@ -2296,11 +2229,6 @@ function ModelConsole({
       ]
     : undefined;
   const globalReasoningProfiles = reasoningProfilesForModel(selected);
-  const activeAgentIds = new Set(snapshot.scenario.roster.map(({ id }) => id));
-  const readyAgentCount = snapshot.resolvedModels.filter(
-    ({ agentId, available }) => available && activeAgentIds.has(agentId),
-  ).length;
-  const activeAgentCount = snapshot.scenario.roster.length;
 
   const save = (next: Omit<ExperimentModelConfiguration, 'locked'>) =>
     void onUpdate(next);
@@ -2313,23 +2241,13 @@ function ModelConsole({
         className="agent-setup-trigger"
         ref={toggleRef}
         type="button"
-        title={`${swarmMode ? 'Zero model setup' : 'Agent setup'} · ${selected?.name ?? displayedModelId ?? 'model needed'}`}
-        aria-label={`Open ${swarmMode ? 'Agent Zero model' : 'Agent'} Controller. ${swarmMode ? Number(Boolean(zeroAssignment?.available)) : readyAgentCount} of ${swarmMode ? 1 : activeAgentCount} agents ready. ${swarmMode ? 'Zero' : 'Global'} model ${selected?.name ?? displayedModelId ?? 'not selected'}.`}
+        title={`Agent Zero model setup · ${selected?.name ?? displayedModelId ?? 'model needed'}`}
+        aria-label={`Open Agent Zero model. Agent Zero model is ${zeroAssignment?.available ? 'ready' : 'not configured'}. Model ${selected?.name ?? displayedModelId ?? 'not selected'}.`}
         onClick={() => (open ? close() : setOpen(true))}
       >
         <span className="setup-label">
-          {swarmMode ? 'Agent Zero model' : 'Agent setup'} ·
-          {swarmMode
-            ? Number(
-                Boolean(
-                  snapshot.resolvedModels.find(
-                    ({ agentId }) =>
-                      agentId === snapshot.scenario.patientZeroAgentId,
-                  )?.available,
-                ),
-              )
-            : readyAgentCount}
-          /{swarmMode ? 1 : activeAgentCount} ready
+          Agent Zero model ·{' '}
+          {zeroAssignment?.available ? 'Ready' : 'Needs configuration'}
         </span>
         <span className="setup-model">
           Model: {selected?.name ?? displayedModelId ?? 'needed'}
@@ -2337,18 +2255,10 @@ function ModelConsole({
       </button>
       <DialogShell
         open={open}
-        title={swarmMode ? 'Agent Zero model' : 'Agent Controller'}
-        description={
-          swarmMode
-            ? `Agent Zero planner model · ${catalog?.models.length ?? 0} catalog compatible · ${catalog?.filteredOutCount ?? 0} filtered out`
-            : `Models and reproducible behavior assignments · ${catalog?.models.length ?? 0} catalog compatible · ${catalog?.filteredOutCount ?? 0} filtered out`
-        }
-        label={swarmMode ? 'Agent Zero model selection' : 'Model selection'}
-        closeLabel={
-          swarmMode
-            ? 'Close Agent Zero model selection'
-            : 'Close model selection'
-        }
+        title="Agent Zero model"
+        description={`Agent Zero planner model · ${catalog?.models.length ?? 0} catalog compatible · ${catalog?.filteredOutCount ?? 0} filtered out`}
+        label="Agent Zero model selection"
+        closeLabel="Close Agent Zero model selection"
         className="model-dialog"
         returnFocusRef={toggleRef}
         onClose={close}
@@ -2364,26 +2274,17 @@ function ModelConsole({
       >
         <div
           role="tablist"
-          aria-label={
-            swarmMode
-              ? 'Agent Zero model sections'
-              : 'Agent Controller sections'
-          }
+          aria-label="Agent Zero model sections"
           className="controller-tabs"
         >
-          {(swarmMode
-            ? ['overview', 'models']
-            : (['overview', 'models', 'behavior'] as const)
-          ).map((value) => (
+          {(['overview', 'models'] as const).map((value) => (
             <button
               key={value}
               role="tab"
               aria-selected={tab === value}
               aria-controls={`controller-${value}`}
               id={`controller-tab-${value}`}
-              onClick={() =>
-                setTab(value as 'overview' | 'models' | 'behavior')
-              }
+              onClick={() => setTab(value)}
               type="button"
             >
               {value[0]!.toUpperCase() + value.slice(1)}
@@ -2399,9 +2300,7 @@ function ModelConsole({
           >
             {snapshot.world.agents
               .filter(
-                (agent) =>
-                  !swarmMode ||
-                  agent.id === snapshot.scenario.patientZeroAgentId,
+                (agent) => agent.id === snapshot.scenario.patientZeroAgentId,
               )
               .map((agent) => {
                 const resolved = snapshot.resolvedModels.find(
@@ -2419,7 +2318,7 @@ function ModelConsole({
                         background: resolveAgentColor(snapshot, agent.id),
                       }}
                     />
-                    <strong>{swarmMode ? 'Agent Zero' : agent.name}</strong>
+                    <strong>Agent Zero</strong>
                     <span>
                       {resolved.modelId ?? 'Model required'} ·{' '}
                       {formatReasoningProfile(resolved.reasoningProfile)}
@@ -2469,12 +2368,10 @@ function ModelConsole({
               className="model-global-section"
               aria-labelledby="global-model-heading"
             >
-              <h3 id="global-model-heading">
-                {swarmMode ? 'Agent Zero model' : 'Global assignment'}
-              </h3>
+              <h3 id="global-model-heading">Agent Zero model</h3>
               <div className="model-global-grid">
                 <label className="model-select-label">
-                  {swarmMode ? 'Zero model' : 'Global model'}
+                  Zero model
                   <select
                     disabled={locked}
                     value={displayedModelId ?? ''}
@@ -2482,13 +2379,7 @@ function ModelConsole({
                       save({
                         globalModelId: event.target.value || null,
                         globalReasoningProfile: 'provider-default',
-                        overrides: swarmMode
-                          ? configuration.overrides.filter(
-                              ({ agentId }) =>
-                                agentId !==
-                                snapshot.scenario.patientZeroAgentId,
-                            )
-                          : configuration.overrides,
+                        overrides: [],
                       })
                     }
                   >
@@ -2514,7 +2405,7 @@ function ModelConsole({
                   </select>
                 </label>
                 <label className="model-select-label">
-                  {swarmMode ? 'Zero reasoning' : 'Global reasoning'}
+                  Zero reasoning
                   <select
                     disabled={locked || !selected}
                     value={displayedReasoningProfile}
@@ -2523,13 +2414,7 @@ function ModelConsole({
                         globalModelId: displayedModelId,
                         globalReasoningProfile: event.target
                           .value as ReasoningProfile,
-                        overrides: swarmMode
-                          ? configuration.overrides.filter(
-                              ({ agentId }) =>
-                                agentId !==
-                                snapshot.scenario.patientZeroAgentId,
-                            )
-                          : configuration.overrides,
+                        overrides: [],
                       })
                     }
                   >
@@ -2548,22 +2433,6 @@ function ModelConsole({
                     ))}
                   </select>
                 </label>
-                {!swarmMode && (
-                  <button
-                    disabled={locked || !configuration.globalModelId}
-                    type="button"
-                    onClick={() =>
-                      save({
-                        globalModelId: configuration.globalModelId,
-                        globalReasoningProfile:
-                          configuration.globalReasoningProfile,
-                        overrides: [],
-                      })
-                    }
-                  >
-                    Apply global model to all agents
-                  </button>
-                )}
               </div>
             </section>
             <div className="model-verification">
@@ -2614,116 +2483,9 @@ function ModelConsole({
               </small>
             </div>
             {selected && <ModelFacts model={selected} />}
-            {!swarmMode && (
-              <div className="agent-model-overrides">
-                <strong>Agent overrides</strong>
-                {snapshot.world.agents.map((agent) => {
-                  const override = configuration.overrides.find(
-                    ({ agentId }) => agentId === agent.id,
-                  );
-                  const overrideModel = catalog?.models.find(
-                    ({ id }) => id === override?.modelId,
-                  );
-                  const reasoningProfiles =
-                    reasoningProfilesForModel(overrideModel);
-                  return (
-                    <div className="agent-model-override" key={agent.id}>
-                      <label>
-                        {agent.name}
-                        <select
-                          disabled={locked}
-                          value={override?.modelId ?? ''}
-                          onChange={(event) => {
-                            const withoutAgent = configuration.overrides.filter(
-                              ({ agentId }) => agentId !== agent.id,
-                            );
-                            save({
-                              globalModelId: configuration.globalModelId,
-                              globalReasoningProfile:
-                                configuration.globalReasoningProfile,
-                              overrides: event.target.value
-                                ? [
-                                    ...withoutAgent,
-                                    {
-                                      agentId: agent.id,
-                                      modelId: event.target.value,
-                                      reasoningProfile: 'provider-default',
-                                    },
-                                  ]
-                                : withoutAgent,
-                            });
-                          }}
-                        >
-                          <option value="">Inherit global</option>
-                          {override &&
-                            !catalog?.models.some(
-                              ({ id }) => id === override.modelId,
-                            ) && (
-                              <option value={override.modelId}>
-                                {override.modelId} — unavailable
-                              </option>
-                            )}
-                          {buildModelOptions(catalog?.models ?? []).map(
-                            (option) => (
-                              <option value={option.value} key={option.value}>
-                                {option.label}
-                              </option>
-                            ),
-                          )}
-                        </select>
-                      </label>
-                      <label>
-                        {agent.name} reasoning
-                        <select
-                          disabled={locked || !overrideModel}
-                          value={
-                            override?.reasoningProfile ?? 'provider-default'
-                          }
-                          onChange={(event) => {
-                            if (!override) return;
-                            save({
-                              globalModelId: configuration.globalModelId,
-                              globalReasoningProfile:
-                                configuration.globalReasoningProfile,
-                              overrides: configuration.overrides.map(
-                                (candidate) =>
-                                  candidate.agentId === agent.id
-                                    ? {
-                                        ...candidate,
-                                        reasoningProfile: event.target
-                                          .value as ReasoningProfile,
-                                      }
-                                    : candidate,
-                              ),
-                            });
-                          }}
-                        >
-                          {override &&
-                            !reasoningProfiles.includes(
-                              override.reasoningProfile,
-                            ) && (
-                              <option value={override.reasoningProfile}>
-                                {formatReasoningProfile(
-                                  override.reasoningProfile,
-                                )}{' '}
-                                — unavailable
-                              </option>
-                            )}
-                          {reasoningProfiles.map((profile) => (
-                            <option value={profile} key={profile}>
-                              {formatReasoningProfile(profile)}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
             <p className="catalog-state">
               Model changes are available between provider requests and are
-              recorded at the next {swarmMode ? 'tick' : 'turn'} boundary.
+              recorded at the next tick boundary.
             </p>
           </section>
         )}
@@ -2776,7 +2538,6 @@ function AgentRoster({
   selectedAgentId: AgentId | null;
   onSelect: (agentId: AgentId) => void;
 }) {
-  const swarmMode = true;
   return (
     <aside className="agent-roster" aria-label="Agent roster">
       <div className="agent-roster-heading">
@@ -2790,9 +2551,6 @@ function AgentRoster({
           latestSwarmTick?.plan.directives.find(
             ({ agentId }) => agentId === agent.id,
           );
-        const territory = snapshot.experiment.currentTerritory.find(
-          ({ agentId }) => agentId === agent.id,
-        );
         const resolved = snapshot.resolvedModels.find(
           ({ agentId }) => agentId === agent.id,
         )!;
@@ -2810,37 +2568,24 @@ function AgentRoster({
             <span>
               <span className="agent-row-title">
                 <strong>
-                  {swarmMode
-                    ? agent.id === snapshot.scenario.patientZeroAgentId
-                      ? 'Zero'
-                      : 'Worker'
-                    : agent.name}
+                  {agent.id === snapshot.scenario.patientZeroAgentId
+                    ? 'Zero'
+                    : 'Worker'}
                 </strong>
                 {agent.id === snapshot.scenario.patientZeroAgentId && (
                   <span className="patient-zero-badge">HEX-0</span>
                 )}
               </span>
               <small>
-                {swarmMode
-                  ? agent.id === snapshot.scenario.patientZeroAgentId
-                    ? 'Swarm planner'
-                    : (directive?.mission ?? 'No current directive')
-                  : null}
-                {!swarmMode && <>{territory?.controlledCellCount ?? 0} cells</>}
+                {agent.id === snapshot.scenario.patientZeroAgentId
+                  ? 'Swarm planner'
+                  : (directive?.mission ?? 'No current directive')}
               </small>
-              {swarmMode ? (
-                <small className={resolved.available ? '' : 'unavailable'}>
-                  {agent.id === snapshot.scenario.patientZeroAgentId
-                    ? `Zero model · ${resolved.modelId ?? 'model required'}`
-                    : `${snapshot.swarmProviderStatus?.reflexMode === 'scripted-reflex-test' ? 'Scripted reflex' : 'Jev'} · ${snapshot.swarmProviderStatus?.reflexModel ?? 'deterministic reflex'}`}
-                </small>
-              ) : (
-                <small className={resolved.available ? '' : 'unavailable'}>
-                  {resolved.source === 'override' ? 'Override' : 'Global'} ·{' '}
-                  {resolved.modelId ?? 'model required'} ·{' '}
-                  {formatReasoningProfile(resolved.reasoningProfile)}
-                </small>
-              )}
+              <small className={resolved.available ? '' : 'unavailable'}>
+                {agent.id === snapshot.scenario.patientZeroAgentId
+                  ? `Zero model · ${resolved.modelId ?? 'model required'}`
+                  : `${snapshot.swarmProviderStatus?.reflexMode === 'scripted-reflex-test' ? 'Scripted reflex' : 'Jev'} · ${snapshot.swarmProviderStatus?.reflexModel ?? 'deterministic reflex'}`}
+              </small>
             </span>
           </button>
         );
@@ -2849,68 +2594,19 @@ function AgentRoster({
   );
 }
 
-const defaultCustomOptions: CustomExportOptions = {
-  turnObservations: true,
-  nearbyAgents: true,
-  recentEvents: true,
-  recentControlChanges: true,
-  validationDetails: true,
-  resultingEvents: true,
-  providerUsageMetadata: true,
-  initialWorldState: false,
-  currentWorldState: true,
-  computedMetrics: true,
-  controlChanges: true,
-};
-
 function ExperimentExportPanel({
-  snapshot,
-  agents,
   disabled,
   open,
-  selectedAgentIds,
   onOpenChange,
-  onSelectionChange,
   returnFocusRef,
 }: {
-  snapshot: SimulationSnapshot;
-  agents: SimulationSnapshot['world']['agents'];
   disabled: boolean;
   open: boolean;
-  selectedAgentIds: AgentId[];
   onOpenChange: (open: boolean) => void;
-  onSelectionChange: (ids: AgentId[]) => void;
   returnFocusRef: { current: HTMLButtonElement | null };
 }) {
-  const [level, setLevel] =
-    useState<ExperimentExportRequest['level']>('minimal');
   const [serialization, setSerialization] =
     useState<ExperimentExportRequest['serialization']>('compact');
-  const [turnMode, setTurnMode] = useState<
-    'entire-retained' | 'latest' | 'range'
-  >('entire-retained');
-  const [latestCount, setLatestCount] = useState<10 | 25 | 50 | 120>(120);
-  const [fromTurn, setFromTurn] = useState(1);
-  const [toTurn, setToTurn] = useState(120);
-  const [outcomes, setOutcomes] = useState<
-    Array<
-      | 'accepted'
-      | 'rejected'
-      | 'lost-tick'
-      | 'provider-error'
-      | 'operator-skipped'
-    >
-  >([
-    'accepted',
-    'rejected',
-    'lost-tick',
-    'provider-error',
-    'operator-skipped',
-  ]);
-  const [actions, setActions] = useState<
-    Array<'move' | 'infect' | 'capture' | 'wait'>
-  >(['move', 'infect', 'capture', 'wait']);
-  const [custom, setCustom] = useState(defaultCustomOptions);
   const [preview, setPreview] = useState<ExperimentExportPreview | null>(null);
   const [document, setDocument] = useState<ExperimentExportDocument | null>(
     null,
@@ -2925,40 +2621,21 @@ function ExperimentExportPanel({
   const downloadPendingRef = useRef(false);
   const sqlitePendingRef = useRef(false);
   const close = useCallback(() => onOpenChange(false), [onOpenChange]);
-  const swarmMode = true;
 
-  const requestInput = swarmMode
-    ? {
-        agents: { mode: 'all' as const },
-        turns: { mode: 'entire-retained' as const },
-        outcomes: [
-          'accepted',
-          'rejected',
-          'lost-tick',
-          'provider-error',
-          'operator-skipped',
-        ] as const,
-        actions: ['move', 'infect', 'capture', 'wait'] as const,
-        level: 'full-safe' as const,
-        serialization,
-      }
-    : {
-        agents:
-          selectedAgentIds.length === agents.length
-            ? { mode: 'all' as const }
-            : { mode: 'selected' as const, agentIds: selectedAgentIds },
-        turns:
-          turnMode === 'entire-retained'
-            ? { mode: 'entire-retained' as const }
-            : turnMode === 'latest'
-              ? { mode: 'latest' as const, count: latestCount }
-              : { mode: 'range' as const, fromTurn, toTurn },
-        outcomes,
-        actions,
-        level,
-        serialization,
-        ...(level === 'custom' ? { custom } : {}),
-      };
+  const requestInput = {
+    agents: { mode: 'all' as const },
+    turns: { mode: 'entire-retained' as const },
+    outcomes: [
+      'accepted',
+      'rejected',
+      'lost-tick',
+      'provider-error',
+      'operator-skipped',
+    ] as const,
+    actions: ['move', 'infect', 'capture', 'wait'] as const,
+    level: 'full-safe' as const,
+    serialization,
+  };
   const parsedRequest = experimentExportRequestSchema.safeParse(requestInput);
   const pending = operation !== null;
   const generationDisabled = disabled || pending || !parsedRequest.success;
@@ -3045,20 +2722,8 @@ function ExperimentExportPanel({
         new Blob([json], { type: 'application/json' }),
       );
       const link = window.document.createElement('a');
-      const scope =
-        document.selection.selectedAgentIds.length === agents.length
-          ? 'all-agents'
-          : document.selection.selectedAgentIds.length === 1
-            ? 'one-agent'
-            : `${document.selection.selectedAgentIds.length}-agents`;
-      const range =
-        document.filters.turns.mode === 'range'
-          ? `turns-${document.filters.turns.fromTurn}-${document.filters.turns.toTurn}`
-          : document.filters.turns.mode === 'latest'
-            ? `latest-${document.filters.turns.count}`
-            : 'entire-retained';
       link.href = url;
-      link.download = `hexzero-experiment-${document.experiment.id}-${scope}-${range}.json`;
+      link.download = `hexzero-experiment-${document.experiment.id}.json`;
       link.click();
       URL.revokeObjectURL(url);
       setNotice('Export JSON download started.');
@@ -3124,11 +2789,6 @@ function ExperimentExportPanel({
     }
   };
 
-  const toggle = <T extends string>(values: T[], value: T): T[] =>
-    values.includes(value)
-      ? values.filter((candidate) => candidate !== value)
-      : [...values, value];
-
   return (
     <DialogShell
       open={open}
@@ -3188,253 +2848,53 @@ function ExperimentExportPanel({
         </div>
       }
     >
-      {swarmMode ? (
-        <p className="muted">
-          Swarm exports include all agents, retained swarm ticks, and provider
-          attempts. Full-safe exports retain legacy schema fields for archive
-          compatibility; those fields do not drive swarm execution. Agent, turn,
-          and custom filters do not apply.
-        </p>
-      ) : (
-        <>
-          <fieldset className="export-agent-section">
-            <legend>Agents</legend>
-            <div
-              className="selection-actions"
-              aria-label="Agent selection actions"
-            >
-              <button
-                type="button"
-                onClick={() => onSelectionChange(agents.map(({ id }) => id))}
-              >
-                Select all
-              </button>
-              <button type="button" onClick={() => onSelectionChange([])}>
-                Clear
-              </button>
-            </div>
-            <div className="export-agent-grid">
-              {agents.map((agent) => (
-                <label className="checkbox-row" key={agent.id}>
-                  <input
-                    checked={selectedAgentIds.includes(agent.id)}
-                    type="checkbox"
-                    onChange={() =>
-                      onSelectionChange(toggle(selectedAgentIds, agent.id))
-                    }
-                  />
-                  <span
-                    className="agent-swatch"
-                    style={{
-                      background: resolveAgentColor(snapshot, agent.id),
-                    }}
-                  />
-                  {agent.name}
-                </label>
-              ))}
-            </div>
-          </fieldset>
-          <label>
-            Export level
-            <select
-              value={level}
-              onChange={(event) =>
-                setLevel(event.target.value as ExperimentExportRequest['level'])
-              }
-            >
-              <option value="minimal">Minimal</option>
-              <option value="standard">Standard</option>
-              <option value="full-safe">Full safe</option>
-              <option value="custom">Custom export</option>
-            </select>
-          </label>
-          <fieldset>
-            <legend>Advanced JSON options</legend>
-            <label>
-              JSON serialization
-              <select
-                value={serialization}
-                onChange={(event) =>
-                  setSerialization(
-                    event.target
-                      .value as ExperimentExportRequest['serialization'],
-                  )
-                }
-              >
-                <option value="compact">Compact · AI sharing default</option>
-                <option value="pretty">Pretty · human review</option>
-              </select>
-            </label>
-          </fieldset>
-          <label>
-            Turn range
-            <select
-              value={turnMode}
-              onChange={(event) =>
-                setTurnMode(event.target.value as typeof turnMode)
-              }
-            >
-              <option value="entire-retained">
-                Entire retained experiment
-              </option>
-              <option value="latest">Latest matching records</option>
-              <option value="range">Custom absolute range</option>
-            </select>
-          </label>
-          {turnMode === 'latest' && (
-            <label>
-              Latest count
-              <select
-                value={latestCount}
-                onChange={(event) =>
-                  setLatestCount(
-                    Number(event.target.value) as typeof latestCount,
-                  )
-                }
-              >
-                {[10, 25, 50, 120].map((count) => (
-                  <option key={count} value={count}>
-                    {count}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
-          {turnMode === 'range' && (
-            <div className="range-row">
-              <label>
-                From turn
-                <input
-                  min="1"
-                  type="number"
-                  value={fromTurn}
-                  onChange={(event) => setFromTurn(Number(event.target.value))}
-                />
-              </label>
-              <label>
-                To turn
-                <input
-                  min="1"
-                  type="number"
-                  value={toTurn}
-                  onChange={(event) => setToTurn(Number(event.target.value))}
-                />
-              </label>
-            </div>
-          )}
-          <FilterChecks
-            label="Outcomes"
-            options={[
-              'accepted',
-              'rejected',
-              'lost-tick',
-              'provider-error',
-              'operator-skipped',
-            ]}
-            selected={outcomes}
-            onToggle={(value) => setOutcomes(toggle(outcomes, value))}
-          />
-          <FilterChecks
-            label="Actions"
-            options={['move', 'infect', 'capture', 'wait']}
-            selected={actions}
-            onToggle={(value) => setActions(toggle(actions, value))}
-          />
-          {level === 'custom' && (
-            <fieldset>
-              <legend>Advanced Custom switches</legend>
-              {(Object.keys(custom) as Array<keyof CustomExportOptions>).map(
-                (key) => (
-                  <label className="checkbox-row" key={key}>
-                    <input
-                      checked={custom[key]}
-                      disabled={
-                        (key === 'nearbyAgents' ||
-                          key === 'recentEvents' ||
-                          key === 'recentControlChanges') &&
-                        !custom.turnObservations
-                      }
-                      type="checkbox"
-                      onChange={() =>
-                        setCustom((current) => {
-                          const next = { ...current, [key]: !current[key] };
-                          if (
-                            key === 'turnObservations' &&
-                            !next.turnObservations
-                          ) {
-                            next.nearbyAgents = false;
-                            next.recentEvents = false;
-                            next.recentControlChanges = false;
-                          }
-                          return next;
-                        })
-                      }
-                    />
-                    {customOptionLabel(key)}
-                  </label>
-                ),
-              )}
-            </fieldset>
-          )}
-        </>
-      )}
-      {open && !swarmMode && !parsedRequest.success && (
-        <p className="inline-error" role="alert">
-          Select at least one agent, outcome, and action, and enter a valid
-          range.
-        </p>
-      )}
+      <p className="muted">
+        Swarm exports include all agents, retained swarm ticks, and provider
+        attempts for the entire retained experiment.
+      </p>
+      <label>
+        JSON serialization
+        <select
+          value={serialization}
+          onChange={(event) =>
+            setSerialization(
+              event.target.value as ExperimentExportRequest['serialization'],
+            )
+          }
+        >
+          <option value="compact">Compact · AI sharing default</option>
+          <option value="pretty">Pretty · human review</option>
+        </select>
+      </label>
       {disabled && (
         <p className="muted">
-          {swarmMode
-            ? 'Pause playback and wait for the active swarm tick or reset to finish.'
-            : 'Pause playback and wait for all turn and reset work to finish.'}
+          Pause playback and wait for the active swarm tick or reset to finish.
         </p>
       )}
-      {preview &&
-        (swarmMode ? (
-          <dl className="preview-grid" aria-label="Export preview">
-            <div>
-              <dt>Committed swarm ticks</dt>
-              <dd>{preview.matchingSwarmTickCount} retained</dd>
-            </div>
-            <div>
-              <dt>Provider attempts</dt>
-              <dd>{preview.matchingProviderAttemptCount} retained</dd>
-            </div>
-            <div>
-              <dt>Size</dt>
-              <dd>{preview.serializedUtf8Bytes} bytes</dd>
-            </div>
-            <div>
-              <dt>Approx. AI input</dt>
-              <dd>{preview.approximateAiInputTokens} tokens</dd>
-            </div>
-            <div>
-              <dt>Selected cost</dt>
-              <dd>{formatCost(preview.knownCostCredits)}</dd>
-            </div>
-          </dl>
-        ) : (
-          <dl className="preview-grid" aria-label="Export preview">
-            <div>
-              <dt>Control changes</dt>
-              <dd>{preview.matchingControlChangeCount} matched</dd>
-            </div>
-            <div>
-              <dt>Size</dt>
-              <dd>{preview.serializedUtf8Bytes} bytes</dd>
-            </div>
-            <div>
-              <dt>Approx. AI input</dt>
-              <dd>{preview.approximateAiInputTokens} tokens</dd>
-            </div>
-            <div>
-              <dt>Selected cost</dt>
-              <dd>{formatCost(preview.knownCostCredits)}</dd>
-            </div>
-          </dl>
-        ))}
+      {preview && (
+        <dl className="preview-grid" aria-label="Export preview">
+          <div>
+            <dt>Committed swarm ticks</dt>
+            <dd>{preview.matchingSwarmTickCount} retained</dd>
+          </div>
+          <div>
+            <dt>Provider attempts</dt>
+            <dd>{preview.matchingProviderAttemptCount} retained</dd>
+          </div>
+          <div>
+            <dt>Size</dt>
+            <dd>{preview.serializedUtf8Bytes} bytes</dd>
+          </div>
+          <div>
+            <dt>Approx. AI input</dt>
+            <dd>{preview.approximateAiInputTokens} tokens</dd>
+          </div>
+          <div>
+            <dt>Retained cost</dt>
+            <dd>{formatCost(preview.knownCostCredits)}</dd>
+          </div>
+        </dl>
+      )}
       {notice && (
         <p className="callout" role="status">
           {notice}
@@ -3466,52 +2926,6 @@ function trapModalFocus(event: ReactKeyboardEvent<HTMLDivElement>) {
     event.preventDefault();
     first.focus();
   }
-}
-
-function FilterChecks<T extends string>({
-  label,
-  options,
-  selected,
-  onToggle,
-}: {
-  label: string;
-  options: readonly T[];
-  selected: T[];
-  onToggle: (value: T) => void;
-}) {
-  return (
-    <fieldset className="filter-checks">
-      <legend>{label}</legend>
-      <div className="filter-check-grid">
-        {options.map((option) => (
-          <label className="checkbox-row" key={option}>
-            <input
-              checked={selected.includes(option)}
-              type="checkbox"
-              onChange={() => onToggle(option)}
-            />
-            {option.replaceAll('-', ' ')}
-          </label>
-        ))}
-      </div>
-    </fieldset>
-  );
-}
-
-function customOptionLabel(key: keyof CustomExportOptions): string {
-  return {
-    turnObservations: 'Turn observations',
-    nearbyAgents: 'Nearby agents',
-    recentEvents: 'Recent events',
-    recentControlChanges: 'Recent control changes in observations',
-    validationDetails: 'Validation details',
-    resultingEvents: 'Resulting events',
-    providerUsageMetadata: 'Provider usage metadata',
-    initialWorldState: 'Initial world state',
-    currentWorldState: 'Current world state',
-    computedMetrics: 'Computed metrics',
-    controlChanges: 'Canonical control changes',
-  }[key];
 }
 
 function attemptExhaustionLabel(
