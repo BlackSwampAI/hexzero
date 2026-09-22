@@ -5,47 +5,27 @@ import {
   type SwarmPlanner,
 } from '@hexzero/agent-runtime';
 import {
-  agentIdSchema,
-  archivedAppliedScenarioSchema,
-  assignBehavior,
-  behaviorConfigurationSchema,
   experimentIdSchema,
   experimentExportDocumentSchema,
   experimentExportPreviewSchema,
   experimentModelConfigurationSchema,
   modelSupportsReasoningProfile,
-  createMemoryId,
   updateExperimentModelsRequestSchema,
-  updateExperimentBehaviorRequestSchema,
   h3CellSchema,
-  RECENT_ALLIANCE_EVENT_LIMIT,
-  RECENT_ZERO_STRATEGIC_EVENT_LIMIT,
-  PERSONALITY_MAX_LENGTH,
   OPENROUTER_PROVIDER_TIMEOUT_MS,
   WORLD_SCENARIO_LIMITS,
-  PATIENT_ZERO_DIPLOMACY_SUMMARY_LIMITS,
   PATIENT_ZERO_PLAYER_THREAT_FEED_LIMIT,
   PATIENT_ZERO_PRESSURE_WINDOW_TICKS,
-  MEMORY_ENTRY_LIMIT,
-  personalitySchema,
-  providerMetadataSchema,
   swarmDirectiveSchema,
   swarmPlanSchema,
   swarmTickRecordSchema,
   simulationSnapshotSchema,
   type Agent,
   type AgentId,
-  type AgentGoalState,
-  type GoalRevisionResult,
-  type RequestedGoalRevision,
-  type MemoryEntry,
-  type MemoryOperationResult,
-  type RequestedMemoryOperation,
   type ExperimentExportDocument,
   type ExperimentExportPreview,
   type ExperimentId,
   type ExperimentModelConfiguration,
-  type BehaviorConfiguration,
   type CompatibleModel,
   type ModelId,
   type ExperimentConfigurationEvent,
@@ -56,8 +36,6 @@ import {
   type SimulationSnapshot,
   type SimulationStatus,
   type WorldEvent,
-  type AllianceEvent,
-  type AllianceProposalId,
   type SimulatedPlayerEvent,
   type SwarmPlan,
   type CompletedSwarmDirective,
@@ -78,10 +56,6 @@ import {
   createWorldFromScenario,
   defaultWorldSetupRequest,
   previewWorldSetup,
-  DEVELOPMENT_AGENT_BLUEPRINTS,
-  getAgentAlliance,
-  getEffectiveAgentColor,
-  physicalDistanceKm,
   seededTickIntervalMinutes,
   seededTickOrder,
   advanceSimulatedPlayer,
@@ -90,10 +64,10 @@ import {
   type WorldState,
 } from '@hexzero/world-engine';
 import {
+  calculateExperimentMetrics,
   createExperimentExport,
   createExperimentPreview,
   type ExperimentSource,
-  ExperimentMetricAccumulator,
 } from './experiment-export';
 import { geographicDirectionBetweenCells } from './geographic-direction';
 import {
@@ -184,7 +158,6 @@ export function selectMostRecentPatientZeroThreats<
 export function calculatePatientZeroPressureContext(
   events: readonly WorldEvent[],
   subjectAgentId: AgentId,
-  currentAllianceMemberIds: readonly AgentId[] | null,
   currentTick: number,
 ): PatientZeroPressureContext {
   const startTick = Math.max(
@@ -234,9 +207,6 @@ export function calculatePatientZeroPressureContext(
     tick -= 1
   )
     consecutiveAffectedTicks += 1;
-  const memberIds = currentAllianceMemberIds
-    ? new Set(currentAllianceMemberIds)
-    : null;
   return {
     window: {
       tickCount: currentTick - startTick + 1,
@@ -247,14 +217,6 @@ export function calculatePatientZeroPressureContext(
       ...countsFor(subjectEvents),
       consecutiveAffectedTicks,
     },
-    currentAlliance: memberIds
-      ? countsFor(
-          relevant.filter((event) => {
-            const subject = eventSubject(event);
-            return subject !== null && memberIds.has(subject);
-          }),
-        )
-      : null,
   };
 }
 
@@ -294,13 +256,11 @@ export class SimulationTurnCancelledError extends Error {
 }
 
 export type SimulationValidationCode =
-  | 'invalid_agent_id'
   | 'unknown_agent'
-  | 'invalid_personality'
+  | 'invalid_request'
   | 'invalid_model_configuration'
   | 'models_unavailable'
-  | 'experiment_budget_exhausted'
-  | 'invalid_behavior_configuration';
+  | 'experiment_budget_exhausted';
 
 export class SimulationValidationError extends Error {
   constructor(
@@ -354,14 +314,10 @@ export class SimulationService {
   #initialExperimentAgents: Agent[];
   #initialExperimentWorld: SimulationSnapshot['world'];
   #configurationEvents: ExperimentConfigurationEvent[] = [];
-  #experimentMetrics: ExperimentMetricAccumulator;
   #modelConfiguration: ExperimentModelConfiguration;
-  #behaviorConfiguration: BehaviorConfiguration;
   #scenario: AppliedScenario;
   #availableModelIds = new Set<ModelId>();
   #availableModels = new Map<ModelId, CompatibleModel>();
-  #agentGoals = new Map<AgentId, AgentGoalState>();
-  #agentMemories = new Map<AgentId, MemoryEntry[]>();
   #simulatedPlayerEvents: SimulatedPlayerEvent[] = [];
   #attemptAccounting: AttemptAccounting;
   #swarmTicks: SwarmTickRecord[] = [];
@@ -406,9 +362,6 @@ export class SimulationService {
       ...this.#state.agents.values(),
     ]);
     this.#initialExperimentWorld = this.#worldSnapshot();
-    this.#experimentMetrics = new ExperimentMetricAccumulator([
-      ...this.#state.agents.keys(),
-    ]);
     const scriptedModel =
       swarmPlanner.mode === 'scripted-swarm-test'
         ? ('deterministic-script' as ModelId)
@@ -420,21 +373,9 @@ export class SimulationService {
       locked: false,
     });
     if (scriptedModel) this.#availableModelIds.add(scriptedModel);
-    this.#behaviorConfiguration = behaviorConfigurationSchema.parse({
-      registryVersion: 1,
-      assignmentMode: 'balanced-random',
-      seed: this.#experimentId,
-      assignments: assignBehavior(
-        [...this.#state.agents.keys()],
-        this.#experimentId,
-        'balanced-random',
-      ),
-      locked: false,
-    });
     this.#scenario = {
       ...createDefaultAppliedScenario(RESET_GENERATED_AT),
       modelConfiguration: structuredClone(this.#modelConfiguration),
-      behaviorConfiguration: structuredClone(this.#behaviorConfiguration),
     };
     this.#attemptAccounting = attemptAccountingForScenario(
       this.#scenario.executionLimits,
@@ -470,26 +411,17 @@ export class SimulationService {
           : {}),
       },
       modelConfiguration: this.#modelConfiguration,
-      ...(agents.length > 0
-        ? { behaviorConfiguration: this.#behaviorConfiguration }
-        : {}),
       resolvedModels: agents.map(({ id }) => this.#resolvedModel(id)),
-      agentGoals: agents.map(({ id }) => ({
-        agentId: id,
-        goal: structuredClone(this.#agentGoals.get(id) ?? null),
-      })),
-      agentMemories: agents.map(({ id }) => ({
-        agentId: id,
-        entries: structuredClone(this.#agentMemories.get(id) ?? []),
-      })),
       swarmTicks: structuredClone(this.#swarmTicks),
       experiment: {
         id: this.#experimentId,
         startedAt: this.#experimentStartedAt,
         attemptAccounting: this.#attemptAccounting.snapshot(),
-        metrics: this.#experimentMetrics.snapshot(agents.map(({ id }) => id)),
+        metrics: calculateExperimentMetrics(
+          [],
+          agents.map(({ id }) => id),
+        ),
         currentTerritory: this.#territoryScoreboard(),
-        currentAlliances: this.#allianceTerritorySummaries(),
         simulatedPlayerMetrics: this.#state.simulatedPlayer?.metrics ?? {
           movements: 0,
           cellsDisinfected: 0,
@@ -517,8 +449,6 @@ export class SimulationService {
     this.#activeAgentId = null;
     this.#activeRequestController = null;
     this.#cancellationRequested = false;
-    this.#agentGoals = new Map();
-    this.#agentMemories = new Map();
     this.#swarmTicks = [];
     this.#experimentSwarmTicks = [];
     this.#lastValidSwarmPlan = null;
@@ -533,19 +463,12 @@ export class SimulationService {
       ...this.#state.agents.values(),
     ]);
     this.#initialExperimentWorld = this.#worldSnapshot();
-    this.#experimentMetrics = new ExperimentMetricAccumulator([
-      ...this.#state.agents.keys(),
-    ]);
     this.#attemptAccounting = attemptAccountingForScenario(
       this.#scenario.executionLimits,
       this.#experimentRetentionLimit,
     );
     this.#modelConfiguration = {
       ...structuredClone(this.#scenario.modelConfiguration),
-      locked: false,
-    };
-    this.#behaviorConfiguration = {
-      ...structuredClone(this.#scenario.behaviorConfiguration),
       locked: false,
     };
     this.#status =
@@ -568,9 +491,7 @@ export class SimulationService {
               ? 'invalid-radius'
               : field === 'modelConfiguration'
                 ? 'model-agent-mismatch'
-                : field === 'behaviorConfiguration'
-                  ? 'behavior-coverage-mismatch'
-                  : 'invalid-roster';
+                : 'invalid-roster';
       return {
         feasible: false,
         errors: [
@@ -626,7 +547,7 @@ export class SimulationService {
     const parsed = worldSetupRequestSchema.safeParse(input);
     if (!parsed.success)
       throw new SimulationValidationError(
-        'invalid_behavior_configuration',
+        'invalid_request',
         'The scenario request is invalid.',
       );
     const checked = this.previewWorldSetup(parsed.data);
@@ -638,7 +559,7 @@ export class SimulationService {
     const preview = previewWorldSetup(parsed.data, RESET_GENERATED_AT);
     if (!preview.feasible)
       throw new SimulationValidationError(
-        'invalid_behavior_configuration',
+        'invalid_request',
         preview.errors[0]?.message ?? 'The scenario is infeasible.',
       );
     const nextState = toWorldState(preview.world);
@@ -646,18 +567,12 @@ export class SimulationService {
       ...preview.scenario.modelConfiguration,
       locked: false,
     });
-    const nextBehavior = behaviorConfigurationSchema.parse({
-      ...preview.scenario.behaviorConfiguration,
-      locked: false,
-    });
     this.#state = nextState;
     this.#scenario = {
       ...preview.scenario,
       modelConfiguration: nextModels,
-      behaviorConfiguration: nextBehavior,
     };
     this.#modelConfiguration = nextModels;
-    this.#behaviorConfiguration = nextBehavior;
     this.#completedSwarmDecisionCount = 0;
     this.#completedTickCount = 0;
     this.#virtualTime = RESET_GENERATED_AT;
@@ -666,8 +581,6 @@ export class SimulationService {
     this.#activeAgentId = null;
     this.#activeRequestController = null;
     this.#cancellationRequested = false;
-    this.#agentGoals = new Map();
-    this.#agentMemories = new Map();
     this.#swarmTicks = [];
     this.#experimentSwarmTicks = [];
     this.#lastValidSwarmPlan = null;
@@ -682,9 +595,6 @@ export class SimulationService {
       ...this.#state.agents.values(),
     ]);
     this.#initialExperimentWorld = this.#worldSnapshot();
-    this.#experimentMetrics = new ExperimentMetricAccumulator([
-      ...this.#state.agents.keys(),
-    ]);
     this.#attemptAccounting = attemptAccountingForScenario(
       this.#scenario.executionLimits,
       this.#experimentRetentionLimit,
@@ -759,286 +669,6 @@ export class SimulationService {
     this.#scenario = {
       ...this.#scenario,
       modelConfiguration: structuredClone(nextConfiguration),
-    };
-    return this.getSnapshot();
-  }
-
-  updateBehaviorConfiguration(input: unknown): SimulationSnapshot {
-    if (this.#busy || this.#verificationBusy || this.#completedTickCount > 0)
-      throw new SimulationConflictError(
-        'Behavior is locked after the experiment begins. Reset to create new assignments.',
-      );
-    const parsed = updateExperimentBehaviorRequestSchema.safeParse(input);
-    if (!parsed.success)
-      throw new SimulationValidationError(
-        'invalid_behavior_configuration',
-        'The behavior configuration is invalid.',
-      );
-    const agentIds = [...this.#state.agents.keys()];
-    const assignments =
-      parsed.data.assignmentMode === 'manual'
-        ? parsed.data.assignments.map((assignment) => ({
-            ...assignment,
-            manual: true,
-          }))
-        : assignBehavior(
-            agentIds,
-            parsed.data.seed,
-            parsed.data.assignmentMode,
-          );
-    if (
-      assignments.length !== agentIds.length ||
-      assignments.some(({ agentId }) => !this.#state.agents.has(agentId))
-    )
-      throw new SimulationValidationError(
-        'invalid_behavior_configuration',
-        'Behavior assignments must cover the current roster exactly.',
-      );
-    this.#behaviorConfiguration = behaviorConfigurationSchema.parse({
-      registryVersion: 1,
-      ...parsed.data,
-      assignments,
-      locked: false,
-    });
-    this.#scenario = {
-      ...this.#scenario,
-      behaviorConfiguration: structuredClone(this.#behaviorConfiguration),
-    };
-    return this.getSnapshot();
-  }
-
-  importModelConfiguration(document: unknown): {
-    snapshot: SimulationSnapshot;
-    legacy: boolean;
-    message: string;
-  } {
-    if (this.#busy || this.#verificationBusy)
-      throw new SimulationConflictError(
-        'Import is unavailable while a model request is active.',
-      );
-    if (
-      typeof document !== 'object' ||
-      document === null ||
-      Array.isArray(document)
-    )
-      throw new SimulationValidationError(
-        'invalid_model_configuration',
-        'The experiment import is invalid.',
-      );
-    const root = document as Record<string, unknown>;
-    const version = root.schemaVersion;
-    if (
-      version !== 5 &&
-      version !== 6 &&
-      version !== 7 &&
-      version !== 8 &&
-      version !== 9 &&
-      version !== 10 &&
-      version !== 11
-    )
-      throw new SimulationValidationError(
-        'invalid_model_configuration',
-        'Only schema-version 5 through 11 experiment exports can be imported.',
-      );
-    if (version === 5) {
-      const legacyConfiguration: ExperimentModelConfiguration = {
-        globalModelId: null,
-        globalReasoningProfile: 'provider-default',
-        overrides: [],
-        locked: false,
-      };
-      this.#recordModelConfigurationChanges(
-        this.#modelConfiguration,
-        legacyConfiguration,
-      );
-      this.#modelConfiguration = legacyConfiguration;
-      return {
-        snapshot: this.getSnapshot(),
-        legacy: true,
-        message:
-          'Legacy experiment preserved. Select compatible models before continuing.',
-      };
-    }
-    const experiment =
-      typeof root.experiment === 'object' && root.experiment !== null
-        ? (root.experiment as Record<string, unknown>)
-        : undefined;
-    const configuration = experimentModelConfigurationSchema.safeParse(
-      experiment?.modelConfiguration,
-    );
-    if (!configuration.success)
-      throw new SimulationValidationError(
-        'invalid_model_configuration',
-        'The imported model assignment is invalid.',
-      );
-    const importedPatientZero =
-      (version === 9 || version === 10) &&
-      typeof experiment?.scenario === 'object' &&
-      experiment.scenario !== null
-        ? (archivedAppliedScenarioSchema.safeParse(experiment.scenario).data
-            ?.patientZeroAgentId ?? null)
-        : null;
-    const knownAgents = new Set(this.#state.agents.keys());
-    if (importedPatientZero && !knownAgents.has(importedPatientZero))
-      throw new SimulationValidationError(
-        'unknown_agent',
-        'The imported Patient Zero designation references an unknown agent.',
-      );
-    if (
-      configuration.data.overrides.some(
-        ({ agentId }) => !knownAgents.has(agentId),
-      )
-    )
-      throw new SimulationValidationError(
-        'unknown_agent',
-        'The imported model assignment references an unknown agent.',
-      );
-    const importedConfiguration: ExperimentModelConfiguration = {
-      globalModelId: configuration.data.globalModelId,
-      globalReasoningProfile: configuration.data.globalReasoningProfile,
-      overrides: structuredClone(configuration.data.overrides),
-      locked: false,
-    };
-    if (
-      (version === 8 || version === 9 || version === 10) &&
-      experiment?.behaviorConfiguration !== undefined
-    ) {
-      const importedBehavior = behaviorConfigurationSchema.safeParse(
-        experiment.behaviorConfiguration,
-      );
-      const knownBehaviorAgents = new Set(this.#state.agents.keys());
-      if (
-        !importedBehavior.success ||
-        importedBehavior.data.assignments.some(
-          ({ agentId }) => !knownBehaviorAgents.has(agentId),
-        )
-      )
-        throw new SimulationValidationError(
-          'invalid_behavior_configuration',
-          'The imported behavior assignment contains an unknown or unsupported profile.',
-        );
-      this.#behaviorConfiguration = {
-        ...structuredClone(importedBehavior.data),
-        locked: this.#completedTickCount > 0,
-      };
-    }
-    this.#recordModelConfigurationChanges(
-      this.#modelConfiguration,
-      importedConfiguration,
-    );
-    this.#modelConfiguration = importedConfiguration;
-    this.#scenario = {
-      ...this.#scenario,
-      patientZeroAgentId:
-        importedPatientZero ?? this.#scenario.patientZeroAgentId,
-    };
-    return {
-      snapshot: this.getSnapshot(),
-      legacy: false,
-      message: this.getSnapshot().resolvedModels.every(
-        ({ available }) => available,
-      )
-        ? 'Model assignments imported.'
-        : 'Model assignments imported; unavailable models or reasoning profiles require explicit replacement.',
-    };
-  }
-
-  updateAgentPersonality(
-    agentIdInput: unknown,
-    personalityInput: unknown,
-  ): Agent {
-    if (this.#busy || this.#verificationBusy) {
-      throw new SimulationConflictError(
-        'Personality changes are unavailable while model execution is in progress.',
-      );
-    }
-    const agentIdResult = agentIdSchema.safeParse(agentIdInput);
-    if (!agentIdResult.success) {
-      throw new SimulationValidationError(
-        'invalid_agent_id',
-        'The agent ID is invalid.',
-      );
-    }
-    const personalityResult = personalitySchema.safeParse(personalityInput);
-    if (!personalityResult.success) {
-      throw new SimulationValidationError(
-        'invalid_personality',
-        `Personality must contain 1 to ${PERSONALITY_MAX_LENGTH} characters.`,
-      );
-    }
-    const agent = this.#state.agents.get(agentIdResult.data);
-    if (!agent) {
-      throw new SimulationValidationError(
-        'unknown_agent',
-        'The requested agent does not exist.',
-      );
-    }
-    const updated = { ...agent, personality: personalityResult.data };
-    const agents = new Map(this.#state.agents);
-    agents.set(agent.id, updated);
-    this.#state = { ...this.#state, agents };
-    this.#scenario = {
-      ...this.#scenario,
-      roster: this.#scenario.roster.map((entry) =>
-        entry.id === updated.id
-          ? { ...entry, personality: updated.personality }
-          : entry,
-      ),
-    };
-    if (agent.personality !== updated.personality) {
-      this.#configurationEvents = [
-        ...this.#configurationEvents,
-        {
-          timestamp: this.#now(),
-          agentId: agent.id,
-          previousPersonality: agent.personality,
-          newPersonality: updated.personality,
-          operation: 'custom-edit',
-        },
-      ];
-    }
-    return updated;
-  }
-
-  restoreDefaultPersonalities(): SimulationSnapshot {
-    if (this.#busy || this.#verificationBusy) {
-      throw new SimulationConflictError(
-        'Personality changes are unavailable while model execution is in progress.',
-      );
-    }
-    const defaults = new Map(
-      DEVELOPMENT_AGENT_BLUEPRINTS.map(({ id, personality }) => [
-        agentIdSchema.parse(id),
-        personality,
-      ]),
-    );
-    const configurationEvents: ExperimentConfigurationEvent[] = [];
-    this.#state = {
-      ...this.#state,
-      agents: new Map(
-        [...this.#state.agents].map(([id, agent]) => {
-          const personality = defaults.get(id) ?? agent.personality;
-          if (personality !== agent.personality)
-            configurationEvents.push({
-              timestamp: this.#now(),
-              agentId: id,
-              previousPersonality: agent.personality,
-              newPersonality: personality,
-              operation: 'restore-default',
-            });
-          return [id, { ...agent, personality }];
-        }),
-      ),
-    };
-    this.#configurationEvents = [
-      ...this.#configurationEvents,
-      ...configurationEvents,
-    ];
-    this.#scenario = {
-      ...this.#scenario,
-      roster: [...this.#state.agents.values()].map(
-        ({ currentCell: _currentCell, ...agent }) => agent,
-      ),
     };
     return this.getSnapshot();
   }
@@ -1489,10 +1119,6 @@ export class SimulationService {
           currentCell,
         ]),
       );
-      this.#behaviorConfiguration = {
-        ...this.#behaviorConfiguration,
-        locked: true,
-      };
       this.#status = this.#attemptAccounting.snapshot().exhausted
         ? 'budget-exhausted'
         : 'paused';
@@ -1568,19 +1194,6 @@ export class SimulationService {
   /** Remove cognition state that belongs to agents captured by the engine. */
   #pruneCapturedRosterState(): void {
     const active = new Set(this.#state.agents.keys());
-    this.#agentGoals = new Map(
-      [...this.#agentGoals].filter(([agentId]) => active.has(agentId)),
-    );
-    this.#agentMemories = new Map(
-      [...this.#agentMemories].filter(([agentId]) => active.has(agentId)),
-    );
-    const assignments = this.#behaviorConfiguration.assignments.filter(
-      ({ agentId }) => active.has(agentId),
-    );
-    this.#behaviorConfiguration = {
-      ...this.#behaviorConfiguration,
-      assignments,
-    };
     this.#modelConfiguration = {
       ...this.#modelConfiguration,
       overrides: this.#modelConfiguration.overrides.filter(({ agentId }) =>
@@ -1650,10 +1263,6 @@ export class SimulationService {
       hexes: [...this.#state.hexes].map(([cell, hex]) => ({ cell, ...hex })),
       agents: structuredClone([...this.#state.agents.values()]),
       events: structuredClone([...this.#state.events]),
-      alliances: structuredClone([...(this.#state.alliances?.values() ?? [])]),
-      pendingAllianceProposals: structuredClone([
-        ...(this.#state.pendingAllianceProposals?.values() ?? []),
-      ]),
       simulatedPlayer: structuredClone(this.#state.simulatedPlayer ?? null),
     };
   }
@@ -2037,31 +1646,18 @@ export class SimulationService {
           ? 'openrouter'
           : 'scripted-test',
       retentionLimit: this.#experimentRetentionLimit,
-      totalCompletedTurns: 0,
-      turns: [],
+      totalCompletedTicks: this.#completedTickCount,
       initialAgents: this.#initialExperimentAgents,
       currentAgents: [...this.#state.agents.values()],
       configurationEvents: this.#configurationEvents,
       initialWorld: this.#initialExperimentWorld,
       currentWorld: this.#worldSnapshot(),
       modelConfiguration: this.#modelConfiguration,
-      behaviorConfiguration:
-        this.#state.agents.size > 0
-          ? this.#behaviorConfiguration
-          : this.#scenario.behaviorConfiguration,
       scenario: this.#scenario,
       schemaVersion: 11,
       providerAttempts: this.#attemptAccounting.ledger(),
       attemptRetention: this.#attemptAccounting.retention(),
       attemptAccounting: this.#attemptAccounting.snapshot(),
-      agentGoals: [...this.#state.agents.keys()].map((agentId) => ({
-        agentId,
-        goal: structuredClone(this.#agentGoals.get(agentId) ?? null),
-      })),
-      agentMemories: [...this.#state.agents.keys()].map((agentId) => ({
-        agentId,
-        entries: structuredClone(this.#agentMemories.get(agentId) ?? []),
-      })),
       simulatedPlayerEvents: structuredClone(this.#simulatedPlayerEvents),
       swarmTicks: structuredClone(this.#experimentSwarmTicks),
     };
@@ -2118,91 +1714,9 @@ export class SimulationService {
       agentId: id,
       name,
       color,
-      allianceId: getAgentAlliance(this.#state, id)?.id ?? null,
-      effectiveColor: getEffectiveAgentColor(this.#state, id),
       controlledCellCount: counts.get(id) ?? 0,
     }));
   }
-
-  #allianceTerritorySummaries() {
-    const scoreboard = this.#territoryScoreboard();
-    return [...(this.#state.alliances?.values() ?? [])].map((alliance) => {
-      const members = alliance.memberAgentIds.map((agentId) => {
-        const entry = scoreboard.find(
-          (candidate) => candidate.agentId === agentId,
-        );
-        if (!entry) throw new Error('An alliance member does not exist.');
-        return {
-          agentId,
-          name: entry.name,
-          controlledCellCount: entry.controlledCellCount,
-        };
-      });
-      return {
-        allianceId: alliance.id,
-        color: alliance.color,
-        totalControlledCellCount: members.reduce(
-          (sum, member) => sum + member.controlledCellCount,
-          0,
-        ),
-        members,
-      };
-    });
-  }
-}
-
-export function selectDiplomacyBlockerExamples<
-  T extends { agentId: AgentId; reason: string },
->(
-  state: WorldState,
-  actingAgentId: AgentId,
-  blockers: readonly T[],
-  reasonPriority: readonly T['reason'][],
-): T[] {
-  const actingAlliance = getAgentAlliance(state, actingAgentId);
-  const relationshipPriority = (blockedAgentId: AgentId) => {
-    const blockedAlliance = getAgentAlliance(state, blockedAgentId);
-    if (!actingAlliance) return blockedAlliance ? 1 : 0;
-    if (!blockedAlliance) return 0;
-    return blockedAlliance.id === actingAlliance.id ? 2 : 1;
-  };
-  return blockers
-    .toSorted(
-      (left, right) =>
-        relationshipPriority(left.agentId) -
-          relationshipPriority(right.agentId) ||
-        reasonPriority.indexOf(left.reason) -
-          reasonPriority.indexOf(right.reason) ||
-        left.agentId.localeCompare(right.agentId),
-    )
-    .slice(0, 4);
-}
-
-function isAllianceEvent(event: WorldEvent): event is AllianceEvent {
-  return (
-    event.type === 'alliance-proposed' ||
-    event.type === 'alliance-proposal-closed' ||
-    event.type === 'alliance-formed' ||
-    event.type === 'alliance-dissolved' ||
-    event.type === 'agent-joined-alliance' ||
-    event.type === 'agent-left-alliance'
-  );
-}
-
-function allianceEventsSince(
-  before: WorldState,
-  after: WorldState,
-): AllianceEvent[] {
-  return after.events.slice(before.events.length).filter(isAllianceEvent);
-}
-
-function stableOrder(input: string): number {
-  let hash = 2166136261;
-  for (let index = 0; index < input.length; index += 1) {
-    hash ^= input.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return hash >>> 0;
 }
 
 function gridRingDistance(from: H3Cell, to: H3Cell): number {
@@ -2211,237 +1725,4 @@ function gridRingDistance(from: H3Cell, to: H3Cell): number {
   } catch {
     return 999;
   }
-}
-
-function summarizeEvent(
-  event: Extract<
-    WorldEvent,
-    {
-      type: 'agent-moved' | 'hex-infected' | 'hex-captured' | 'agent-waited';
-    }
-  >,
-  state: WorldState,
-): string {
-  const name = state.agents.get(event.agentId)?.name ?? 'An agent';
-  if (event.type === 'agent-moved') return `${name} moved to ${event.toCell}.`;
-  if (event.type === 'hex-infected') return `${name} infected ${event.cell}.`;
-  if (event.type === 'hex-captured') {
-    const previous =
-      (event.previousControllerAgentId === null
-        ? undefined
-        : state.agents.get(event.previousControllerAgentId)?.name) ??
-      'another agent';
-    return `${name} captured ${event.cell} from ${previous}.`;
-  }
-  return `${name} waited.`;
-}
-
-function summarizeAllianceEvent(
-  event: AllianceEvent,
-  state: WorldState,
-): string {
-  const name = (id: AgentId) => state.agents.get(id)?.name ?? 'An agent';
-  if (event.type === 'alliance-proposed')
-    return `${name(event.agentId)} proposed an alliance with ${name(event.recipientAgentId)}.`;
-  if (event.type === 'alliance-formed')
-    return `${event.memberAgentIds.map(name).join(' and ')} formed an alliance.`;
-  if (event.type === 'agent-joined-alliance')
-    return `${name(event.joinedAgentId)} joined the alliance.`;
-  if (event.type === 'agent-left-alliance')
-    return `${name(event.leftAgentId)} left the alliance.`;
-  if (event.type === 'alliance-dissolved') return 'The alliance dissolved.';
-  return `The proposal from ${name(event.proposerAgentId)} to ${name(event.recipientAgentId)} was ${event.reason}.`;
-}
-
-export function applyGoalRevision(
-  current: AgentGoalState | undefined,
-  requested: RequestedGoalRevision | undefined,
-  tick: number,
-): { goal: AgentGoalState | undefined; result: GoalRevisionResult } {
-  if (!requested) return { goal: current, result: { requested: false } };
-  if (requested.operation === 'establish') {
-    if (current)
-      return {
-        goal: current,
-        result: {
-          requested: true,
-          accepted: false,
-          operation: requested.operation,
-          reason: 'goal-already-active',
-        },
-      };
-    return {
-      goal: {
-        longTermGoal: requested.longTermGoal,
-        shortTermGoal: requested.shortTermGoal,
-        planSummary: requested.planSummary,
-        establishedAtTick: tick,
-        revisedAtTick: tick,
-      },
-      result: {
-        requested: true,
-        accepted: true,
-        operation: requested.operation,
-      },
-    };
-  }
-  if (!current)
-    return {
-      goal: undefined,
-      result: {
-        requested: true,
-        accepted: false,
-        operation: requested.operation,
-        reason: 'goal-not-active',
-      },
-    };
-  if (requested.operation === 'keep')
-    return {
-      goal: current,
-      result: {
-        requested: true,
-        accepted: true,
-        operation: requested.operation,
-      },
-    };
-  if (requested.operation === 'revise')
-    return {
-      goal: {
-        longTermGoal: requested.longTermGoal,
-        shortTermGoal: requested.shortTermGoal,
-        planSummary: requested.planSummary,
-        establishedAtTick: current.establishedAtTick,
-        revisedAtTick: tick,
-      },
-      result: {
-        requested: true,
-        accepted: true,
-        operation: requested.operation,
-      },
-    };
-  return {
-    goal: undefined,
-    result: { requested: true, accepted: true, operation: requested.operation },
-  };
-}
-
-export function applyMemoryOperation(
-  current: readonly MemoryEntry[],
-  requested: RequestedMemoryOperation | undefined,
-  agentId: AgentId,
-  tick: number,
-): { entries: MemoryEntry[]; result: MemoryOperationResult } {
-  const entries = current.map((entry) => structuredClone(entry));
-  if (!requested) return { entries, result: { requested: false } };
-  if (requested.operation === 'keep')
-    return {
-      entries,
-      result: { requested: true, accepted: true, operation: 'keep' },
-    };
-  if (requested.operation === 'remember') {
-    if (entries.length >= MEMORY_ENTRY_LIMIT)
-      return {
-        entries,
-        result: {
-          requested: true,
-          accepted: false,
-          operation: 'remember',
-          reason: 'memory-full',
-        },
-      };
-    const id = createMemoryId(agentId, tick);
-    return {
-      entries: [
-        ...entries,
-        {
-          id,
-          text: requested.text,
-          createdAtTick: tick,
-          revisedAtTick: tick,
-        },
-      ],
-      result: {
-        requested: true,
-        accepted: true,
-        operation: 'remember',
-        memoryId: id,
-      },
-    };
-  }
-  const index = entries.findIndex(({ id }) => id === requested.memoryId);
-  if (index < 0)
-    return {
-      entries,
-      result: {
-        requested: true,
-        accepted: false,
-        operation: requested.operation,
-        reason: 'memory-not-found',
-      },
-    };
-  if (requested.operation === 'forget') {
-    entries.splice(index, 1);
-    return {
-      entries,
-      result: {
-        requested: true,
-        accepted: true,
-        operation: 'forget',
-        memoryId: requested.memoryId,
-      },
-    };
-  }
-  entries[index] = {
-    ...entries[index]!,
-    text: requested.text,
-    revisedAtTick: tick,
-  };
-  return {
-    entries,
-    result: {
-      requested: true,
-      accepted: true,
-      operation: 'revise',
-      memoryId: requested.memoryId,
-    },
-  };
-}
-
-function safeRecoveryProviderMetadata(
-  value: unknown,
-  provider: ProviderMetadata['provider'],
-  selectedModel: ModelId,
-): ProviderMetadata {
-  const raw = value && typeof value === 'object' ? value : {};
-  let safe = providerMetadataSchema.parse({
-    provider,
-    model: selectedModel,
-    latencyMs: 0,
-  });
-  const fields = [
-    'model',
-    'selectedModel',
-    'resolvedModel',
-    'requestId',
-    'httpStatus',
-    'finishReason',
-    'nativeFinishReason',
-    'latencyMs',
-    'promptTokens',
-    'completionTokens',
-    'totalTokens',
-    'reasoningTokens',
-    'cachedReadTokens',
-    'cacheWriteTokens',
-    'costCredits',
-  ] as const;
-  for (const field of fields) {
-    if (!(field in raw)) continue;
-    const parsed = providerMetadataSchema.safeParse({
-      ...safe,
-      [field]: (raw as Record<string, unknown>)[field],
-    });
-    if (parsed.success) safe = parsed.data;
-  }
-  return safe;
 }

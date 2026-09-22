@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { NEUTRAL_AGENT_COLOR, simulationSnapshotSchema } from '@hexzero/shared';
+import { simulationSnapshotSchema } from '@hexzero/shared';
 import {
   createDefaultAppliedScenario,
   createDevelopmentWorld,
@@ -44,7 +44,6 @@ const metrics = {
   uniqueVisitedCells: 0,
   tokens: {},
   knownCostCredits: 0,
-  turnsWithUnknownCost: 0,
 };
 const snapshot = simulationSnapshotSchema.parse({
   world,
@@ -87,11 +86,8 @@ const snapshot = simulationSnapshotSchema.parse({
       agentId: id,
       name,
       color,
-      allianceId: null,
-      effectiveColor: NEUTRAL_AGENT_COLOR,
       controlledCellCount: 0,
     })),
-    currentAlliances: [],
     simulatedPlayerMetrics: {
       movements: 0,
       cellsDisinfected: 0,
@@ -308,12 +304,9 @@ describe('WorldLab swarm workspace', () => {
   it('requests a bounded full-safe swarm export preview before enabling export actions', async () => {
     const preview = {
       experimentId: snapshot.experiment.id,
-      matchingTurnCount: 0,
       matchingTickCount: 0,
       matchingSwarmTickCount: 0,
-      matchingCommunicationCount: 0,
       matchingControlChangeCount: 0,
-      matchingDiplomacyEventCount: 0,
       matchingProviderAttemptCount: 0,
       selectedAgentCount: world.agents.length,
       retention: {
@@ -326,7 +319,6 @@ describe('WorldLab swarm workspace', () => {
       },
       knownCostCredits: 0,
       attemptsWithUnknownCost: 0,
-      turnsWithUnknownCost: 0,
       serializedUtf8Bytes: 100,
       approximateAiInputTokens: 25,
       tokenEstimateMethod: 'ceil(UTF-8 bytes / 4)' as const,

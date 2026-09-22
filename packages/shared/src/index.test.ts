@@ -1,61 +1,31 @@
 import { describe, expect, it } from 'vitest';
 import {
-  MODEL_SUMMARY_MAX_LENGTH,
   SWARM_PLANNER_CONTRACT_VERSION,
-  PATIENT_ZERO_DIPLOMACY_SUMMARY_LIMITS,
   WORLD_SCENARIO_LIMITS,
   OBJECTIVE_PROMPT_VERSION,
-  MESSAGE_MAX_LENGTH,
-  PERSONALITY_MAX_LENGTH,
   apiErrorSchema,
   agentIdSchema,
-  agentDecisionSchema,
   agentObservationSchema,
-  agentTurnRecordSchema,
-  communicationResultSchema,
-  directMessageEventSchema,
   captureEligibilitySchema,
-  exportedCommunicationSchema,
   experimentExportWorldStateSchema,
-  experimentExportTurnSchema,
   hexCapturedWorldEventSchema,
   simulatedPlayerAgentCapturedEventSchema,
   hexSchema,
   invalidActionReasonSchema,
   experimentExportRequestSchema,
   experimentIdSchema,
-  personalityConfigurationEventSchema,
   providerMetadataSchema,
-  restoreDefaultPersonalitiesResponseSchema,
   simulationSnapshotSchema,
   worldSnapshotSchema,
   singleTickResponseSchema,
-  updateAgentPersonalityRequestSchema,
-  updateAgentPersonalityResponseSchema,
-  allianceSchema,
-  allianceProposalSchema,
-  patientZeroDiplomacySummarySchema,
   patientZeroPlayerThreatFeedSchema,
   PATIENT_ZERO_PLAYER_THREAT_FEED_LIMIT,
-  diplomacyIntentSchema,
-  diplomacyResultSchema,
   DEVELOPMENT_WORLD_CONFIG,
   experimentModelConfigurationSchema,
   modelVerificationSchema,
   reasoningProfilesForModel,
   type CompatibleModel,
-  assignBehavior,
-  NEUTRAL_AGENT_COLOR,
-  GOAL_TEXT_MAX_LENGTH,
-  agentGoalStateSchema,
-  requestedGoalRevisionSchema,
   swarmPlannerContractVersionSchema,
-  MEMORY_ENTRY_LIMIT,
-  MEMORY_TEXT_MAX_LENGTH,
-  memoryLedgerSchema,
-  requestedMemoryOperationSchema,
-  memoryOperationResultSchema,
-  createMemoryId,
   archiveExperimentExportResponseSchema,
   providerAttemptRecordSchema,
   zeroStrategicObservationSchema,
@@ -77,20 +47,15 @@ const scoreboard = [
   agentId: id,
   name: `Agent ${index + 1}`,
   color: '#ff6b57',
-  allianceId: null,
-  effectiveColor: NEUTRAL_AGENT_COLOR,
   controlledCellCount: 0,
 }));
 const observation = {
   agentId,
   agentName: 'Ember',
-  personality: 'Prefer infection.',
   currentCell: {
     cell,
     state: 'open',
     controllerAgentId: null,
-    controllerAllianceId: null,
-    effectiveColor: null,
   },
   captureEligibility: {
     eligible: false,
@@ -107,55 +72,22 @@ const observation = {
       cell: adjacent,
       state: 'open',
       controllerAgentId: null,
-      controllerAllianceId: null,
-      effectiveColor: null,
     },
   ],
   nearbyAgents: [],
   recentEvents: [],
-  recentPublicMessages: [],
-  recentDirectMessages: [],
   territoryScoreboard: scoreboard,
-  actingAllianceId: null,
-  actingAlliance: null,
-  activeAlliances: [],
-  inboundAllianceProposals: [],
-  outboundAllianceProposals: [],
-  recentAllianceEvents: [],
   recentControlChanges: [],
-};
-const baseTurn = {
-  turnNumber: 1,
-  agentId,
-  startedAt: '2026-08-13T12:00:00.000Z',
-  completedAt: '2026-08-13T12:00:01.000Z',
-  observation,
 };
 const provider = {
   provider: 'openrouter',
   model: 'example/compatible-model',
   latencyMs: 100,
 };
-const event = {
-  id: '67aa21b9-fc78-4b04-9f92-9862bf346f96',
-  agentId,
-  occurredAt: '2026-08-13T12:00:01.000Z',
-  type: 'hex-infected',
-  cell,
-  controllerAgentId: agentId,
-};
-const worldAgent = {
-  id: agentId,
-  name: 'Ember',
-  color: '#ff6b57',
-  personality: 'Prefer infection.',
-  currentCell: cell,
-};
 const worldAgents = scoreboard.map((entry) => ({
   id: entry.agentId,
   name: entry.name,
   color: entry.color,
-  personality: 'Prefer infection.',
   currentCell: cell,
 }));
 const snapshot = {
@@ -174,7 +106,6 @@ const snapshot = {
     rosterSeed: 'roster',
     spawnSeed: 'spawn',
     minimumSpawnSeparation: 0,
-    communicationRangeKm: 12,
     patientZeroAgentId: worldAgents[0]!.id,
     roster: worldAgents.map(({ currentCell: _currentCell, ...agent }) => agent),
     modelConfiguration: {
@@ -183,19 +114,8 @@ const snapshot = {
       overrides: [],
       locked: false,
     },
-    behaviorConfiguration: {
-      registryVersion: 1,
-      assignmentMode: 'balanced-random',
-      seed: 'behavior',
-      assignments: assignBehavior(
-        worldAgents.map(({ id }) => id as never),
-        'behavior',
-        'balanced-random',
-      ),
-      locked: false,
-    },
     objectiveVersion: 'durable-influence-v2',
-    capabilities: { communication: true, diplomacy: true },
+    capabilities: {},
     swarmPlannerContractVersion: SWARM_PLANNER_CONTRACT_VERSION,
     exactCellCount: 1,
     areaSquareKilometers: 0.1,
@@ -203,7 +123,6 @@ const snapshot = {
     setupWarnings: [],
   },
   turnNumber: 0,
-  nextAgentId: agentId,
   activeAgentId: null,
   status: 'paused',
   providerMode: 'openrouter',
@@ -219,14 +138,9 @@ const snapshot = {
     source: 'global',
     available: true,
   })),
-  turns: [],
   experiment: {
     id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
     startedAt: '2026-08-13T12:00:00.000Z',
-    totalCompletedTurns: 0,
-    retainedTurns: 0,
-    droppedRecords: 0,
-    complete: true,
     metrics: {
       aggregate: {
         totalTurns: 0,
@@ -245,248 +159,71 @@ const snapshot = {
         territoryGainedThroughInfection: 0,
         territoryGainedThroughCapture: 0,
         territoryLostThroughCapture: 0,
-        publicMessagesRequested: 0,
-        publicMessagesAccepted: 0,
-        publicMessagesRejected: 0,
-        directMessagesRequested: 0,
-        directMessagesDelivered: 0,
-        directMessagesRejected: 0,
-        publicMessagesSent: 0,
-        directMessagesSent: 0,
-        directMessagesReceived: 0,
         uniqueVisitedCells: 0,
         tokens: {},
         tokenUsageComplete: true,
         attemptsWithUnknownTokenUsage: 0,
         knownCostCredits: 0,
         attemptsWithUnknownCost: 0,
-        turnsWithUnknownCost: 0,
       },
       byAgent: [],
     },
     currentTerritory: scoreboard,
-    currentAlliances: [],
   },
 };
 
-describe('agent observation and decision schemas', () => {
-  it('bounds goal state and preserves swarm planner attribution', () => {
-    expect(
-      agentGoalStateSchema.safeParse({
-        longTermGoal: 'x'.repeat(GOAL_TEXT_MAX_LENGTH + 1),
-        shortTermGoal: 'Secure the frontier.',
-        planSummary: 'Expand deliberately.',
-        establishedAtTick: 2,
-        revisedAtTick: 1,
-      }).success,
-    ).toBe(false);
-    expect(
-      requestedGoalRevisionSchema.safeParse({
-        operation: 'keep',
-        reason: 'Contradictory extra field.',
-      }).success,
-    ).toBe(false);
-    expect(
-      swarmPlannerContractVersionSchema.parse(SWARM_PLANNER_CONTRACT_VERSION),
-    ).toBe(SWARM_PLANNER_CONTRACT_VERSION);
+describe('agent observation schema', () => {
+  it('accepts a bounded state-bearing observation', () => {
+    const parsed = agentObservationSchema.parse(observation);
+    expect(parsed.currentCell.state).toBe('open');
+    expect(parsed.patientZeroGlobalView).toBeNull();
+    expect(parsed.playerPressure).toEqual({
+      enabled: false,
+      recentThreats: [],
+    });
   });
 
-  it('requires exact canonical goal availability while defaulting legacy observations', () => {
-    expect(agentObservationSchema.safeParse(observation).success).toBe(true);
-    const goal = {
-      longTermGoal: 'Hold a durable corridor.',
-      shortTermGoal: 'Secure the frontier.',
-      planSummary: 'Expand methodically.',
-      establishedAtTick: 1,
-      revisedAtTick: 1,
-    };
-    const active = {
+  it.each([
+    { ...observation, adjacentCells: [] },
+    { ...observation, currentCell: { cell, state: 'unknown' } },
+    {
       ...observation,
-      currentGoal: goal,
-      goalAvailability: {
-        active: true,
-        availableOperations: ['keep', 'revise', 'complete', 'abandon'],
-      },
-    };
-    expect(agentObservationSchema.safeParse(active).success).toBe(true);
-    for (const goalAvailability of [
-      {
-        active: false,
-        availableOperations: ['keep', 'revise', 'complete', 'abandon'],
-      },
-      {
-        active: true,
-        availableOperations: ['keep', 'keep', 'complete', 'abandon'],
-      },
-      { active: true, availableOperations: ['keep', 'revise', 'complete'] },
-    ])
-      expect(
-        agentObservationSchema.safeParse({
-          ...active,
-          goalAvailability,
-        }).success,
-      ).toBe(false);
+      nearbyAgents: Array(9).fill({
+        id: agentId,
+        name: 'x',
+        currentCell: cell,
+        distance: 1,
+      }),
+    },
+  ])('rejects invalid or oversized observations', (value) => {
+    expect(agentObservationSchema.safeParse(value).success).toBe(false);
   });
 
-  it('bounds compact memory and requires exact canonical availability', () => {
-    const entries = Array.from({ length: MEMORY_ENTRY_LIMIT }, (_, index) => ({
-      id: `memory:${agentId}:${index + 1}`,
-      text: `Memory ${index + 1}`,
-      createdAtTick: index + 1,
-      revisedAtTick: index + 1,
-    }));
-    expect(memoryLedgerSchema.safeParse(entries).success).toBe(true);
-    expect(memoryLedgerSchema.safeParse([...entries, entries[0]]).success).toBe(
-      false,
-    );
-    expect(
-      requestedMemoryOperationSchema.safeParse({
-        operation: 'remember',
-        text: 'x'.repeat(MEMORY_TEXT_MAX_LENGTH + 1),
-      }).success,
-    ).toBe(false);
-    expect(
-      memoryLedgerSchema.safeParse([
-        {
-          id: 'memory:00000000-0000-9000-8000-000000000000:1',
-          text: 'Malformed owner identity.',
-          createdAtTick: 1,
-          revisedAtTick: 1,
-        },
-      ]).success,
-    ).toBe(false);
+  it('caps chronological gained/lost control observations at six', () => {
+    const change = {
+      eventId: '67aa21b9-fc78-4b04-9f92-9862bf346f96',
+      direction: 'gained',
+      otherAgentId: '2507bb46-7ae4-45ca-8dda-644c4f85ca14',
+      otherAgentName: 'Rook',
+      cell,
+      occurredAt: '2026-08-13T12:00:01.000Z',
+    };
     expect(
       agentObservationSchema.safeParse({
         ...observation,
-        currentMemory: entries,
-        memoryAvailability: {
-          remember: false,
-          revisableMemoryIds: entries.map(({ id }) => id),
-          forgettableMemoryIds: entries.map(({ id }) => id),
-        },
+        recentControlChanges: Array(6).fill(change),
       }).success,
     ).toBe(true);
     expect(
       agentObservationSchema.safeParse({
         ...observation,
-        currentMemory: entries,
-        memoryAvailability: {
-          remember: true,
-          revisableMemoryIds: entries.map(({ id }) => id).reverse(),
-          forgettableMemoryIds: entries.map(({ id }) => id),
-        },
-      }).success,
-    ).toBe(false);
-    const foreignId = createMemoryId(
-      agentIdSchema.parse('2507bb46-7ae4-45ca-8dda-644c4f85ca14'),
-      1,
-    );
-    expect(
-      agentObservationSchema.safeParse({
-        ...observation,
-        currentMemory: [{ ...entries[0]!, id: foreignId }],
-        memoryAvailability: {
-          remember: true,
-          revisableMemoryIds: [foreignId],
-          forgettableMemoryIds: [foreignId],
-        },
-      }).success,
-    ).toBe(false);
-    expect(
-      memoryLedgerSchema.safeParse([
-        {
-          ...entries[0]!,
-          id: createMemoryId(agentIdSchema.parse(agentId), 2),
-        },
-      ]).success,
-    ).toBe(false);
-    expect(memoryLedgerSchema.safeParse([entries[1], entries[0]]).success).toBe(
-      false,
-    );
-    expect(
-      memoryOperationResultSchema.safeParse({
-        requested: true,
-        accepted: false,
-        operation: 'forget',
-        reason: 'memory-full',
-      }).success,
-    ).toBe(false);
-    expect(
-      memoryOperationResultSchema.safeParse({
-        requested: true,
-        accepted: false,
-        operation: 'remember',
-        reason: 'memory-not-found',
+        recentControlChanges: Array(7).fill(change),
       }).success,
     ).toBe(false);
   });
+});
 
-  it('keeps the maximum sparse Patient Zero diplomacy shape within budget', () => {
-    const agentIds = Array.from({ length: 32 }, (_, index) =>
-      agentIdSchema.parse(
-        `10000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
-      ),
-    );
-    const proposalIds = Array.from(
-      { length: PATIENT_ZERO_DIPLOMACY_SUMMARY_LIMITS.acceptableProposals },
-      (_, index) =>
-        `20000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
-    );
-    const reasons = [
-      'current-ally',
-      'out-of-range',
-      'outgoing-proposal-exists',
-      'incoming-proposal-exists',
-      'alliance-to-alliance-merge',
-    ] as const;
-    const summary = patientZeroDiplomacySummarySchema.parse({
-      eligiblePairCount:
-        WORLD_SCENARIO_LIMITS.maximumAgents *
-        (WORLD_SCENARIO_LIMITS.maximumAgents - 1),
-      displayedEligiblePairs: Array.from(
-        {
-          length: PATIENT_ZERO_DIPLOMACY_SUMMARY_LIMITS.displayedEligiblePairs,
-        },
-        (_, index) => ({
-          proposerId: agentIds[index]!,
-          recipientId: agentIds[(index + 1) % agentIds.length]!,
-        }),
-      ),
-      eligiblePairsTruncated: true,
-      acceptableProposals: proposalIds.map((proposalId, index) => ({
-        agentId: agentIds[index]!,
-        proposalId,
-      })),
-      acceptableProposalCount: WORLD_SCENARIO_LIMITS.maximumAgents,
-      acceptableProposalsTruncated: true,
-      leaveAvailableAgentIds: agentIds.slice(
-        0,
-        PATIENT_ZERO_DIPLOMACY_SUMMARY_LIMITS.leaveAvailableAgentIds,
-      ),
-      leaveAvailableCount: WORLD_SCENARIO_LIMITS.maximumAgents,
-      leaveAvailableTruncated: true,
-      blockedCounts: reasons.map((reason) => ({
-        reason,
-        count:
-          WORLD_SCENARIO_LIMITS.maximumAgents *
-          (WORLD_SCENARIO_LIMITS.maximumAgents - 1),
-      })),
-      blockerExamples: Array.from(
-        { length: PATIENT_ZERO_DIPLOMACY_SUMMARY_LIMITS.blockerExamples },
-        (_, index) => ({
-          proposerId: agentIds[index + 12]!,
-          recipientId: agentIds[index + 13]!,
-          reason: reasons[index % reasons.length]!,
-        }),
-      ),
-    });
-    expect(
-      new TextEncoder().encode(JSON.stringify(summary)).byteLength,
-    ).toBeLessThanOrEqual(
-      PATIENT_ZERO_DIPLOMACY_SUMMARY_LIMITS.serializedUtf8Bytes,
-    );
-  });
-
+describe('Patient Zero player-threat feed', () => {
   it('caps Patient Zero cleaner evidence with truthful overflow metadata', () => {
     const pressureContext = {
       window: { tickCount: 6, startTick: 3, endTick: 8 },
@@ -496,7 +233,6 @@ describe('agent observation and decision schemas', () => {
         blockedCleans: 1,
         consecutiveAffectedTicks: 2,
       },
-      currentAlliance: null,
     };
     const events = Array.from(
       { length: PATIENT_ZERO_PLAYER_THREAT_FEED_LIMIT },
@@ -507,8 +243,6 @@ describe('agent observation and decision schemas', () => {
         occurredAt: '2026-08-13T12:00:01.000Z',
         affectedAgentId: agentId,
         affectedAgentName: 'Ember',
-        affectedAllianceId: null,
-        affectedAllianceColor: null,
         pressureContext,
       }),
     );
@@ -564,8 +298,6 @@ describe('agent observation and decision schemas', () => {
             kind: 'territory-disinfected',
             affectedAgentId: agentId,
             affectedAgentName: 'Ember',
-            affectedAllianceId: null,
-            affectedAllianceColor: null,
           },
         ],
         totalEventCount: 1,
@@ -609,31 +341,10 @@ describe('agent observation and decision schemas', () => {
       patientZeroPlayerThreatFeedSchema.safeParse({
         events: [
           {
-            ...events[0]!,
-            pressureContext: {
-              ...pressureContext,
-              currentAlliance: {
-                totalEvents: 3,
-                disinfections: 2,
-                blockedCleans: 1,
-              },
-            },
-          },
-        ],
-        totalEventCount: 1,
-        truncated: false,
-      }).success,
-    ).toBe(false);
-    expect(
-      patientZeroPlayerThreatFeedSchema.safeParse({
-        events: [
-          {
             ...blockedBase,
             kind: 'occupied-clean-blocked',
             blockingAgentId: agentId,
             blockingAgentName: 'Ember',
-            blockingAllianceId: null,
-            blockingAllianceColor: null,
             pressureContext: {
               ...pressureContext,
               subject: {
@@ -659,10 +370,6 @@ describe('agent observation and decision schemas', () => {
     const globalView = {
       agents: [],
       individualTerritory: scoreboard,
-      allianceTerritory: [],
-      alliances: [],
-      activeAllianceProposals: [],
-      recentStrategicEvents: [],
       recentTerritoryChanges: [],
       playerThreatFeed: {
         events: events.slice(0, 1),
@@ -702,7 +409,9 @@ describe('agent observation and decision schemas', () => {
       }).success,
     ).toBe(true);
   });
+});
 
+describe('engine contract identifiers', () => {
   it('preserves established engine contract identifiers through branding changes', () => {
     expect(SWARM_PLANNER_CONTRACT_VERSION).toBe('swarm-planner-v1');
     expect(OBJECTIVE_PROMPT_VERSION).toBe('durable-influence-v3');
@@ -720,195 +429,22 @@ describe('agent observation and decision schemas', () => {
         status: 'untested',
       }).success,
     ).toBe(false);
+    expect(
+      swarmPlannerContractVersionSchema.parse(SWARM_PLANNER_CONTRACT_VERSION),
+    ).toBe(SWARM_PLANNER_CONTRACT_VERSION);
   });
 
-  it('centralizes eight-agent, 127-cell alliance and diplomacy limits', () => {
+  it('centralizes eight-agent, 127-cell world defaults', () => {
     expect(DEVELOPMENT_WORLD_CONFIG).toMatchObject({
       radius: 6,
       cellCount: 127,
       agentCount: 8,
       resolution: 9,
     });
-    const allianceId = 'a1111111-1111-4111-8111-111111111111';
-    const proposalId = 'b2222222-2222-4222-8222-222222222222';
-    expect(
-      allianceSchema.safeParse({
-        id: allianceId,
-        color: '#0072B2',
-        memberAgentIds: scoreboard.slice(0, 2).map(({ agentId }) => agentId),
-      }).success,
-    ).toBe(true);
-    expect(
-      allianceProposalSchema.parse({
-        id: proposalId,
-        proposerAgentId: scoreboard[0]!.agentId,
-        recipientAgentId: scoreboard[1]!.agentId,
-        proposerAllianceId: null,
-        originatingTurn: 1,
-        expirationTurn: 17,
-      }).recipientAllianceId,
-    ).toBeNull();
-    expect(
-      diplomacyIntentSchema.safeParse({ type: 'accept-alliance', proposalId })
-        .success,
-    ).toBe(true);
-    expect(diplomacyResultSchema.safeParse({ requested: false }).success).toBe(
-      true,
-    );
   });
+});
 
-  it('accepts a full-roster alliance and a maximum-count ten-agent partition with reused colors', () => {
-    const ids = Array.from({ length: 32 }, (_, index) =>
-      agentIdSchema.parse(
-        `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
-      ),
-    );
-    expect(
-      allianceSchema.safeParse({
-        id: 'a1111111-1111-4111-8111-111111111111',
-        color: '#0072B2',
-        memberAgentIds: ids,
-      }).success,
-    ).toBe(true);
-    const tenAgents = ids.slice(0, 10).map((id, index) => ({
-      id,
-      name: `Agent ${index}`,
-      color: '#ff6b57',
-      personality: 'Coordinates deliberately.',
-      currentCell: cell,
-    }));
-    expect(
-      worldSnapshotSchema.safeParse({
-        generatedAt: '2026-08-13T12:00:00.000Z',
-        hexes: [{ cell, state: 'open', controllerAgentId: null }],
-        agents: tenAgents,
-        events: [],
-        alliances: Array.from({ length: 5 }, (_, index) => ({
-          id: `10000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
-          color: '#0072B2',
-          memberAgentIds: [ids[index * 2]!, ids[index * 2 + 1]!],
-        })),
-        pendingAllianceProposals: [],
-      }).success,
-    ).toBe(true);
-    const participantState = {
-      generatedAt: '2026-08-13T12:00:00.000Z',
-      hexes: [{ cell, state: 'open', controllerAgentId: null }],
-      agents: tenAgents,
-      events: [],
-      alliances: [
-        {
-          id: '10000000-0000-4000-8000-000000000000',
-          color: '#0072B2',
-          memberAgentIds: [ids[0]!, ids[1]!],
-        },
-      ],
-    };
-    const proposalBase = {
-      id: '20000000-0000-4000-8000-000000000000',
-      originatingTurn: 1,
-      expirationTurn: 21,
-      proposerAllianceId: null,
-      recipientAllianceId: null,
-    };
-    const legacyProposalBase: Partial<typeof proposalBase> = {
-      ...proposalBase,
-    };
-    delete legacyProposalBase.recipientAllianceId;
-    expect(
-      worldSnapshotSchema.safeParse({
-        ...participantState,
-        alliances: [],
-        pendingAllianceProposals: [
-          {
-            ...legacyProposalBase,
-            proposerAgentId: ids[2],
-            recipientAgentId: ids[3],
-          },
-        ],
-      }).success,
-    ).toBe(true);
-    expect(
-      worldSnapshotSchema.safeParse({
-        ...participantState,
-        pendingAllianceProposals: [
-          {
-            ...proposalBase,
-            proposerAgentId: ids[0],
-            recipientAgentId: ids[2],
-          },
-        ],
-      }).success,
-    ).toBe(false);
-    expect(
-      worldSnapshotSchema.safeParse({
-        ...participantState,
-        pendingAllianceProposals: [
-          {
-            ...proposalBase,
-            proposerAgentId: ids[2],
-            recipientAgentId: ids[0],
-          },
-        ],
-      }).success,
-    ).toBe(false);
-  });
-
-  it('accepts a bounded state-bearing observation', () => {
-    const parsed = agentObservationSchema.parse(observation);
-    expect(parsed.currentCell.state).toBe('open');
-    expect(parsed.diplomacyAvailability.propose).toMatchObject({
-      available: false,
-      blockedRecipients: [],
-    });
-    expect(parsed.patientZeroGlobalView).toBeNull();
-    expect(parsed.playerPressure).toEqual({
-      enabled: false,
-      recentThreats: [],
-    });
-  });
-
-  it.each([
-    { ...observation, adjacentCells: [] },
-    { ...observation, currentCell: { cell, state: 'unknown' } },
-    {
-      ...observation,
-      nearbyAgents: Array(9).fill({
-        id: agentId,
-        name: 'x',
-        currentCell: cell,
-        distance: 1,
-        allianceId: null,
-      }),
-    },
-  ])('rejects invalid or oversized observations', (value) => {
-    expect(agentObservationSchema.safeParse(value).success).toBe(false);
-  });
-
-  it.each([
-    {
-      worldAction: { type: 'move', targetCell: adjacent },
-      summary: 'Move.',
-    },
-    { worldAction: { type: 'infect' }, summary: 'Infect.' },
-    { worldAction: { type: 'capture' }, summary: 'Capture.' },
-    {
-      worldAction: { type: 'wait' },
-      communication: {
-        channel: 'direct',
-        recipientId: '2507bb46-7ae4-45ca-8dda-644c4f85ca14',
-        message: 'Coordinate here.',
-      },
-      summary: 'Message.',
-    },
-    { worldAction: { type: 'wait' }, summary: 'Wait.' },
-  ])(
-    'accepts every supported world action and optional communication',
-    (decision) => {
-      expect(agentDecisionSchema.safeParse(decision).success).toBe(true);
-    },
-  );
-
+describe('world snapshot validation', () => {
   it('validates explicit hex control invariants and capture events', () => {
     expect(
       hexSchema.safeParse({ cell, state: 'open', controllerAgentId: null })
@@ -1008,176 +544,22 @@ describe('agent observation and decision schemas', () => {
     ).toBe(false);
   });
 
-  it.each([
-    {
-      worldAction: { type: 'teleport', targetCell: adjacent },
-      summary: 'No.',
-    },
-    {
-      worldAction: { type: 'wait' },
-      summary: 'x'.repeat(MODEL_SUMMARY_MAX_LENGTH + 1),
-    },
-  ])('rejects forbidden actions and oversized model text', (decision) => {
-    expect(agentDecisionSchema.safeParse(decision).success).toBe(false);
-  });
-
-  it('trims message content and enforces recipient and 280-character boundaries', () => {
-    const recipientId = '2507bb46-7ae4-45ca-8dda-644c4f85ca14';
-    const parsed = agentDecisionSchema.parse({
-      worldAction: { type: 'wait' },
-      communication: {
-        channel: 'direct',
-        recipientId,
-        message: `  ${'x'.repeat(MESSAGE_MAX_LENGTH)}  `,
-      },
-      summary: 'Send.',
-    });
-    expect(parsed.communication).toMatchObject({
-      channel: 'direct',
-      message: 'x'.repeat(MESSAGE_MAX_LENGTH),
-    });
-    for (const communication of [
-      { channel: 'direct', recipientId, message: '   ' },
-      {
-        channel: 'direct',
-        recipientId,
-        message: 'x'.repeat(MESSAGE_MAX_LENGTH + 1),
-      },
-      { channel: 'direct', recipientId: 'not-an-agent', message: 'Hello.' },
-    ])
-      expect(
-        agentDecisionSchema.safeParse({
-          worldAction: { type: 'wait' },
-          communication,
-          summary: 'Send.',
-        }).success,
-      ).toBe(false);
-  });
-
-  it('preserves rejected direct attempts with a safely nullable recipient', () => {
-    const attempt = {
-      id: '67aa21b9-fc78-4b04-9f92-9862bf346f96',
-      agentId,
-      occurredAt: '2026-08-13T12:00:01.000Z',
-      channel: 'direct' as const,
-      recipientId: null,
-      message: 'Hello.',
-      distance: null,
-    };
+  it('rejects a simulated player positioned outside the world', () => {
     expect(
-      communicationResultSchema.parse({
-        requested: true,
-        accepted: false,
-        attempt,
-        reason: 'invalid-communication',
-        details: 'The communication failed schema validation.',
-      }),
-    ).toMatchObject({ attempt: { channel: 'direct', recipientId: null } });
-    expect(
-      exportedCommunicationSchema.safeParse({
-        ...attempt,
-        originatingTurn: 1,
-        status: 'rejected',
-        rejectionReason: 'invalid-communication',
-        rejectionDetails: 'The communication failed schema validation.',
-      }).success,
-    ).toBe(true);
-    expect(
-      exportedCommunicationSchema.safeParse({
-        ...attempt,
-        originatingTurn: 1,
-        status: 'accepted',
-      }).success,
-    ).toBe(false);
-  });
-
-  it('validates typed messages and caps directional conversation context at six', () => {
-    const recipientId = '2507bb46-7ae4-45ca-8dda-644c4f85ca14';
-    const messageEvent = directMessageEventSchema.parse({
-      id: '67aa21b9-fc78-4b04-9f92-9862bf346f96',
-      type: 'direct-message-sent',
-      channel: 'direct',
-      agentId,
-      recipientId,
-      occurredAt: '2026-08-13T12:00:01.000Z',
-      message: 'Hello.',
-      distance: 3,
-    });
-    const communication = {
-      eventId: messageEvent.id,
-      senderId: agentId,
-      senderName: 'Ember',
-      recipientId,
-      recipientName: 'Rook',
-      direction: 'outbound',
-      message: messageEvent.message,
-      occurredAt: messageEvent.occurredAt,
-      distance: messageEvent.distance,
-    };
-    expect(
-      agentObservationSchema.safeParse({
-        ...observation,
-        recentPublicMessages: [],
-        recentDirectMessages: Array(6).fill(communication),
-      }).success,
-    ).toBe(true);
-    expect(
-      agentObservationSchema.safeParse({
-        ...observation,
-        recentPublicMessages: [],
-        recentDirectMessages: Array(7).fill(communication),
-      }).success,
-    ).toBe(false);
-  });
-
-  it('caps public context at twelve and accepts one-character public text', () => {
-    const publicMessage = {
-      eventId: '67aa21b9-fc78-4b04-9f92-9862bf346f96',
-      senderId: agentId,
-      senderName: 'Ember',
-      message: 'x',
-      occurredAt: '2026-08-13T12:00:01.000Z',
-    };
-    expect(
-      agentDecisionSchema.safeParse({
-        worldAction: { type: 'wait' },
-        communication: { channel: 'public', message: ' x ' },
-        summary: 'Publish.',
-      }).success,
-    ).toBe(true);
-    expect(
-      agentObservationSchema.safeParse({
-        ...observation,
-        recentPublicMessages: Array(12).fill(publicMessage),
-      }).success,
-    ).toBe(true);
-    expect(
-      agentObservationSchema.safeParse({
-        ...observation,
-        recentPublicMessages: Array(13).fill(publicMessage),
-      }).success,
-    ).toBe(false);
-  });
-
-  it('caps chronological gained/lost control observations at six', () => {
-    const change = {
-      eventId: '67aa21b9-fc78-4b04-9f92-9862bf346f96',
-      direction: 'gained',
-      otherAgentId: '2507bb46-7ae4-45ca-8dda-644c4f85ca14',
-      otherAgentName: 'Rook',
-      cell,
-      occurredAt: '2026-08-13T12:00:01.000Z',
-    };
-    expect(
-      agentObservationSchema.safeParse({
-        ...observation,
-        recentControlChanges: Array(6).fill(change),
-      }).success,
-    ).toBe(true);
-    expect(
-      agentObservationSchema.safeParse({
-        ...observation,
-        recentControlChanges: Array(7).fill(change),
+      worldSnapshotSchema.safeParse({
+        generatedAt: '2026-08-13T12:00:00.000Z',
+        hexes: [{ cell, state: 'open', controllerAgentId: null }],
+        agents: [],
+        events: [],
+        simulatedPlayer: {
+          profile: 'casual-cleaner',
+          currentCell: adjacent,
+          metrics: {
+            movements: 0,
+            cellsDisinfected: 0,
+            blockedDisinfections: 0,
+          },
+        },
       }).success,
     ).toBe(false);
   });
@@ -1293,7 +675,7 @@ describe('reasoning profiles', () => {
   });
 });
 
-describe('turn and snapshot schemas', () => {
+describe('snapshot and export contracts', () => {
   it('validates state-only export snapshots without dropping controller invariants', () => {
     const worldState = {
       generatedAt: snapshot.world.generatedAt,
@@ -1317,67 +699,21 @@ describe('turn and snapshot schemas', () => {
     ).toBe(false);
   });
 
-  it.each([
-    {
-      ...baseTurn,
-      outcome: 'accepted',
-      worldAction: { type: 'infect' },
-      summary: 'Infect.',
-      worldActionResult: { accepted: true, event },
-      communicationResult: { requested: false },
-      diplomacyResult: { requested: false },
-      provider,
-    },
-    {
-      ...baseTurn,
-      outcome: 'rejected',
-      worldAction: { type: 'move', targetCell: adjacent },
-      summary: 'Move.',
-      worldActionResult: {
-        accepted: false,
-        reason: 'not-adjacent',
-        details: 'No.',
-      },
-      communicationResult: { requested: false },
-      diplomacyResult: { requested: false },
-      provider,
-    },
-    {
-      ...baseTurn,
-      outcome: 'provider-error',
-      failure: { code: 'timeout', message: 'Timed out.', retryable: true },
-    },
-    {
-      ...baseTurn,
-      outcome: 'lost-tick',
-      tickNumber: 1,
-      tickPosition: 1,
-      virtualTime: '2026-08-13T12:05:00.000Z',
-      tickIntervalMinutes: 5,
-      failure: { code: 'timeout', message: 'Timed out.', retryable: false },
-    },
-  ])('validates $outcome turn records', (turn) => {
-    expect(agentTurnRecordSchema.safeParse(turn).success).toBe(true);
-  });
-
   it('validates a complete API snapshot and rejects unbounded histories', () => {
-    const validTurn = {
-      ...baseTurn,
-      outcome: 'accepted',
-      worldAction: { type: 'infect' },
-      summary: 'Infect.',
-      worldActionResult: { accepted: true, event },
-      communicationResult: { requested: false },
-      diplomacyResult: { requested: false },
-      provider,
-    };
     expect(simulationSnapshotSchema.safeParse(snapshot).success).toBe(true);
     expect(
       simulationSnapshotSchema.safeParse({
         ...snapshot,
         world: {
           ...snapshot.world,
-          events: Array(121).fill(event),
+          events: Array(121).fill({
+            id: '67aa21b9-fc78-4b04-9f92-9862bf346f96',
+            agentId,
+            occurredAt: '2026-08-13T12:00:01.000Z',
+            type: 'hex-infected',
+            cell,
+            controllerAgentId: agentId,
+          }),
         },
       }).success,
     ).toBe(false);
@@ -1390,13 +726,11 @@ describe('turn and snapshot schemas', () => {
       lastTickIntervalMinutes: 5,
       resolutionOrder: [],
       activeAgentId: null,
-      turns: [],
     };
     expect(
       simulationSnapshotSchema.safeParse({
         ...terminalBase,
         status: 'infection-eliminated',
-        nextAgentId: null,
         world: { ...snapshot.world, agents: [] },
         resolvedModels: [],
         experiment: { ...snapshot.experiment, currentTerritory: [] },
@@ -1409,7 +743,6 @@ describe('turn and snapshot schemas', () => {
       simulationSnapshotSchema.safeParse({
         ...terminalBase,
         status: 'patient-zero-captured',
-        nextAgentId: survivingAgents[0]!.id,
         world: { ...snapshot.world, agents: survivingAgents },
         resolvedModels: snapshot.resolvedModels.filter(({ agentId }) =>
           survivingIds.has(agentId),
@@ -1424,74 +757,10 @@ describe('turn and snapshot schemas', () => {
     ).toBe(true);
   });
 
-  it('requires tick attribution as one complete metadata group', () => {
-    const lost = {
-      ...baseTurn,
-      outcome: 'lost-tick',
-      failure: { code: 'timeout', message: 'Timed out.', retryable: false },
-    };
-    expect(
-      agentTurnRecordSchema.safeParse({ ...lost, tickNumber: 1 }).success,
-    ).toBe(false);
-    expect(
-      agentTurnRecordSchema.safeParse({
-        ...lost,
-        tickNumber: 1,
-        tickPosition: 1,
-        virtualTime: '2026-08-13T12:05:00.000Z',
-        tickIntervalMinutes: 5,
-      }).success,
-    ).toBe(true);
-    expect(
-      experimentExportTurnSchema.safeParse({
-        turnNumber: 1,
-        tickNumber: 1,
-        startedAt: baseTurn.startedAt,
-        completedAt: baseTurn.completedAt,
-        agentId,
-        outcome: 'lost-tick',
-        failure: { code: 'timeout', message: 'Timed out.', retryable: false },
-      }).success,
-    ).toBe(false);
-  });
-
   it('requires swarm telemetry in tick responses', () => {
     expect(
       singleTickResponseSchema.safeParse({ snapshot, tickNumber: 1 }).success,
     ).toBe(false);
-  });
-});
-
-describe('experiment telemetry and export contracts', () => {
-  it('accepts complete, partial and tiny-cost provider usage without fabricating unknowns', () => {
-    expect(
-      providerMetadataSchema.parse({
-        ...provider,
-        promptTokens: 12,
-        completionTokens: 3,
-        totalTokens: 15,
-        reasoningTokens: 1,
-        cachedReadTokens: 8,
-        cacheWriteTokens: 2,
-        costCredits: 0.00000001,
-      }).costCredits,
-    ).toBe(0.00000001);
-    expect(providerMetadataSchema.parse(provider)).not.toHaveProperty(
-      'costCredits',
-    );
-  });
-
-  it('validates experiment identities and immutable configuration events', () => {
-    expect(experimentIdSchema.safeParse('not-an-id').success).toBe(false);
-    expect(
-      personalityConfigurationEventSchema.safeParse({
-        timestamp: '2026-08-13T12:00:00.000Z',
-        agentId,
-        previousPersonality: 'Before.',
-        newPersonality: 'After.',
-        operation: 'custom-edit',
-      }).success,
-    ).toBe(true);
   });
 
   it('validates all levels and rejects empty, malformed, duplicate and inverted selections', () => {
@@ -1500,7 +769,6 @@ describe('experiment telemetry and export contracts', () => {
       turns: { mode: 'entire-retained' },
       outcomes: ['accepted'],
       actions: ['capture', 'wait'],
-      communications: { channel: 'all', status: 'all' },
     };
     for (const level of ['minimal', 'standard', 'full-safe'])
       expect(
@@ -1523,11 +791,8 @@ describe('experiment telemetry and export contracts', () => {
         level: 'custom',
         custom: {
           turnObservations: false,
-          personalityTextHistory: false,
           nearbyAgents: false,
           recentEvents: false,
-          recentPublicMessages: false,
-          recentDirectMessages: false,
           recentControlChanges: false,
           validationDetails: false,
           resultingEvents: false,
@@ -1535,7 +800,6 @@ describe('experiment telemetry and export contracts', () => {
           initialWorldState: false,
           currentWorldState: false,
           computedMetrics: false,
-          communications: true,
           controlChanges: true,
         },
       }).success,
@@ -1561,45 +825,30 @@ describe('experiment telemetry and export contracts', () => {
   });
 });
 
-describe('personality mutation contracts', () => {
-  it('trims a valid update and validates its response', () => {
-    const request = updateAgentPersonalityRequestSchema.parse({
-      personality: '  Seek open adjacent cells.  ',
-    });
-    expect(request).toEqual({ personality: 'Seek open adjacent cells.' });
+describe('provider and archive contracts', () => {
+  it('accepts complete, partial and tiny-cost provider usage without fabricating unknowns', () => {
     expect(
-      updateAgentPersonalityResponseSchema.safeParse({
-        snapshot,
-        agent: { ...worldAgent, personality: request.personality },
-      }).success,
-    ).toBe(true);
-  });
-
-  it.each([
-    { personality: '' },
-    { personality: '   ' },
-    { personality: 'x'.repeat(PERSONALITY_MAX_LENGTH + 1) },
-    { personality: 42 },
-    { personality: 'Valid.', unexpected: true },
-    null,
-  ])('rejects empty, oversized, or malformed updates', (request) => {
-    expect(updateAgentPersonalityRequestSchema.safeParse(request).success).toBe(
-      false,
+      providerMetadataSchema.parse({
+        ...provider,
+        promptTokens: 12,
+        completionTokens: 3,
+        totalTokens: 15,
+        reasoningTokens: 1,
+        cachedReadTokens: 8,
+        cacheWriteTokens: 2,
+        costCredits: 0.00000001,
+      }).costCredits,
+    ).toBe(0.00000001);
+    expect(providerMetadataSchema.parse(provider)).not.toHaveProperty(
+      'costCredits',
     );
   });
 
-  it('validates restore-default responses and typed safe errors', () => {
-    expect(
-      restoreDefaultPersonalitiesResponseSchema.safeParse({ snapshot }).success,
-    ).toBe(true);
-    expect(
-      apiErrorSchema.safeParse({
-        error: {
-          code: 'personality_conflict',
-          message: 'A turn is active.',
-        },
-      }).success,
-    ).toBe(true);
+  it('validates experiment identities', () => {
+    expect(experimentIdSchema.safeParse('not-an-id').success).toBe(false);
+  });
+
+  it('validates typed safe API errors', () => {
     for (const code of ['tick_conflict', 'experiment_budget_exhausted'])
       expect(
         apiErrorSchema.safeParse({

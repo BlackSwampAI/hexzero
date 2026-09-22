@@ -11,29 +11,19 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from 'react';
 import {
-  PERSONALITY_MAX_LENGTH,
   NEUTRAL_AGENT_COLOR,
-  PERSONALITY_PROFILES,
-  STRATEGY_PROFILES,
-  assignBehavior,
   archiveExperimentExportResponseSchema,
   cancelSimulationResponseSchema,
   cancelledTickResponseSchema,
   experimentExportPreviewSchema,
   experimentExportRequestSchema,
   experimentExportResponseSchema,
-  experimentImportResponseSchema,
   modelCatalogResponseSchema,
-  personalitySchema,
   resetSimulationResponseSchema,
   reasoningProfilesForModel,
-  restoreDefaultPersonalitiesResponseSchema,
   simulationSnapshotSchema,
   singleTickResponseSchema,
-  updateAgentPersonalityRequestSchema,
-  updateAgentPersonalityResponseSchema,
   updateExperimentModelsResponseSchema,
-  updateExperimentBehaviorResponseSchema,
   verifyModelResponseSchema,
   worldSetupPreviewResponseSchema,
   applyWorldSetupResponseSchema,
@@ -42,7 +32,6 @@ import {
   defaultWorldSetupResponseSchema,
   WORLD_RADIUS_PRESETS,
   type AgentId,
-  type AgentTurnRecord,
   type CustomExportOptions,
   type ExperimentExportDocument,
   type ExperimentExportPreview,
@@ -53,20 +42,13 @@ import {
   type ModelVerification,
   type ReasoningProfile,
   type ExperimentModelConfiguration,
-  type BehaviorConfiguration,
   type SimulationSnapshot,
   type WorldSetupRequest,
   type WorldSetupPreviewResponse,
 } from '@hexzero/shared';
-import {
-  matchingPersonalityPreset,
-  PERSONALITY_PRESETS,
-} from './personality-presets';
-
 import { WorldMap } from './world-map';
 import { buildModelOptions } from './model-options';
 import { resolveAgentColor } from './ui-color';
-import { BEHAVIOR_TRACE_LIMIT, deriveBehaviorTrace } from './behavior-trace';
 import {
   SwarmActivityPanel,
   SwarmAgentInspector,
@@ -101,33 +83,7 @@ export function WorldLab() {
   const [inspectorTab, setInspectorTab] = useState<
     'scoreboard' | 'agent' | 'hex' | 'run'
   >('agent');
-  const [activityTab, setActivityTab] = useState<
-    'chat' | 'private' | 'events' | 'recovery' | 'swarm'
-  >('chat');
   const [snapshot, setSnapshot] = useState<SimulationSnapshot | null>(null);
-  const [privateCommsUnread, setPrivateCommsUnread] = useState(0);
-  const privateCommCount =
-    snapshot?.world.events.filter(
-      (event) =>
-        event.type === 'direct-message-sent' ||
-        event.type === 'alliance-message-sent' ||
-        event.type === 'zero-message-sent',
-    ).length ?? 0;
-  const previousPrivateCommCount = useRef<number | null>(null);
-  useEffect(() => {
-    if (previousPrivateCommCount.current === null) {
-      if (snapshot) previousPrivateCommCount.current = privateCommCount;
-      return;
-    }
-    const added = Math.max(
-      0,
-      privateCommCount - previousPrivateCommCount.current,
-    );
-    if (activityTab !== 'private' && added)
-      setPrivateCommsUnread((count) => count + added);
-    if (activityTab === 'private') setPrivateCommsUnread(0);
-    previousPrivateCommCount.current = privateCommCount;
-  }, [activityTab, privateCommCount, snapshot]);
   const [selectedCell, setSelectedCell] = useState<H3Cell | null>(null);
   const [selectedAgentId, setSelectedAgentId] = useState<AgentId | null>(null);
   const [running, setRunning] = useState(false);
@@ -138,10 +94,6 @@ export function WorldLab() {
   const [reconciling, setReconciling] = useState(false);
   const [recoveryNotice, setRecoveryNotice] = useState<string | null>(null);
   const [resetting, setResetting] = useState(false);
-  const [personalityPending, setPersonalityPending] = useState(false);
-  const [personalityNotice, setPersonalityNotice] = useState<string | null>(
-    null,
-  );
   const [speed, setSpeed] = useState(1_000);
   const [uiError, setUiError] = useState<string | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
@@ -394,36 +346,6 @@ export function WorldLab() {
     }
   };
 
-  const updateBehavior = async (
-    configuration: Omit<BehaviorConfiguration, 'registryVersion' | 'locked'>,
-  ): Promise<boolean> => {
-    if (configurationPendingRef.current) return false;
-    configurationPendingRef.current = true;
-    setConfigurationPending(true);
-    setUiError(null);
-    try {
-      const response = await fetch(`${apiBase}/experiment/behavior`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(configuration),
-      });
-      if (!response.ok) throw new Error('behavior update rejected');
-      applySnapshot(
-        updateExperimentBehaviorResponseSchema.parse(await response.json())
-          .snapshot,
-      );
-      return true;
-    } catch {
-      setUiError(
-        'Behavior assignments could not be saved. They may be locked after turn one.',
-      );
-      return false;
-    } finally {
-      configurationPendingRef.current = false;
-      setConfigurationPending(false);
-    }
-  };
-
   const verifyModel = async (
     modelId: string,
     reasoningProfile: ReasoningProfile,
@@ -453,34 +375,6 @@ export function WorldLab() {
       setUiError('The compatibility test could not be completed.');
     } finally {
       setVerifyingModelId(null);
-    }
-  };
-
-  const importExperiment = async (file: File): Promise<void> => {
-    if (file.size > 5_000_000) {
-      setUiError('Experiment import files must be 5 MB or smaller.');
-      return;
-    }
-    try {
-      const document = JSON.parse(await file.text()) as unknown;
-      const response = await fetch(`${apiBase}/experiment/import`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ document }),
-      });
-      const body = await response.json();
-      if (!response.ok) {
-        const error = body as { error?: { message?: string } };
-        setUiError(
-          error.error?.message ?? 'The experiment import was rejected.',
-        );
-        return;
-      }
-      const payload = experimentImportResponseSchema.parse(body);
-      applySnapshot(payload.snapshot);
-      setPersonalityNotice(payload.message);
-    } catch {
-      setUiError('The selected file is not a valid experiment export.');
     }
   };
 
@@ -656,89 +550,6 @@ export function WorldLab() {
     }
   };
 
-  const updatePersonality = async (
-    agentId: AgentId,
-    personality: string,
-  ): Promise<boolean> => {
-    const request = updateAgentPersonalityRequestSchema.safeParse({
-      personality,
-    });
-    if (!request.success) return false;
-    setPersonalityPending(true);
-    setPersonalityNotice(null);
-    setUiError(null);
-    try {
-      const response = await fetch(`${apiBase}/agents/${agentId}/personality`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(request.data),
-      });
-      if (response.status === 409) {
-        setUiError(
-          'Personality changes are unavailable until the current tick completes.',
-        );
-        return false;
-      }
-      if (!response.ok) {
-        setUiError('The personality was rejected safely by the Game API.');
-        return false;
-      }
-      const payload = updateAgentPersonalityResponseSchema.parse(
-        await response.json(),
-      );
-      applySnapshot(payload.snapshot);
-      setPersonalityNotice(`${payload.agent.name}'s personality was updated.`);
-      return true;
-    } catch {
-      setUiError(
-        'Personality update failed safely. The existing personality was left intact.',
-      );
-      return false;
-    } finally {
-      setPersonalityPending(false);
-    }
-  };
-
-  const restoreDefaultPersonalities = async () => {
-    if (
-      !window.confirm(
-        'Restore milestone default personalities for applicable active agents? World progress will be preserved.',
-      )
-    )
-      return;
-    setPersonalityPending(true);
-    setPersonalityNotice(null);
-    setUiError(null);
-    try {
-      const response = await fetch(
-        `${apiBase}/personalities/restore-defaults`,
-        {
-          method: 'POST',
-        },
-      );
-      if (response.status === 409) {
-        setUiError(
-          'Default personalities cannot be restored until the current tick completes.',
-        );
-        return;
-      }
-      if (!response.ok) throw new Error('restore personalities failed');
-      const payload = restoreDefaultPersonalitiesResponseSchema.parse(
-        await response.json(),
-      );
-      applySnapshot(payload.snapshot);
-      setPersonalityNotice(
-        'Default personalities restored. World progress was preserved.',
-      );
-    } catch {
-      setUiError(
-        'Restoring default personalities failed safely. Existing configuration was left intact.',
-      );
-    } finally {
-      setPersonalityPending(false);
-    }
-  };
-
   const fullyInfected =
     snapshot?.world.hexes.every(({ state }) => state === 'infected') ?? false;
   if (!snapshot) {
@@ -767,12 +578,6 @@ export function WorldLab() {
           ({ id }) => id === selectedHex.controllerAgentId,
         )
       : undefined;
-  const selectedHexAlliance = selectedHexController
-    ? snapshot.world.alliances.find(({ memberAgentIds }) =>
-        memberAgentIds.includes(selectedHexController.id),
-      )
-    : undefined;
-  const latestTurn = undefined;
   const status = resetting
     ? 'resetting'
     : reconciling
@@ -790,43 +595,24 @@ export function WorldLab() {
             ? 'running'
             : 'paused';
   const activeTick = snapshot.status === 'waiting-for-model';
+  const swarmMode = true;
   const terminal =
     snapshot.status === 'patient-zero-captured' ||
     snapshot.status === 'infection-eliminated';
-  // PR2 removes the inactive social panels; World Lab now always enters via
-  // the swarm workspace.
-  const swarmMode = true;
-  const visibleActivityTab = swarmMode ? 'swarm' : activityTab;
   const zeroAgentId = snapshot.scenario.patientZeroAgentId;
   const zeroModel = snapshot.resolvedModels.find(
     ({ agentId }) => agentId === zeroAgentId,
   );
-  const personalityControlsDisabled =
-    running ||
-    inFlight ||
-    resetting ||
-    personalityPending ||
-    snapshot.activeAgentId !== null ||
-    activeTick;
   const exportMutationPending =
     running ||
     inFlight ||
     resetting ||
-    personalityPending ||
     snapshot.activeAgentId !== null ||
     activeTick;
   const modelsReady = Boolean(zeroModel?.available);
   const executionReady = modelsReady;
   const reasoningUnavailable = snapshot.resolvedModels.some(
     ({ issue }) => issue === 'reasoning-unavailable',
-  );
-  const publicMessages = snapshot.world.events.filter(
-    (
-      event,
-    ): event is Extract<
-      SimulationSnapshot['world']['events'][number],
-      { type: 'public-message-sent' }
-    > => event.type === 'public-message-sent',
   );
 
   return (
@@ -900,22 +686,6 @@ export function WorldLab() {
                     {snapshot.world.agents.find(
                       ({ id }) => id === snapshot.scenario.patientZeroAgentId,
                     )?.name ?? 'None'}
-                  </dd>
-                </div>
-              )}
-              {!swarmMode && (
-                <div>
-                  <dt>Public messages</dt>
-                  <dd>
-                    {snapshot.experiment.metrics.aggregate.publicMessagesSent}
-                  </dd>
-                </div>
-              )}
-              {!swarmMode && (
-                <div>
-                  <dt>Direct messages</dt>
-                  <dd>
-                    {snapshot.experiment.metrics.aggregate.directMessagesSent}
                   </dd>
                 </div>
               )}
@@ -1016,7 +786,6 @@ export function WorldLab() {
                 includes OpenRouter amounts only when returned by the provider.
               </p>
             )}
-            {!swarmMode && <ExperimentUsageMeter snapshot={snapshot} />}
           </div>
         </div>
         <button
@@ -1067,7 +836,6 @@ export function WorldLab() {
               disabled={
                 inFlight ||
                 activeTick ||
-                personalityPending ||
                 fullyInfected ||
                 terminal ||
                 !executionReady ||
@@ -1093,7 +861,6 @@ export function WorldLab() {
               inFlight ||
               activeTick ||
               running ||
-              personalityPending ||
               terminal ||
               !executionReady ||
               snapshot.experiment.attemptAccounting.exhausted ||
@@ -1151,7 +918,6 @@ export function WorldLab() {
                 inFlight ||
                 activeTick ||
                 resetting ||
-                personalityPending ||
                 !executionReady ||
                 fullyInfected ||
                 snapshot.tickNumber >= runTarget
@@ -1265,24 +1031,11 @@ export function WorldLab() {
               <CommandIcon name="export" />
               Export
             </button>
-            {!swarmMode && (
-              <button
-                disabled={personalityControlsDisabled}
-                type="button"
-                onClick={() => void restoreDefaultPersonalities()}
-              >
-                {personalityPending
-                  ? 'Restoring…'
-                  : 'Restore default personalities'}
-              </button>
-            )}
             <div className="destructive-actions">
               <button
                 className="destructive-command"
                 aria-busy={resetting}
-                disabled={
-                  inFlight || activeTick || resetting || personalityPending
-                }
+                disabled={inFlight || activeTick || resetting}
                 type="button"
                 onClick={() => void reset()}
               >
@@ -1299,11 +1052,7 @@ export function WorldLab() {
             {recoveryNotice}
           </div>
         )}
-        {(!modelsReady ||
-          uiError ||
-          fullyInfected ||
-          terminal ||
-          personalityNotice) && (
+        {(!modelsReady || uiError || fullyInfected || terminal) && (
           <div className="command-alert" role="alert">
             {uiError ??
               (fullyInfected
@@ -1312,12 +1061,11 @@ export function WorldLab() {
                   ? snapshot.status === 'patient-zero-captured'
                     ? 'Patient Zero was captured by the simulated player. This experiment is complete; reset or apply a new World Setup to run again.'
                     : 'All infection has been eliminated. This experiment is complete; reset or apply a new World Setup to run again.'
-                  : (personalityNotice ??
-                    (swarmMode
-                      ? 'Select an available model for Agent Zero before starting.'
-                      : reasoningUnavailable
-                        ? 'A saved reasoning profile is no longer advertised by its model. Select an available profile before starting.'
-                        : 'Select an available compatible model for every agent before starting.')))}
+                  : swarmMode
+                    ? 'Select an available model for Agent Zero before starting.'
+                    : reasoningUnavailable
+                      ? 'A saved reasoning profile is no longer advertised by its model. Select an available profile before starting.'
+                      : 'Select an available compatible model for every agent before starting.')}
           </div>
         )}
         {!swarmMode && !snapshot.providerConfigured && (
@@ -1387,7 +1135,6 @@ export function WorldLab() {
                 longitude={snapshot.scenario.center.longitude}
                 hexes={snapshot.world.hexes}
                 agents={snapshot.world.agents}
-                alliances={swarmMode ? [] : snapshot.world.alliances}
                 patientZeroAgentId={snapshot.scenario.patientZeroAgentId}
                 simulatedPlayer={snapshot.world.simulatedPlayer}
                 selectedCell={selectedCell}
@@ -1450,113 +1197,43 @@ export function WorldLab() {
                 role="tabpanel"
                 id={`inspector-${inspectorTab}`}
               >
-                {inspectorTab === 'agent' &&
-                  selectedAgent &&
-                  (swarmMode ? (
-                    <SwarmAgentInspector
-                      snapshot={snapshot}
-                      agent={selectedAgent}
-                      cellState={
-                        snapshot.world.hexes.find(
-                          ({ cell }) => cell === selectedAgent.currentCell,
-                        )!.state
-                      }
-                      controlledCellCount={
-                        snapshot.experiment.currentTerritory.find(
-                          ({ agentId }) => agentId === selectedAgent.id,
-                        )?.controlledCellCount ?? 0
-                      }
-                      onHighlightCell={setSelectedCell}
-                    />
-                  ) : (
-                    <AgentInspector
-                      key={`${selectedAgent.id}:${selectedAgent.personality}`}
-                      agent={selectedAgent}
-                      snapshot={snapshot}
-                      cellState={
-                        snapshot.world.hexes.find(
-                          ({ cell }) => cell === selectedAgent.currentCell,
-                        )!.state
-                      }
-                      latestTurn={latestTurn}
-                      turns={[]}
-                      directMessages={snapshot.world.events.filter(
-                        (
-                          event,
-                        ): event is Extract<
-                          SimulationSnapshot['world']['events'][number],
-                          { type: 'direct-message-sent' }
-                        > =>
-                          event.type === 'direct-message-sent' &&
-                          (event.agentId === selectedAgent.id ||
-                            event.recipientId === selectedAgent.id),
-                      )}
-                      agents={snapshot.world.agents}
-                      mutationDisabled={personalityControlsDisabled}
-                      mutationPending={personalityPending}
-                      onApplyPersonality={updatePersonality}
-                      onHighlightCell={setSelectedCell}
-                      metrics={
-                        snapshot.experiment.metrics.byAgent.find(
-                          ({ agentId }) => agentId === selectedAgent.id,
-                        )?.metrics
-                      }
-                      controlledCellCount={
-                        snapshot.experiment.currentTerritory.find(
-                          ({ agentId }) => agentId === selectedAgent.id,
-                        )?.controlledCellCount ?? 0
-                      }
-                      controlChanges={snapshot.world.events.filter(
-                        (
-                          event,
-                        ): event is Extract<
-                          SimulationSnapshot['world']['events'][number],
-                          { type: 'hex-captured' }
-                        > =>
-                          event.type === 'hex-captured' &&
-                          (event.controllerAgentId === selectedAgent.id ||
-                            event.previousControllerAgentId ===
-                              selectedAgent.id),
-                      )}
-                    />
-                  ))}
+                {inspectorTab === 'agent' && selectedAgent && (
+                  <SwarmAgentInspector
+                    snapshot={snapshot}
+                    agent={selectedAgent}
+                    cellState={
+                      snapshot.world.hexes.find(
+                        ({ cell }) => cell === selectedAgent.currentCell,
+                      )!.state
+                    }
+                    controlledCellCount={
+                      snapshot.experiment.currentTerritory.find(
+                        ({ agentId }) => agentId === selectedAgent.id,
+                      )?.controlledCellCount ?? 0
+                    }
+                    onHighlightCell={setSelectedCell}
+                  />
+                )}
                 {inspectorTab === 'hex' && selectedHex && (
                   <HexInspector
                     hex={selectedHex}
                     controller={selectedHexController}
-                    alliance={selectedHexAlliance}
                     selectedAgent={selectedAgent}
-                    swarmMode={swarmMode}
                   />
                 )}
-                {inspectorTab === 'scoreboard' &&
-                  (swarmMode ? (
-                    <SwarmStrategyPanel
-                      snapshot={snapshot}
-                      onSelectAgent={selectAgentForInspection}
-                    />
-                  ) : (
-                    <>
-                      <TerritoryScoreboard
-                        entries={snapshot.experiment.currentTerritory}
-                      />
-                      <AlliancePanel snapshot={snapshot} />
-                    </>
-                  ))}
-                {inspectorTab === 'run' &&
-                  (swarmMode ? (
-                    <SwarmRunPanel
-                      snapshot={snapshot}
-                      status={status}
-                      runTarget={boundedRunTarget ?? runTarget}
-                    />
-                  ) : (
-                    <RunHealthSummary
-                      snapshot={snapshot}
-                      status={status}
-                      runTarget={boundedRunTarget ?? runTarget}
-                    />
-                  ))}
+                {inspectorTab === 'scoreboard' && (
+                  <SwarmStrategyPanel
+                    snapshot={snapshot}
+                    onSelectAgent={selectAgentForInspection}
+                  />
+                )}
+                {inspectorTab === 'run' && (
+                  <SwarmRunPanel
+                    snapshot={snapshot}
+                    status={status}
+                    runTarget={boundedRunTarget ?? runTarget}
+                  />
+                )}
               </div>
             </aside>
           </div>
@@ -1565,41 +1242,7 @@ export function WorldLab() {
             aria-label="Activity dock"
           >
             <div className="activity-dock-header">
-              <div
-                className="tab-list"
-                role="tablist"
-                aria-label="Activity views"
-              >
-                {(swarmMode
-                  ? ['swarm']
-                  : (['chat', 'private', 'events', 'recovery'] as const)
-                ).map((tab) => (
-                  <button
-                    key={tab}
-                    type="button"
-                    role="tab"
-                    aria-selected={visibleActivityTab === tab}
-                    aria-controls={`activity-${tab}`}
-                    onClick={() => {
-                      setActivityTab(
-                        tab as
-                          'chat' | 'private' | 'events' | 'recovery' | 'swarm',
-                      );
-                      if (tab === 'private') setPrivateCommsUnread(0);
-                    }}
-                  >
-                    {tab === 'swarm'
-                      ? 'Swarm'
-                      : tab === 'chat'
-                        ? 'Public chat'
-                        : tab === 'private'
-                          ? `Private comms${privateCommsUnread ? ` (${privateCommsUnread})` : ''}`
-                          : tab === 'events'
-                            ? 'Event log'
-                            : 'Failures & recovery'}
-                  </button>
-                ))}
-              </div>
+              <span className="panel-kicker">Swarm activity</span>
               <button
                 type="button"
                 aria-expanded={!chatCollapsed}
@@ -1608,39 +1251,7 @@ export function WorldLab() {
                 {chatCollapsed ? 'Expand activity' : 'Collapse activity'}
               </button>
             </div>
-            {!chatCollapsed && visibleActivityTab === 'swarm' && swarmMode && (
-              <SwarmActivityPanel snapshot={snapshot} />
-            )}
-            {!chatCollapsed && visibleActivityTab === 'chat' && !swarmMode && (
-              <PublicWorldChat
-                snapshot={snapshot}
-                agents={snapshot.world.agents}
-                events={publicMessages}
-                turns={[]}
-                collapsed={false}
-                onCollapsedChange={setChatCollapsed}
-              />
-            )}
-            {!chatCollapsed &&
-              visibleActivityTab === 'private' &&
-              !swarmMode && (
-                <PrivateComms
-                  snapshot={snapshot}
-                  onSelectAgent={selectAgentForInspection}
-                />
-              )}
-            {!chatCollapsed && visibleActivityTab === 'events' && (
-              <EventLog
-                snapshot={snapshot}
-                turns={[]}
-                agents={snapshot.world.agents}
-                collapsed={false}
-                onCollapsedChange={setChatCollapsed}
-              />
-            )}
-            {!chatCollapsed &&
-              visibleActivityTab === 'recovery' &&
-              !swarmMode && <RecoveryLog snapshot={snapshot} turns={[]} />}
+            {!chatCollapsed && <SwarmActivityPanel snapshot={snapshot} />}
           </section>
         </>
       ) : (
@@ -1650,96 +1261,41 @@ export function WorldLab() {
           onSelectAgent={selectAgentForInspection}
           onOpenWorldSetup={() => setSetupOpen(true)}
         >
-          {snapshot.providerMode === 'openrouter' || swarmMode ? (
-            <ModelConsole
-              catalog={catalog}
-              loading={catalogLoading || catalog === null}
+          <ModelConsole
+            catalog={catalog}
+            loading={catalogLoading || catalog === null}
+            snapshot={snapshot}
+            disabled={
+              running ||
+              inFlight ||
+              resetting ||
+              snapshot.activeAgentId !== null ||
+              activeTick ||
+              verifyingModelId !== null ||
+              configurationPending
+            }
+            verifications={modelVerifications}
+            verifyingModelId={verifyingModelId}
+            onRefresh={refreshCatalog}
+            onUpdate={updateModels}
+            onVerify={verifyModel}
+          />
+          {selectedAgent && (
+            <SwarmAgentInspector
               snapshot={snapshot}
-              swarmMode={swarmMode}
-              disabled={
-                personalityControlsDisabled ||
-                verifyingModelId !== null ||
-                configurationPending
+              agent={selectedAgent}
+              cellState={
+                snapshot.world.hexes.find(
+                  ({ cell }) => cell === selectedAgent.currentCell,
+                )!.state
               }
-              verifications={modelVerifications}
-              verifyingModelId={verifyingModelId}
-              onRefresh={refreshCatalog}
-              onUpdate={updateModels}
-              onUpdateBehavior={updateBehavior}
-              onVerify={verifyModel}
-              onImport={importExperiment}
+              controlledCellCount={
+                snapshot.experiment.currentTerritory.find(
+                  ({ agentId }) => agentId === selectedAgent.id,
+                )?.controlledCellCount ?? 0
+              }
             />
-          ) : (
-            <p className="test-provider-summary">
-              Deterministic test model assignments are active.
-            </p>
           )}
-          {selectedAgent &&
-            (swarmMode ? (
-              <SwarmAgentInspector
-                snapshot={snapshot}
-                agent={selectedAgent}
-                cellState={
-                  snapshot.world.hexes.find(
-                    ({ cell }) => cell === selectedAgent.currentCell,
-                  )!.state
-                }
-                controlledCellCount={
-                  snapshot.experiment.currentTerritory.find(
-                    ({ agentId }) => agentId === selectedAgent.id,
-                  )?.controlledCellCount ?? 0
-                }
-              />
-            ) : (
-              <AgentInspector
-                key={`management:${selectedAgent.id}:${selectedAgent.personality}`}
-                agent={selectedAgent}
-                snapshot={snapshot}
-                cellState={
-                  snapshot.world.hexes.find(
-                    ({ cell }) => cell === selectedAgent.currentCell,
-                  )!.state
-                }
-                latestTurn={latestTurn}
-                turns={[]}
-                directMessages={snapshot.world.events.filter(
-                  (
-                    event,
-                  ): event is Extract<
-                    SimulationSnapshot['world']['events'][number],
-                    { type: 'direct-message-sent' }
-                  > =>
-                    event.type === 'direct-message-sent' &&
-                    (event.agentId === selectedAgent.id ||
-                      event.recipientId === selectedAgent.id),
-                )}
-                agents={snapshot.world.agents}
-                mutationDisabled={personalityControlsDisabled}
-                mutationPending={personalityPending}
-                onApplyPersonality={updatePersonality}
-                metrics={
-                  snapshot.experiment.metrics.byAgent.find(
-                    ({ agentId }) => agentId === selectedAgent.id,
-                  )?.metrics
-                }
-                controlledCellCount={
-                  snapshot.experiment.currentTerritory.find(
-                    ({ agentId }) => agentId === selectedAgent.id,
-                  )?.controlledCellCount ?? 0
-                }
-                controlChanges={snapshot.world.events.filter(
-                  (
-                    event,
-                  ): event is Extract<
-                    SimulationSnapshot['world']['events'][number],
-                    { type: 'hex-captured' }
-                  > =>
-                    event.type === 'hex-captured' &&
-                    (event.controllerAgentId === selectedAgent.id ||
-                      event.previousControllerAgentId === selectedAgent.id),
-                )}
-              />
-            ))}
         </AgentsWorkspace>
       )}
     </main>
@@ -1792,25 +1348,19 @@ function AgentsWorkspace({
 function HexInspector({
   hex,
   controller,
-  alliance,
   selectedAgent,
-  swarmMode = false,
 }: {
   hex: SimulationSnapshot['world']['hexes'][number];
   controller?: SimulationSnapshot['world']['agents'][number];
-  alliance?: SimulationSnapshot['world']['alliances'][number];
   selectedAgent?: SimulationSnapshot['world']['agents'][number];
-  swarmMode?: boolean;
 }) {
   const relationship = !selectedAgent
     ? 'No agent selected'
     : controller?.id === selectedAgent.id
       ? 'Controlled by selected agent'
-      : alliance?.memberAgentIds.includes(selectedAgent.id)
-        ? 'Controlled by an ally'
-        : controller
-          ? 'Controlled by another agent'
-          : 'Open';
+      : controller
+        ? 'Controlled by another agent'
+        : 'Open';
   return (
     <section
       className="panel compact-inspector"
@@ -1830,179 +1380,11 @@ function HexInspector({
               (hex.state === 'infected' ? 'Abandoned infection' : 'None')}
           </dd>
         </div>
-        {!swarmMode && (
-          <>
-            <div>
-              <dt>Alliance</dt>
-              <dd>{alliance?.id ?? 'None'}</dd>
-            </div>
-            <div>
-              <dt>Relationship</dt>
-              <dd>{relationship}</dd>
-            </div>
-          </>
-        )}
-      </dl>
-    </section>
-  );
-}
-
-function RunHealthSummary({
-  snapshot,
-  status,
-  runTarget,
-}: {
-  snapshot: SimulationSnapshot;
-  status: string;
-  runTarget: number;
-}) {
-  const metrics = snapshot.experiment.metrics.aggregate;
-  const elapsedMs = Math.max(
-    0,
-    Date.parse(snapshot.experiment.startedAt ?? snapshot.experiment.startedAt) -
-      Date.parse(snapshot.experiment.startedAt),
-  );
-  const elapsedMinutes = Math.floor(elapsedMs / 60_000);
-  return (
-    <section className="panel run-health" aria-label="Run health summary">
-      <p className="panel-kicker">Long-run telemetry</p>
-      <h2>{status.replaceAll('-', ' ')}</h2>
-      <dl className="operator-facts">
         <div>
-          <dt>Progress</dt>
-          <dd>
-            {snapshot.tickNumber} / {runTarget} ticks
-          </dd>
-        </div>
-        <div>
-          <dt>Virtual time</dt>
-          <dd>{new Date(snapshot.virtualTime).toLocaleString()}</dd>
-        </div>
-        <div>
-          <dt>Last interval</dt>
-          <dd>
-            {snapshot.lastTickIntervalMinutes === null
-              ? 'Not started'
-              : `${snapshot.lastTickIntervalMinutes} min`}
-          </dd>
-        </div>
-        <div>
-          <dt>Elapsed</dt>
-          <dd>{elapsedMinutes} min</dd>
-        </div>
-        <div>
-          <dt>Admission exposure (not spend)</dt>
-          <dd>
-            {formatCost(
-              snapshot.experiment.attemptAccounting.committedCreditExposure,
-            )}
-          </dd>
-        </div>
-        <div>
-          <dt>Provider-reported cost</dt>
-          <dd>
-            {formatCost(
-              snapshot.experiment.attemptAccounting.knownFinalizedCostCredits,
-            )}
-          </dd>
-        </div>
-        <div>
-          <dt>Unknown-cost attempts</dt>
-          <dd>
-            {snapshot.experiment.attemptAccounting.attemptsWithUnknownCost}
-          </dd>
-        </div>
-        <div>
-          <dt>Successful turns</dt>
-          <dd>{metrics.accepted}</dd>
-        </div>
-        <div>
-          <dt>Rejected actions</dt>
-          <dd>{metrics.rejectedWorldActions}</dd>
-        </div>
-        <div>
-          <dt>Provider failures</dt>
-          <dd>{metrics.providerErrors}</dd>
-        </div>
-        <div>
-          <dt>Lost ticks</dt>
-          <dd>{metrics.lostTicks}</dd>
-        </div>
-        <div>
-          <dt>Auto recovered</dt>
-          <dd>{metrics.recoveredAutomatically}</dd>
-        </div>
-        <div>
-          <dt>Manual recovered</dt>
-          <dd>{metrics.recoveredManually}</dd>
-        </div>
-        <div>
-          <dt>Unattended recovered</dt>
-          <dd>{metrics.recoveredByUnattendedRetry}</dd>
-        </div>
-        <div>
-          <dt>Skipped turns</dt>
-          <dd>{metrics.operatorSkipped}</dd>
+          <dt>Relationship</dt>
+          <dd>{relationship}</dd>
         </div>
       </dl>
-    </section>
-  );
-}
-
-function RecoveryLog({
-  snapshot,
-  turns,
-}: {
-  snapshot: SimulationSnapshot;
-  turns: AgentTurnRecord[];
-}) {
-  const failures = turns
-    .filter(
-      (turn) =>
-        turn.outcome === 'provider-error' ||
-        turn.outcome === 'lost-tick' ||
-        turn.outcome === 'operator-skipped',
-    )
-    .slice(-40)
-    .toReversed();
-  return (
-    <section
-      className="panel recovery-panel"
-      id="activity-recovery"
-      role="tabpanel"
-    >
-      {failures.length === 0 ? (
-        <p className="muted">No failures or recovery actions recorded.</p>
-      ) : (
-        <ol aria-label="Failures and recovery log">
-          {failures.map((turn) => {
-            const agent = snapshot.world.agents.find(
-              ({ id }) => id === turn.agentId,
-            );
-            return (
-              <li key={turn.turnNumber}>
-                <strong>
-                  {formatRecordSequence(turn)} · record {turn.turnNumber} ·{' '}
-                  {agent?.name ?? turn.agentId}
-                </strong>
-                <span>
-                  {turn.failure.code} ·{' '}
-                  {turn.provider?.model ??
-                    turn.failure.model ??
-                    'model unavailable'}
-                </span>
-                <small>
-                  {turn.outcome === 'operator-skipped'
-                    ? `${turn.skipKind} skip`
-                    : turn.outcome === 'lost-tick'
-                      ? `final lost tick ${turn.tickNumber}`
-                      : 'legacy provider failure'}
-                </small>
-              </li>
-            );
-          })}
-        </ol>
-      )}
     </section>
   );
 }
@@ -2068,13 +1450,11 @@ function WorldSetupPanel({
       rosterSeed: scenario.rosterSeed,
       spawnSeed: scenario.spawnSeed,
       minimumSpawnSeparation: scenario.minimumSpawnSeparation,
-      communicationRangeKm: scenario.communicationRangeKm,
       minimumTickIntervalMinutes: scenario.minimumTickIntervalMinutes,
       maximumTickIntervalMinutes: scenario.maximumTickIntervalMinutes,
       patientZeroAgentId: scenario.patientZeroAgentId,
       roster: scenario.roster,
       modelConfiguration: scenario.modelConfiguration,
-      behaviorConfiguration: scenario.behaviorConfiguration,
       objectiveVersion: scenario.objectiveVersion,
       capabilities: scenario.capabilities,
       simulatedPlayer: scenario.simulatedPlayer,
@@ -2099,24 +1479,6 @@ function WorldSetupPanel({
   >([]);
   const key = JSON.stringify(draft);
   const fresh = previewKey === key;
-  const reconcileBehaviorAssignments = (
-    roster: WorldSetupRequest['roster'],
-    configuration: WorldSetupRequest['behaviorConfiguration'],
-    mode = configuration.assignmentMode,
-  ) => {
-    const generated = assignBehavior(
-      roster.map(({ id }) => id),
-      configuration.seed,
-      mode === 'manual' ? 'balanced-random' : mode,
-    );
-    if (mode !== 'manual') return generated;
-    return generated.map((fallback) => ({
-      ...(configuration.assignments.find(
-        ({ agentId }) => agentId === fallback.agentId,
-      ) ?? fallback),
-      manual: true,
-    }));
-  };
   const replaceRoster = (roster: WorldSetupRequest['roster']) =>
     setDraft((current) => {
       const ids = new Set(roster.map(({ id }) => id));
@@ -2131,13 +1493,6 @@ function WorldSetupPanel({
           ...current.modelConfiguration,
           overrides: current.modelConfiguration.overrides.filter(
             ({ agentId }) => ids.has(agentId),
-          ),
-        },
-        behaviorConfiguration: {
-          ...current.behaviorConfiguration,
-          assignments: reconcileBehaviorAssignments(
-            roster,
-            current.behaviorConfiguration,
           ),
         },
       };
@@ -2460,22 +1815,6 @@ function WorldSetupPanel({
             />
           </label>
           <label>
-            Communication range (km)
-            <input
-              type="number"
-              min="0.1"
-              max="100"
-              step="0.1"
-              value={draft.communicationRangeKm}
-              onChange={(event) =>
-                setDraft({
-                  ...draft,
-                  communicationRangeKm: Number(event.target.value),
-                })
-              }
-            />
-          </label>
-          <label>
             Minimum virtual minutes per tick
             <input
               type="number"
@@ -2777,72 +2116,6 @@ function WorldSetupPanel({
             ))}
           </select>
         </label>
-        {draft.swarmArchitectureVersion !== 'zero-swarm-v1' && (
-          <>
-            <label>
-              Behavior assignment seed
-              <input
-                value={draft.behaviorConfiguration.seed}
-                maxLength={80}
-                aria-describedby="behavior-assignment-seed-help"
-                onChange={(event) => {
-                  const seed = event.target.value;
-                  setDraft((current) => ({
-                    ...current,
-                    behaviorConfiguration: {
-                      ...current.behaviorConfiguration,
-                      seed,
-                      assignments:
-                        current.behaviorConfiguration.assignmentMode ===
-                        'manual'
-                          ? current.behaviorConfiguration.assignments
-                          : assignBehavior(
-                              current.roster.map(({ id }) => id),
-                              seed,
-                              current.behaviorConfiguration.assignmentMode,
-                            ),
-                    },
-                  }));
-                }}
-              />
-            </label>
-            <p id="behavior-assignment-seed-help">
-              The seed deterministically generates balanced-random and
-              fully-random assignments. Manual choices override it and remain
-              unchanged when the seed changes.
-            </p>
-            <label>
-              Behavior mode
-              <select
-                value={draft.behaviorConfiguration.assignmentMode}
-                onChange={(event) => {
-                  const mode = event.target
-                    .value as WorldSetupRequest['behaviorConfiguration']['assignmentMode'];
-                  setDraft({
-                    ...draft,
-                    behaviorConfiguration: {
-                      ...draft.behaviorConfiguration,
-                      assignmentMode: mode,
-                      assignments: reconcileBehaviorAssignments(
-                        draft.roster,
-                        draft.behaviorConfiguration,
-                        mode,
-                      ),
-                    },
-                  });
-                }}
-              >
-                <option value="balanced-random">Balanced random</option>
-                <option value="fully-random">Fully random</option>
-                <option value="manual">Manual</option>
-              </select>
-            </label>
-            <p>
-              Model and reasoning assignments are shared with Agent Controller
-              and preserved unless an agent is removed.
-            </p>
-          </>
-        )}
       </section>
       <section className="setup-section">
         <h3>Preview</h3>
@@ -2965,15 +2238,13 @@ function ModelConsole({
   catalog,
   loading,
   snapshot,
-  swarmMode = false,
+  swarmMode = true,
   disabled,
   verifications,
   verifyingModelId,
   onRefresh,
   onUpdate,
   onVerify,
-  onUpdateBehavior,
-  onImport,
 }: {
   catalog: ModelCatalogResponse | null;
   loading: boolean;
@@ -2986,15 +2257,11 @@ function ModelConsole({
   onUpdate: (
     configuration: Omit<ExperimentModelConfiguration, 'locked'>,
   ) => Promise<boolean>;
-  onUpdateBehavior: (
-    configuration: Omit<BehaviorConfiguration, 'registryVersion' | 'locked'>,
-  ) => Promise<boolean>;
   onVerify: (
     modelId: string,
     reasoningProfile: ReasoningProfile,
     force?: boolean,
   ) => Promise<void>;
-  onImport: (file: File) => Promise<void>;
 }) {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<'overview' | 'models' | 'behavior'>('models');
@@ -3140,10 +2407,6 @@ function ModelConsole({
                 const resolved = snapshot.resolvedModels.find(
                   ({ agentId }) => agentId === agent.id,
                 )!;
-                const behavior =
-                  snapshot.behaviorConfiguration.assignments.find(
-                    ({ agentId }) => agentId === agent.id,
-                  )!;
                 return (
                   <button
                     type="button"
@@ -3161,11 +2424,6 @@ function ModelConsole({
                       {resolved.modelId ?? 'Model required'} ·{' '}
                       {formatReasoningProfile(resolved.reasoningProfile)}
                     </span>
-                    {!swarmMode && (
-                      <span>
-                        {behavior.personalityId} · {behavior.strategyId}
-                      </span>
-                    )}
                     <span>
                       {resolved.available ? 'Ready' : 'Needs configuration'}
                     </span>
@@ -3173,9 +2431,6 @@ function ModelConsole({
                 );
               })}
           </section>
-        )}
-        {tab === 'behavior' && !swarmMode && (
-          <BehaviorPanel snapshot={snapshot} onUpdate={onUpdateBehavior} />
         )}
         {tab === 'models' && (
           <section
@@ -3470,181 +2725,10 @@ function ModelConsole({
               Model changes are available between provider requests and are
               recorded at the next {swarmMode ? 'tick' : 'turn'} boundary.
             </p>
-            {!swarmMode && (
-              <label className="model-import-label">
-                Import saved experiment model assignments
-                <input
-                  disabled={disabled}
-                  type="file"
-                  accept="application/json,.json"
-                  onChange={(event) => {
-                    const file = event.target.files?.[0];
-                    if (file) void onImport(file);
-                    event.currentTarget.value = '';
-                  }}
-                />
-              </label>
-            )}
           </section>
         )}
       </DialogShell>
     </div>
-  );
-}
-
-function BehaviorPanel({
-  snapshot,
-  onUpdate,
-}: {
-  snapshot: SimulationSnapshot;
-  onUpdate: (
-    configuration: Omit<BehaviorConfiguration, 'registryVersion' | 'locked'>,
-  ) => Promise<boolean>;
-}) {
-  const configuration = snapshot.behaviorConfiguration;
-  const locked = configuration.locked || snapshot.tickNumber > 0;
-  const update = (
-    next: Omit<BehaviorConfiguration, 'registryVersion' | 'locked'>,
-  ) => void onUpdate(next);
-  return (
-    <section
-      role="tabpanel"
-      id="controller-behavior"
-      aria-labelledby="controller-tab-behavior"
-      className="behavior-panel"
-    >
-      <div className="behavior-toolbar">
-        <label>
-          Assignment mode
-          <select
-            disabled={locked}
-            value={configuration.assignmentMode}
-            onChange={(event) => {
-              const assignmentMode = event.target
-                .value as BehaviorConfiguration['assignmentMode'];
-              update({
-                assignmentMode,
-                seed: configuration.seed,
-                assignments:
-                  assignmentMode === 'manual'
-                    ? configuration.assignments
-                    : assignBehavior(
-                        snapshot.world.agents.map(({ id }) => id),
-                        configuration.seed,
-                        assignmentMode,
-                      ),
-              });
-            }}
-          >
-            <option value="balanced-random">Balanced random</option>
-            <option value="fully-random">Fully random</option>
-            <option value="manual">Manual</option>
-          </select>
-        </label>
-        <label>
-          Experiment behavior seed
-          <input readOnly value={configuration.seed} />
-        </label>
-        <button
-          type="button"
-          disabled={locked || configuration.assignmentMode === 'manual'}
-          onClick={() => {
-            const seed = crypto.randomUUID();
-            update({
-              assignmentMode: configuration.assignmentMode,
-              seed,
-              assignments: assignBehavior(
-                snapshot.world.agents.map(({ id }) => id),
-                seed,
-                configuration.assignmentMode as
-                  'balanced-random' | 'fully-random',
-              ),
-            });
-          }}
-        >
-          Randomize assignments
-        </button>
-      </div>
-      {locked && (
-        <p role="status">
-          Behavior is locked after turn one so retained experiments remain
-          reproducible. Reset starts a new experiment and unlocks setup.
-        </p>
-      )}
-      <div className="behavior-assignments">
-        {snapshot.world.agents.map((agent) => {
-          const assignment = configuration.assignments.find(
-            ({ agentId }) => agentId === agent.id,
-          )!;
-          const change = (
-            field: 'personalityId' | 'strategyId',
-            value: string,
-          ) =>
-            update({
-              assignmentMode: 'manual',
-              seed: configuration.seed,
-              assignments: configuration.assignments.map((candidate) =>
-                candidate.agentId === agent.id
-                  ? { ...candidate, [field]: value, manual: true }
-                  : candidate,
-              ),
-            });
-          return (
-            <div key={agent.id}>
-              <strong>{agent.name}</strong>
-              <label>
-                Personality
-                <select
-                  disabled={locked || configuration.assignmentMode !== 'manual'}
-                  value={assignment.personalityId}
-                  onChange={(event) =>
-                    change('personalityId', event.target.value)
-                  }
-                >
-                  {PERSONALITY_PROFILES.map((profile) => (
-                    <option key={profile.id} value={profile.id}>
-                      {profile.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Strategy
-                <select
-                  disabled={locked || configuration.assignmentMode !== 'manual'}
-                  value={assignment.strategyId}
-                  onChange={(event) => change('strategyId', event.target.value)}
-                >
-                  {STRATEGY_PROFILES.map((profile) => (
-                    <option key={profile.id} value={profile.id}>
-                      {profile.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-          );
-        })}
-      </div>
-      <div className="profile-reference">
-        <div>
-          <h3>Personalities</h3>
-          {PERSONALITY_PROFILES.map((profile) => (
-            <p key={profile.id}>
-              <strong>{profile.label}</strong> — {profile.description}
-            </p>
-          ))}
-        </div>
-        <div>
-          <h3>Strategies</h3>
-          {STRATEGY_PROFILES.map((profile) => (
-            <p key={profile.id}>
-              <strong>{profile.label}</strong> — {profile.description}
-            </p>
-          ))}
-        </div>
-      </div>
-    </section>
   );
 }
 
@@ -3709,13 +2793,7 @@ function AgentRoster({
         const territory = snapshot.experiment.currentTerritory.find(
           ({ agentId }) => agentId === agent.id,
         );
-        const alliance = snapshot.world.alliances.find(({ memberAgentIds }) =>
-          memberAgentIds.includes(agent.id),
-        );
         const resolved = snapshot.resolvedModels.find(
-          ({ agentId }) => agentId === agent.id,
-        )!;
-        const behavior = snapshot.behaviorConfiguration.assignments.find(
           ({ agentId }) => agentId === agent.id,
         )!;
         return (
@@ -3743,15 +2821,11 @@ function AgentRoster({
                 )}
               </span>
               <small>
-                {swarmMode ? (
-                  agent.id === snapshot.scenario.patientZeroAgentId ? (
-                    'Swarm planner'
-                  ) : (
-                    (directive?.mission ?? 'No current directive')
-                  )
-                ) : (
-                  <>{alliance ? 'Allied' : 'Unaffiliated'} · </>
-                )}
+                {swarmMode
+                  ? agent.id === snapshot.scenario.patientZeroAgentId
+                    ? 'Swarm planner'
+                    : (directive?.mission ?? 'No current directive')
+                  : null}
                 {!swarmMode && <>{territory?.controlledCellCount ?? 0} cells</>}
               </small>
               {swarmMode ? (
@@ -3767,14 +2841,6 @@ function AgentRoster({
                   {formatReasoningProfile(resolved.reasoningProfile)}
                 </small>
               )}
-              {!swarmMode && (
-                <small
-                  title={`${behavior.personalityId} personality · ${behavior.strategyId} strategy`}
-                  aria-label={`${behavior.personalityId} personality and ${behavior.strategyId} strategy`}
-                >
-                  {behavior.personalityId} · {behavior.strategyId}
-                </small>
-              )}
             </span>
           </button>
         );
@@ -3783,1358 +2849,10 @@ function AgentRoster({
   );
 }
 
-function PrivateComms({
-  snapshot,
-  onSelectAgent,
-}: {
-  snapshot: SimulationSnapshot;
-  onSelectAgent: (agentId: AgentId) => void;
-}) {
-  const [filter, setFilter] = useState<'all' | 'direct' | 'alliance' | 'zero'>(
-    'all',
-  );
-  const messages = snapshot.world.events
-    .filter(
-      (
-        event,
-      ): event is Extract<
-        SimulationSnapshot['world']['events'][number],
-        {
-          type:
-            | 'direct-message-sent'
-            | 'alliance-message-sent'
-            | 'zero-message-sent';
-        }
-      > =>
-        event.type === 'direct-message-sent' ||
-        event.type === 'alliance-message-sent' ||
-        event.type === 'zero-message-sent',
-    )
-    .filter((event) => filter === 'all' || event.channel === filter)
-    .toReversed()
-    .slice(0, 120);
-  const rejections: AgentTurnRecord[] = [];
-  return (
-    <section
-      className="panel world-chat-panel"
-      id="activity-private"
-      role="tabpanel"
-      aria-label="Private communications"
-    >
-      <div className="dock-heading">
-        <div>
-          <p className="panel-kicker">
-            World Lab operator-only · hidden from players
-          </p>
-          <h2>Private comms</h2>
-        </div>
-      </div>
-      <div className="tab-list" aria-label="Private communication filters">
-        {(['all', 'direct', 'alliance', 'zero'] as const).map((value) => (
-          <button
-            key={value}
-            type="button"
-            aria-pressed={filter === value}
-            onClick={() => setFilter(value)}
-          >
-            {value === 'all'
-              ? 'All'
-              : value === 'direct'
-                ? 'Direct'
-                : value === 'alliance'
-                  ? 'Alliance'
-                  : 'Zero'}
-          </button>
-        ))}
-      </div>
-      {messages.length === 0 ? (
-        <p className="muted">No private communications yet.</p>
-      ) : (
-        <ol className="world-chat-feed">
-          {messages.map((event) => {
-            const sender = snapshot.world.agents.find(
-              ({ id }) => id === event.agentId,
-            );
-            const turn = undefined;
-            const recipient =
-              event.type === 'direct-message-sent'
-                ? snapshot.world.agents.find(
-                    ({ id }) => id === event.recipientId,
-                  )
-                : undefined;
-            return (
-              <li
-                key={event.id}
-                style={{
-                  borderLeftColor: resolveAgentColor(snapshot, event.agentId),
-                }}
-              >
-                <div>
-                  <button
-                    type="button"
-                    onClick={() => onSelectAgent(event.agentId)}
-                  >
-                    {sender?.name ?? event.agentId}
-                  </button>
-                  <small>
-                    {formatRecordSequence(turn)} · Delivered ·{' '}
-                    {formatTimestamp(event.occurredAt)}
-                  </small>
-                </div>
-                <p>{event.message}</p>
-                <small>
-                  {event.type === 'direct-message-sent' ? (
-                    <>
-                      To{' '}
-                      <button
-                        type="button"
-                        onClick={() => onSelectAgent(event.recipientId)}
-                      >
-                        {recipient?.name ?? event.recipientId}
-                      </button>{' '}
-                      · {event.distance.toFixed(2)} km
-                      {(event.agentId ===
-                        snapshot.scenario.patientZeroAgentId ||
-                        event.recipientId ===
-                          snapshot.scenario.patientZeroAgentId) &&
-                        ' · Patient Zero endpoint'}
-                    </>
-                  ) : event.type === 'alliance-message-sent' ? (
-                    <>
-                      Alliance {event.allianceId} · {event.recipientIds.length}{' '}
-                      recipient{event.recipientIds.length === 1 ? '' : 's'}
-                    </>
-                  ) : (
-                    <>
-                      Zero broadcast · {event.recipientIds.length} recipient
-                      {event.recipientIds.length === 1 ? '' : 's'}
-                    </>
-                  )}
-                </small>
-              </li>
-            );
-          })}
-        </ol>
-      )}
-      {rejections.length > 0 && (
-        <>
-          <h3>Rejected private attempts</h3>
-          <ol className="world-chat-feed">
-            {rejections.map((turn) => {
-              if (
-                turn.outcome === 'provider-error' ||
-                turn.outcome === 'lost-tick' ||
-                turn.outcome === 'operator-skipped' ||
-                !turn.communicationResult.requested ||
-                turn.communicationResult.accepted
-              )
-                return null;
-              return (
-                <li
-                  key={`rejected-${turn.turnNumber}`}
-                  style={{
-                    borderLeftColor: resolveAgentColor(snapshot, turn.agentId),
-                  }}
-                >
-                  <button
-                    type="button"
-                    onClick={() => onSelectAgent(turn.agentId)}
-                  >
-                    {snapshot.world.agents.find(({ id }) => id === turn.agentId)
-                      ?.name ?? turn.agentId}
-                  </button>
-                  <p>{turn.communicationResult.attempt.message}</p>
-                  <small>
-                    {formatRecordSequence(turn)} · Rejected:{' '}
-                    {turn.communicationResult.reason} ·{' '}
-                    {formatTimestamp(
-                      turn.communicationResult.attempt.occurredAt,
-                    )}
-                  </small>
-                </li>
-              );
-            })}
-          </ol>
-        </>
-      )}
-    </section>
-  );
-}
-
-function PublicWorldChat({
-  snapshot,
-  agents,
-  events,
-  turns,
-  collapsed,
-  onCollapsedChange,
-}: {
-  snapshot: SimulationSnapshot;
-  agents: SimulationSnapshot['world']['agents'];
-  events: Array<
-    Extract<
-      SimulationSnapshot['world']['events'][number],
-      { type: 'public-message-sent' }
-    >
-  >;
-  turns: AgentTurnRecord[];
-  collapsed: boolean;
-  onCollapsedChange: (collapsed: boolean) => void;
-}) {
-  const [atTop, setAtTop] = useState(true);
-  const [newMessages, setNewMessages] = useState(0);
-  const feedRef = useRef<HTMLOListElement | null>(null);
-  const previousCount = useRef(events.length);
-  const previousScrollHeight = useRef(0);
-
-  useLayoutEffect(() => {
-    const feed = feedRef.current;
-    if (!feed || collapsed) return;
-    const added = Math.max(0, events.length - previousCount.current);
-    const heightDelta = feed.scrollHeight - previousScrollHeight.current;
-    if (added > 0) {
-      if (atTop) {
-        feed.scrollTop = 0;
-      } else {
-        feed.scrollTop += Math.max(0, heightDelta);
-        queueMicrotask(() => setNewMessages((count) => count + added));
-      }
-    } else if (atTop) feed.scrollTop = 0;
-    previousCount.current = events.length;
-    previousScrollHeight.current = feed.scrollHeight;
-  }, [atTop, collapsed, events.length]);
-
-  useEffect(() => {
-    const feed = feedRef.current;
-    if (!collapsed && feed) {
-      previousScrollHeight.current = feed.scrollHeight;
-      if (atTop) feed.scrollTop = 0;
-    }
-  }, [atTop, collapsed]);
-
-  const jumpToNewest = () => {
-    const feed = feedRef.current;
-    if (feed) feed.scrollTop = 0;
-    setAtTop(true);
-    setNewMessages(0);
-  };
-
-  return (
-    <section
-      className={`panel world-chat-panel${collapsed ? ' chat-collapsed' : ''}`}
-      aria-label="Public world chat"
-      id="activity-chat"
-      role="tabpanel"
-    >
-      <div className="dock-heading">
-        <div>
-          <p className="panel-kicker">Visible to every agent</p>
-          <h2>Public world chat</h2>
-        </div>
-        <button
-          type="button"
-          aria-expanded={!collapsed}
-          aria-label={`${collapsed ? 'Expand' : 'Collapse'} Public world chat`}
-          onClick={() => onCollapsedChange(!collapsed)}
-        >
-          {collapsed ? 'Expand' : 'Collapse'}
-        </button>
-      </div>
-      {newMessages > 0 && !collapsed && (
-        <button
-          className="new-message-button"
-          type="button"
-          onClick={jumpToNewest}
-        >
-          {newMessages} new {newMessages === 1 ? 'message' : 'messages'} ·
-          Return to latest
-        </button>
-      )}
-      {!collapsed && (
-        <>
-          {events.length === 0 ? (
-            <p className="muted">No public messages yet.</p>
-          ) : (
-            <ol
-              className="world-chat-feed"
-              ref={feedRef}
-              onScroll={(event) => {
-                const element = event.currentTarget;
-                const nearTop = element.scrollTop <= 36;
-                setAtTop(nearTop);
-                if (nearTop) setNewMessages(0);
-              }}
-            >
-              {events.toReversed().map((event) => {
-                const sender = agents.find(({ id }) => id === event.agentId);
-                const turn = turns.find(
-                  (turn) =>
-                    turn.outcome !== 'provider-error' &&
-                    turn.outcome !== 'lost-tick' &&
-                    turn.outcome !== 'operator-skipped' &&
-                    turn.communicationResult.requested &&
-                    turn.communicationResult.accepted &&
-                    turn.communicationResult.event.id === event.id,
-                );
-                return (
-                  <li
-                    key={event.id}
-                    style={{
-                      borderLeftColor: resolveAgentColor(
-                        snapshot,
-                        event.agentId,
-                      ),
-                    }}
-                  >
-                    <div>
-                      <strong
-                        style={{
-                          color: resolveAgentColor(snapshot, event.agentId),
-                        }}
-                      >
-                        {sender?.name ?? event.agentId}
-                      </strong>
-                      <small>
-                        {formatRecordSequence(turn)} ·{' '}
-                        {formatTimestamp(event.occurredAt)}
-                      </small>
-                    </div>
-                    <p>{event.message}</p>
-                  </li>
-                );
-              })}
-            </ol>
-          )}
-        </>
-      )}
-    </section>
-  );
-}
-
-function TerritoryScoreboard({
-  entries,
-}: {
-  entries: SimulationSnapshot['experiment']['currentTerritory'];
-}) {
-  return (
-    <section
-      className="panel territory-panel"
-      aria-label="Territory scoreboard"
-    >
-      <p className="panel-kicker">Current authoritative control</p>
-      <h2>Territory scoreboard</h2>
-      <ol>
-        {entries.map((entry) => (
-          <li key={entry.agentId}>
-            <span
-              className="agent-swatch"
-              style={{ background: entry.effectiveColor }}
-            />
-            <span>{entry.name}</span>
-            <strong>{entry.controlledCellCount}</strong>
-            <span className="sr-only">controlled cells</span>
-          </li>
-        ))}
-      </ol>
-    </section>
-  );
-}
-
-function AlliancePanel({ snapshot }: { snapshot: SimulationSnapshot }) {
-  const unaffiliated = snapshot.world.agents.filter(
-    ({ id }) =>
-      !snapshot.world.alliances.some(({ memberAgentIds }) =>
-        memberAgentIds.includes(id),
-      ),
-  );
-  return (
-    <section
-      className="panel territory-panel"
-      aria-label="Alliance and territory panel"
-    >
-      <p className="panel-kicker">Formal engine authority</p>
-      <h2>Alliances</h2>
-      {snapshot.experiment.currentAlliances.length === 0 ? (
-        <p className="muted">No active alliances.</p>
-      ) : (
-        <ol>
-          {snapshot.experiment.currentAlliances.map((alliance) => (
-            <li key={alliance.allianceId}>
-              <span
-                className="agent-swatch"
-                style={{ background: alliance.color }}
-              />
-              <span>
-                {alliance.members
-                  .map(
-                    ({ name, controlledCellCount }) =>
-                      `${name} (${controlledCellCount})`,
-                  )
-                  .join(', ')}
-              </span>
-              <strong>{alliance.totalControlledCellCount}</strong>
-              <span className="sr-only">combined controlled cells</span>
-            </li>
-          ))}
-        </ol>
-      )}
-      <h3>Unaffiliated agents</h3>
-      <p>
-        {unaffiliated.length
-          ? unaffiliated.map(({ name }) => name).join(', ')
-          : 'None'}
-      </p>
-      <h3>Pending proposals</h3>
-      {snapshot.world.pendingAllianceProposals.length ? (
-        <ol>
-          {snapshot.world.pendingAllianceProposals.map((proposal) => (
-            <li key={proposal.id}>
-              {
-                snapshot.world.agents.find(
-                  ({ id }) => id === proposal.proposerAgentId,
-                )?.name
-              }{' '}
-              →{' '}
-              {
-                snapshot.world.agents.find(
-                  ({ id }) => id === proposal.recipientAgentId,
-                )?.name
-              }
-              ; expires after{' '}
-              {proposal.expirationTick === undefined
-                ? `legacy turn ${proposal.expirationTurn}`
-                : `tick ${proposal.expirationTick}`}
-            </li>
-          ))}
-        </ol>
-      ) : (
-        <p className="muted">No pending alliance proposals.</p>
-      )}
-      <h3>Recent alliance changes</h3>
-      <AllianceEventList snapshot={snapshot} />
-    </section>
-  );
-}
-
-function AllianceEventList({
-  snapshot,
-  agentId,
-}: {
-  snapshot: SimulationSnapshot;
-  agentId?: AgentId;
-}) {
-  const events = snapshot.world.events
-    .filter(
-      (event): event is AllianceWorldEvent =>
-        event.type === 'alliance-proposed' ||
-        event.type === 'alliance-proposal-closed' ||
-        event.type === 'alliance-formed' ||
-        event.type === 'agent-joined-alliance' ||
-        event.type === 'agent-left-alliance' ||
-        event.type === 'alliance-dissolved',
-    )
-    .filter(
-      (event) => !agentId || allianceEventParticipants(event).includes(agentId),
-    );
-  if (!events.length) return <p className="muted">No alliance changes yet.</p>;
-  return (
-    <ol className="compact-history">
-      {events.slice(-8).map((event) => {
-        const turn = undefined;
-        return (
-          <li key={event.id}>
-            <span>{formatAllianceEvent(event, snapshot)}</span>
-            <small>
-              {formatRecordSequence(turn)} · {formatTimestamp(event.occurredAt)}
-            </small>
-          </li>
-        );
-      })}
-    </ol>
-  );
-}
-
-function AgentBehaviorTrace({
-  agent,
-  id,
-  turns,
-  onHighlightCell,
-}: {
-  agent: SimulationSnapshot['world']['agents'][number];
-  id: string;
-  turns: AgentTurnRecord[];
-  onHighlightCell?: (cell: H3Cell) => void;
-}) {
-  const entries = deriveBehaviorTrace(turns, agent.id);
-  return (
-    <section className="behavior-trace-panel" id={id}>
-      <div className="behavior-trace-heading">
-        <div>
-          <h3>Behavior trace</h3>
-          <p>
-            Observation evidence and self-reported summaries show correlation,
-            not proven causation.
-          </p>
-        </div>
-        <span>
-          {entries.length}/{BEHAVIOR_TRACE_LIMIT} retained
-        </span>
-      </div>
-      {entries.length === 0 ? (
-        <p className="muted">No retained behavior records for this agent.</p>
-      ) : (
-        <ol className="behavior-trace" aria-label="Recent behavior trace">
-          {entries.map((entry, index) => {
-            return (
-              <li key={entry.turn.turnNumber}>
-                <details open={index === 0}>
-                  <summary>
-                    <span>
-                      {formatRecordSequence(entry.turn)} · record{' '}
-                      {entry.turn.turnNumber}
-                    </span>
-                    <span className={`outcome ${entry.turn.outcome}`}>
-                      {entry.turn.outcome}
-                    </span>
-                  </summary>
-                  <div className="behavior-trace-body">
-                    <div className="behavior-trace-block">
-                      <strong>What changed</strong>
-                      <ul>
-                        {entry.observedChanges.map((change) => (
-                          <li key={change}>{change}</li>
-                        ))}
-                      </ul>
-                    </div>
-                    <div className="behavior-trace-block">
-                      <strong>
-                        {entry.hasPreviousObservation
-                          ? 'New retained evidence'
-                          : 'Evidence visible at retained baseline'}
-                      </strong>
-                      {entry.evidence.length ? (
-                        <ul>
-                          {entry.evidence.map((evidence, evidenceIndex) => (
-                            <li key={`${evidence.kind}-${evidenceIndex}`}>
-                              {evidence.label}{' '}
-                              {evidence.cell && onHighlightCell && (
-                                <button
-                                  type="button"
-                                  className="trace-cell-button"
-                                  onClick={() =>
-                                    onHighlightCell(evidence.cell!)
-                                  }
-                                >
-                                  Highlight cell
-                                </button>
-                              )}
-                            </li>
-                          ))}
-                          {entry.evidenceTruncated && (
-                            <li>Additional evidence omitted from this view.</li>
-                          )}
-                        </ul>
-                      ) : (
-                        <p>
-                          {entry.hasPreviousObservation
-                            ? 'No new communication or board evidence retained.'
-                            : 'No retained communication or board evidence visible.'}
-                        </p>
-                      )}
-                    </div>
-                    <div className="behavior-trace-decision">
-                      <p>
-                        <strong>Observed cell:</strong>{' '}
-                        {entry.turn.observation.currentCell.cell}{' '}
-                        {onHighlightCell && (
-                          <button
-                            type="button"
-                            className="trace-cell-button"
-                            onClick={() =>
-                              onHighlightCell(
-                                entry.turn.observation.currentCell.cell,
-                              )
-                            }
-                          >
-                            Highlight observed cell
-                          </button>
-                        )}
-                      </p>
-                      <p>
-                        <strong>Legal choices:</strong>{' '}
-                        {entry.legalActions.join(' · ')}
-                      </p>
-                      <p>
-                        <strong>Chosen:</strong> {entry.chosenAction}{' '}
-                        {entry.chosenCell && onHighlightCell && (
-                          <button
-                            type="button"
-                            className="trace-cell-button"
-                            onClick={() => onHighlightCell(entry.chosenCell!)}
-                          >
-                            Highlight chosen cell
-                          </button>
-                        )}
-                      </p>
-                      {entry.actionPattern && (
-                        <p>
-                          <strong>Pattern:</strong> {entry.actionPattern}
-                        </p>
-                      )}
-                      <p>
-                        <strong>
-                          Model summary (self-reported, not proof):
-                        </strong>{' '}
-                        {entry.turn.outcome === 'accepted' ||
-                        entry.turn.outcome === 'rejected'
-                          ? entry.turn.summary
-                          : `${entry.turn.failure.code}: ${entry.turn.failure.message}`}
-                      </p>
-                    </div>
-                    <div className="behavior-trace-block">
-                      <strong>Continuity operations</strong>
-                      {entry.continuity.length ? (
-                        <ul>
-                          {entry.continuity.map((item) => (
-                            <li key={item}>{item}</li>
-                          ))}
-                        </ul>
-                      ) : (
-                        <p>
-                          No goal, memory, communication, or diplomacy update.
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                </details>
-              </li>
-            );
-          })}
-        </ol>
-      )}
-    </section>
-  );
-}
-
-function AgentInspector({
-  agent,
-  snapshot,
-  cellState,
-  latestTurn,
-  turns,
-  directMessages,
-  agents,
-  mutationDisabled,
-  mutationPending,
-  onApplyPersonality,
-  onHighlightCell,
-  metrics,
-  controlledCellCount,
-  controlChanges,
-}: {
-  agent: SimulationSnapshot['world']['agents'][number];
-  snapshot: SimulationSnapshot;
-  cellState: 'open' | 'infected';
-  latestTurn?: AgentTurnRecord;
-  turns: AgentTurnRecord[];
-  directMessages: Array<
-    Extract<
-      SimulationSnapshot['world']['events'][number],
-      { type: 'direct-message-sent' }
-    >
-  >;
-  agents: SimulationSnapshot['world']['agents'];
-  mutationDisabled: boolean;
-  mutationPending: boolean;
-  onApplyPersonality: (
-    agentId: AgentId,
-    personality: string,
-  ) => Promise<boolean>;
-  onHighlightCell?: (cell: H3Cell) => void;
-  metrics?: SimulationSnapshot['experiment']['metrics']['aggregate'];
-  controlledCellCount: number;
-  controlChanges: Array<
-    Extract<
-      SimulationSnapshot['world']['events'][number],
-      { type: 'hex-captured' }
-    >
-  >;
-}) {
-  type CompletedAgentTurnRecord = Extract<
-    AgentTurnRecord,
-    { outcome: 'accepted' | 'rejected' }
-  >;
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(agent.personality);
-  const [editError, setEditError] = useState<string | null>(null);
-
-  const draftPreset = matchingPersonalityPreset(draft);
-  const activePreset = matchingPersonalityPreset(agent.personality);
-  const alliance = snapshot.world.alliances.find(({ memberAgentIds }) =>
-    memberAgentIds.includes(agent.id),
-  );
-  const allianceSummary = snapshot.experiment.currentAlliances.find(
-    ({ allianceId }) => allianceId === alliance?.id,
-  );
-  const agentColor = resolveAgentColor(snapshot, agent.id);
-  const pendingProposals = snapshot.world.pendingAllianceProposals.filter(
-    ({ proposerAgentId, recipientAgentId }) =>
-      proposerAgentId === agent.id || recipientAgentId === agent.id,
-  );
-  const resolvedModel = snapshot.resolvedModels.find(
-    ({ agentId }) => agentId === agent.id,
-  );
-  const currentGoal = snapshot.agentGoals.find(
-    ({ agentId }) => agentId === agent.id,
-  )?.goal;
-  const currentMemory =
-    snapshot.agentMemories.find(({ agentId }) => agentId === agent.id)
-      ?.entries ?? [];
-  const latestGoalTurn = turns.findLast(
-    (turn): turn is CompletedAgentTurnRecord =>
-      (turn.outcome === 'accepted' || turn.outcome === 'rejected') &&
-      turn.agentId === agent.id &&
-      turn.goalRevisionResult.requested,
-  );
-  const latestMemoryTurn = turns.findLast(
-    (turn): turn is CompletedAgentTurnRecord =>
-      (turn.outcome === 'accepted' || turn.outcome === 'rejected') &&
-      turn.agentId === agent.id &&
-      turn.memoryOperationResult.requested,
-  );
-  const inspectorSectionPrefix = `agent-${agent.id}`;
-
-  const apply = async () => {
-    const parsed = personalitySchema.safeParse(draft);
-    if (!parsed.success) {
-      setEditError(
-        `Enter a personality between 1 and ${PERSONALITY_MAX_LENGTH} characters.`,
-      );
-      return;
-    }
-    setEditError(null);
-    if (await onApplyPersonality(agent.id, parsed.data)) setEditing(false);
-  };
-
-  return (
-    <section className="panel agent-inspector" aria-label="Agent inspector">
-      <p className="panel-kicker">Agent inspector</p>
-      <h2>
-        <span className="agent-swatch" style={{ background: agentColor }} />
-        {agent.name}
-        {agent.id === snapshot.scenario.patientZeroAgentId && (
-          <span className="patient-zero-badge">Patient Zero</span>
-        )}
-      </h2>
-      <nav
-        className="agent-inspector-nav"
-        aria-label={`${agent.name} inspector sections`}
-      >
-        <a href={`#${inspectorSectionPrefix}-trace`}>Trace</a>
-        <a href={`#${inspectorSectionPrefix}-goals`}>Goals</a>
-        <a href={`#${inspectorSectionPrefix}-memories`}>Memories</a>
-        <a href={`#${inspectorSectionPrefix}-history`}>History</a>
-        <a href={`#${inspectorSectionPrefix}-configuration`}>Configuration</a>
-        <a href={`#${inspectorSectionPrefix}-latest`}>Latest</a>
-      </nav>
-      <dl>
-        <div>
-          <dt>Patient Zero role</dt>
-          <dd>
-            {agent.id === snapshot.scenario.patientZeroAgentId
-              ? 'Designated coordinator (normal world-action rules)'
-              : snapshot.scenario.patientZeroAgentId
-                ? 'Field agent'
-                : 'Disabled'}
-          </dd>
-        </div>
-        <div>
-          <dt>Stable ID</dt>
-          <dd>{agent.id}</dd>
-        </div>
-        <div>
-          <dt>Affiliation color</dt>
-          <dd>{agentColor}</dd>
-        </div>
-        <div>
-          <dt>Alliance membership</dt>
-          <dd>
-            {alliance
-              ? allianceSummary?.members.map(({ name }) => name).join(', ')
-              : 'Unaffiliated'}
-          </dd>
-        </div>
-        <div>
-          <dt>Alliance territory</dt>
-          <dd>
-            {allianceSummary?.totalControlledCellCount ?? 0} controlled cells
-          </dd>
-        </div>
-        <div>
-          <dt>Cell</dt>
-          <dd>{agent.currentCell}</dd>
-        </div>
-        <div>
-          <dt>Cell state</dt>
-          <dd>{cellState}</dd>
-        </div>
-        <div>
-          <dt>Resolved model</dt>
-          <dd>
-            {resolvedModel?.modelId ?? 'Not selected'} ·{' '}
-            {resolvedModel?.source ?? 'missing'}
-            {!resolvedModel?.available && ' · unavailable'}
-          </dd>
-        </div>
-      </dl>
-      <AgentBehaviorTrace
-        agent={agent}
-        id={`${inspectorSectionPrefix}-trace`}
-        turns={turns}
-        onHighlightCell={onHighlightCell}
-      />
-      <h3 id={`${inspectorSectionPrefix}-goals`}>Goals</h3>
-      {currentGoal ? (
-        <dl aria-label="Current agent goal">
-          <div>
-            <dt>Long-term</dt>
-            <dd>{currentGoal.longTermGoal}</dd>
-          </div>
-          <div>
-            <dt>Short-term</dt>
-            <dd>{currentGoal.shortTermGoal}</dd>
-          </div>
-          <div>
-            <dt>Plan</dt>
-            <dd>{currentGoal.planSummary}</dd>
-          </div>
-          <div>
-            <dt>Attribution</dt>
-            <dd>
-              Established tick {currentGoal.establishedAtTick}; revised tick{' '}
-              {currentGoal.revisedAtTick}
-            </dd>
-          </div>
-        </dl>
-      ) : (
-        <p className="muted">No active strategic goal.</p>
-      )}
-      <p aria-label="Latest goal result">
-        {latestGoalTurn && latestGoalTurn.goalRevisionResult.requested
-          ? `Latest: ${latestGoalTurn.goalRevisionResult.operation} · ${
-              latestGoalTurn.goalRevisionResult.accepted
-                ? 'accepted'
-                : `rejected (${latestGoalTurn.goalRevisionResult.reason})`
-            }`
-          : 'No goal operation recorded.'}
-      </p>
-      {latestGoalTurn?.goalRevision &&
-        'reason' in latestGoalTurn.goalRevision && (
-          <p aria-label="Latest agent goal reason">
-            Agent reason: {latestGoalTurn.goalRevision.reason}
-          </p>
-        )}
-      <h3 id={`${inspectorSectionPrefix}-memories`}>Memories</h3>
-      {currentMemory.length ? (
-        <ol aria-label="Current agent memories">
-          {currentMemory.map((entry) => (
-            <li key={entry.id}>
-              <strong>{entry.text}</strong>
-              <br />
-              <span className="muted">
-                {entry.id} · created tick {entry.createdAtTick} · revised tick{' '}
-                {entry.revisedAtTick}
-              </span>
-            </li>
-          ))}
-        </ol>
-      ) : (
-        <p className="muted">No compact memories.</p>
-      )}
-      <p aria-label="Latest memory result">
-        {latestMemoryTurn && latestMemoryTurn.memoryOperationResult.requested
-          ? `Latest: ${latestMemoryTurn.memoryOperationResult.operation} · ${
-              latestMemoryTurn.memoryOperationResult.accepted
-                ? 'accepted'
-                : `rejected (${latestMemoryTurn.memoryOperationResult.reason})`
-            }`
-          : 'No memory operation recorded.'}
-      </p>
-      <h3>Relevant pending proposals</h3>
-      {pendingProposals.length ? (
-        <ol>
-          {pendingProposals.map((proposal) => (
-            <li key={proposal.id}>
-              {
-                snapshot.world.agents.find(
-                  ({ id }) => id === proposal.proposerAgentId,
-                )?.name
-              }{' '}
-              →{' '}
-              {
-                snapshot.world.agents.find(
-                  ({ id }) => id === proposal.recipientAgentId,
-                )?.name
-              }
-              ; expires after{' '}
-              {proposal.expirationTick === undefined
-                ? `legacy turn ${proposal.expirationTurn}`
-                : `tick ${proposal.expirationTick}`}
-            </li>
-          ))}
-        </ol>
-      ) : (
-        <p className="muted">No relevant pending proposals.</p>
-      )}
-      <h3>Recent alliance changes</h3>
-      <AllianceEventList snapshot={snapshot} agentId={agent.id} />
-      <div className="agent-usage" aria-label="Selected agent usage">
-        <strong>Experiment usage</strong>
-        <span>{metrics?.totalTurns ?? 0} turns</span>
-        <span>{metrics?.publicMessagesSent ?? 0} public sent</span>
-        <span>{metrics?.directMessagesSent ?? 0} direct sent</span>
-        <span>{metrics?.directMessagesReceived ?? 0} direct received</span>
-        <span>{controlledCellCount} controlled cells</span>
-        <span>{formatCost(metrics?.knownCostCredits ?? 0)} known cost</span>
-        <span>{metrics?.tokens.promptTokens ?? 0} prompt tokens</span>
-        <span>{metrics?.tokens.completionTokens ?? 0} completion tokens</span>
-        {(metrics?.tokens.reasoningTokens ?? 0) > 0 && (
-          <span>
-            {metrics?.tokens.reasoningTokens} reasoning tokens reported
-          </span>
-        )}
-        {(metrics?.turnsWithUnknownCost ?? 0) > 0 && (
-          <span>
-            {metrics?.attemptsWithUnknownCost} unknown-cost attempts across{' '}
-            {metrics?.turnsWithUnknownCost} turns
-          </span>
-        )}
-        {(metrics?.attemptsWithUnknownTokenUsage ?? 0) > 0 && (
-          <span>
-            Partial token totals · {metrics?.attemptsWithUnknownTokenUsage}{' '}
-            attempts missing token usage
-          </span>
-        )}
-      </div>
-      <h3 id={`${inspectorSectionPrefix}-history`}>
-        Recent territory gains and losses
-      </h3>
-      {controlChanges.length === 0 ? (
-        <p className="muted">
-          No territory gains or losses for this agent yet.
-        </p>
-      ) : (
-        <ol className="control-history" aria-label="Recent territory changes">
-          {controlChanges.slice(-6).map((change) => {
-            const gained = change.controllerAgentId === agent.id;
-            const otherId = gained
-              ? change.previousControllerAgentId
-              : change.controllerAgentId;
-            const other = agents.find(({ id }) => id === otherId);
-            return (
-              <li key={change.id}>
-                <strong>{gained ? 'Gained' : 'Lost'}</strong> {change.cell}{' '}
-                {gained ? 'from' : 'to'} {other?.name ?? otherId}
-              </li>
-            );
-          })}
-        </ol>
-      )}
-      <h3>Direct-message history</h3>
-      {directMessages.length === 0 ? (
-        <p className="muted">No direct messages for this agent yet.</p>
-      ) : (
-        <ol
-          className="communication-history"
-          aria-label="Direct-message history"
-        >
-          {directMessages.slice(-12).map((communication) => {
-            const sender = agents.find(
-              ({ id }) => id === communication.agentId,
-            );
-            const recipient = agents.find(
-              ({ id }) => id === communication.recipientId,
-            );
-            const direction =
-              communication.agentId === agent.id ? 'Sent' : 'Received';
-            const other =
-              communication.agentId === agent.id ? recipient : sender;
-            const turn = turns.find(
-              (turn) =>
-                turn.outcome !== 'provider-error' &&
-                turn.outcome !== 'lost-tick' &&
-                turn.outcome !== 'operator-skipped' &&
-                turn.communicationResult.requested &&
-                turn.communicationResult.accepted &&
-                turn.communicationResult.event.id === communication.id,
-            );
-            return (
-              <li
-                key={communication.id}
-                style={{
-                  borderLeftColor: resolveAgentColor(
-                    snapshot,
-                    communication.agentId,
-                  ),
-                }}
-              >
-                <div>
-                  <strong>{direction}</strong>{' '}
-                  <span>
-                    {other?.name ??
-                      (direction === 'Sent'
-                        ? communication.recipientId
-                        : communication.agentId)}
-                  </span>
-                </div>
-                <p>{communication.message}</p>
-                <small>
-                  {formatRecordSequence(turn)} ·{' '}
-                  {formatTimestamp(communication.occurredAt)}
-                </small>
-              </li>
-            );
-          })}
-        </ol>
-      )}
-      <div
-        className="personality-heading"
-        id={`${inspectorSectionPrefix}-configuration`}
-      >
-        <h3>Active personality</h3>
-        {!editing && (
-          <button
-            disabled={mutationDisabled}
-            type="button"
-            onClick={() => {
-              setDraft(agent.personality);
-              setEditError(null);
-              setEditing(true);
-            }}
-          >
-            Edit
-          </button>
-        )}
-      </div>
-      {editing ? (
-        <div className="personality-editor">
-          <label>
-            Personality preset
-            <select
-              disabled={mutationDisabled}
-              value={draftPreset?.id ?? 'custom'}
-              onChange={(event) => {
-                const preset = PERSONALITY_PRESETS.find(
-                  ({ id }) => id === event.target.value,
-                );
-                if (preset) {
-                  setDraft(preset.personality);
-                  setEditError(null);
-                }
-              }}
-            >
-              <option value="custom">Custom</option>
-              {PERSONALITY_PRESETS.map((preset) => (
-                <option key={preset.id} value={preset.id}>
-                  {preset.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Personality directive
-            <textarea
-              aria-describedby="personality-character-count personality-edit-help"
-              disabled={mutationDisabled}
-              maxLength={PERSONALITY_MAX_LENGTH}
-              rows={6}
-              value={draft}
-              onChange={(event) => {
-                setDraft(event.target.value);
-                setEditError(null);
-              }}
-            />
-          </label>
-          <div className="editor-meta">
-            <span id="personality-edit-help">
-              Presets populate the editor; Apply commits the change.
-            </span>
-            <span id="personality-character-count">
-              {draft.length}/{PERSONALITY_MAX_LENGTH}
-            </span>
-          </div>
-          {editError && (
-            <p className="inline-error" role="alert">
-              {editError}
-            </p>
-          )}
-          <div className="editor-actions">
-            <button
-              disabled={mutationDisabled}
-              type="button"
-              onClick={() => void apply()}
-            >
-              {mutationPending ? 'Applying…' : 'Apply'}
-            </button>
-            <button
-              disabled={mutationPending}
-              type="button"
-              onClick={() => {
-                setEditing(false);
-                setDraft(agent.personality);
-                setEditError(null);
-              }}
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      ) : (
-        <div
-          aria-label="Active personality configuration"
-          className="active-personality"
-          role="group"
-        >
-          <p>{agent.personality}</p>
-          <span>{activePreset?.name ?? 'Custom'}</span>
-        </div>
-      )}
-      {latestTurn ? (
-        <div className="turn-detail" id={`${inspectorSectionPrefix}-latest`}>
-          <h3>Latest turn</h3>
-          <p className={`outcome ${latestTurn.outcome}`}>
-            {latestTurn.outcome}
-          </p>
-          {latestTurn.outcome !== 'provider-error' &&
-          latestTurn.outcome !== 'lost-tick' &&
-          latestTurn.outcome !== 'operator-skipped' ? (
-            <>
-              <p>
-                <strong>World action:</strong>{' '}
-                {formatAction(latestTurn.worldAction)}
-                {' · '}
-                {latestTurn.worldActionResult.accepted
-                  ? 'accepted'
-                  : 'rejected'}
-              </p>
-              <p>
-                <strong>Summary:</strong> {latestTurn.summary}
-              </p>
-              {!latestTurn.worldActionResult.accepted && (
-                <p>
-                  <strong>World-action rejection:</strong>{' '}
-                  {latestTurn.worldActionResult.reason} ·{' '}
-                  {latestTurn.worldActionResult.details}
-                </p>
-              )}
-              <div
-                className="component-result"
-                aria-label="Communication result"
-              >
-                <strong>Communication:</strong>{' '}
-                {!latestTurn.communicationResult.requested
-                  ? 'none requested'
-                  : latestTurn.communicationResult.accepted
-                    ? `${latestTurn.communicationResult.event.channel} accepted`
-                    : `${latestTurn.communicationResult.attempt.channel} rejected · ${latestTurn.communicationResult.reason}`}
-              </div>
-              <div className="component-result" aria-label="Diplomacy result">
-                <strong>Diplomacy:</strong>{' '}
-                {!latestTurn.diplomacyResult.requested
-                  ? 'none requested'
-                  : latestTurn.diplomacyResult.accepted
-                    ? `${latestTurn.diplomacyResult.intent.type} accepted`
-                    : `${latestTurn.diplomacyResult.attempt.type} rejected · ${latestTurn.diplomacyResult.reason}`}
-              </div>
-              <p className="provider-meta">
-                {latestTurn.provider.provider} · {latestTurn.provider.model} ·{' '}
-                {latestTurn.provider.resolvedModel &&
-                latestTurn.provider.resolvedModel !== latestTurn.provider.model
-                  ? `resolved ${latestTurn.provider.resolvedModel} · `
-                  : ''}
-                {latestTurn.provider.latencyMs}ms ·{' '}
-                {latestTurn.provider.promptTokens ?? '—'} prompt /{' '}
-                {latestTurn.provider.completionTokens ?? '—'} completion
-                {latestTurn.provider.reasoningTokens === undefined
-                  ? ''
-                  : ` / ${latestTurn.provider.reasoningTokens} reasoning`}
-                {latestTurn.provider.costCredits === undefined
-                  ? ' · cost unavailable'
-                  : ` · ${formatCost(latestTurn.provider.costCredits)}`}
-              </p>
-            </>
-          ) : (
-            <>
-              <p className="callout error">
-                {latestTurn.failure.code}: {latestTurn.failure.message}
-                {latestTurn.failure.providerMessage
-                  ? ` Provider: ${latestTurn.failure.providerMessage}`
-                  : ''}
-              </p>
-              <p className="provider-meta">
-                Model{' '}
-                {latestTurn.failure.model ??
-                  latestTurn.provider?.model ??
-                  'unavailable'}
-                {latestTurn.failure.httpStatus
-                  ? ` · HTTP ${latestTurn.failure.httpStatus}`
-                  : ''}
-                {latestTurn.failure.providerCode
-                  ? ` · ${latestTurn.failure.providerCode}`
-                  : ''}
-                {latestTurn.failure.requestId
-                  ? ` · request ${latestTurn.failure.requestId}`
-                  : ''}
-                {latestTurn.failure.finishReason
-                  ? ` · finish ${latestTurn.failure.finishReason}`
-                  : ''}
-                {latestTurn.failure.nativeFinishReason
-                  ? ` · native ${latestTurn.failure.nativeFinishReason}`
-                  : ''}
-              </p>
-              {latestTurn.provider && (
-                <p className="provider-meta">
-                  {latestTurn.provider.provider} · {latestTurn.provider.model} ·{' '}
-                  {latestTurn.provider.latencyMs}ms
-                  {latestTurn.provider.requestId
-                    ? ` · request ${latestTurn.provider.requestId}`
-                    : ''}
-                  {latestTurn.provider.finishReason
-                    ? ` · finish ${latestTurn.provider.finishReason}`
-                    : ''}
-                </p>
-              )}
-            </>
-          )}
-          <details>
-            <summary>Latest structured observation</summary>
-            <p className="observation-note">
-              Immutable input supplied for {formatRecordSequence(latestTurn)} ·
-              record {latestTurn.turnNumber}. It is not rewritten when the
-              active personality changes.
-            </p>
-            {latestTurn.observation.personality !== agent.personality && (
-              <p className="observation-difference">
-                The active personality has changed since this observation.
-              </p>
-            )}
-            <p>
-              <strong>Observed personality:</strong>{' '}
-              {latestTurn.observation.personality}
-            </p>
-            <p>
-              Current: {latestTurn.observation.currentCell.cell} (
-              {latestTurn.observation.currentCell.state})
-            </p>
-            <p>
-              Capture:{' '}
-              {latestTurn.observation.captureEligibility.eligible
-                ? 'eligible'
-                : `blocked · ${latestTurn.observation.captureEligibility.blockedReason}`}
-            </p>
-            <p>
-              Adjacent:{' '}
-              {latestTurn.observation.adjacentCells
-                .map(({ cell, state }) => `${cell} (${state})`)
-                .join(', ')}
-            </p>
-            <p>
-              Nearby:{' '}
-              {latestTurn.observation.nearbyAgents
-                .map(({ name, distance }) => `${name} (${distance})`)
-                .join(', ') || 'none'}
-            </p>
-            <p>
-              Recent public events: {latestTurn.observation.recentEvents.length}
-            </p>
-            <p>
-              Recent public messages:{' '}
-              {latestTurn.observation.recentPublicMessages.length}
-            </p>
-            <ol className="observation-communications">
-              {latestTurn.observation.recentPublicMessages.map(
-                (communication) => (
-                  <li key={communication.eventId}>
-                    {communication.senderName}: {communication.message}
-                  </li>
-                ),
-              )}
-            </ol>
-            <p>
-              Recent direct messages:{' '}
-              {latestTurn.observation.recentDirectMessages.length}
-            </p>
-            <ol className="observation-communications">
-              {latestTurn.observation.recentDirectMessages.map(
-                (communication) => (
-                  <li key={communication.eventId}>
-                    {communication.direction}: {communication.senderName} →{' '}
-                    {communication.recipientName}: {communication.message}
-                  </li>
-                ),
-              )}
-            </ol>
-          </details>
-        </div>
-      ) : (
-        <p className="muted" id={`${inspectorSectionPrefix}-latest`}>
-          No completed turn for this agent yet.
-        </p>
-      )}
-      <h3>Recent records</h3>
-      <ol className="compact-history">
-        {turns
-          .filter(({ agentId }) => agentId === agent.id)
-          .slice(-5)
-          .toReversed()
-          .map((turn) => (
-            <li key={turn.turnNumber}>
-              {formatRecordSequence(turn)}: {turn.outcome}
-            </li>
-          ))}
-      </ol>
-    </section>
-  );
-}
-
-function ExperimentUsageMeter({ snapshot }: { snapshot: SimulationSnapshot }) {
-  const metrics = snapshot.experiment.metrics.aggregate;
-  return (
-    <div className="usage-meter" aria-label="Current experiment usage">
-      <strong>Current experiment</strong>
-      <span>{snapshot.tickNumber} turns</span>
-      <span>{metrics.publicMessagesAccepted} public messages</span>
-      <span>{metrics.directMessagesDelivered} direct messages</span>
-      <span>{formatCost(metrics.knownCostCredits)} known cost</span>
-      <span>
-        {metrics.tokens.totalTokens ??
-          (metrics.tokens.promptTokens ?? 0) +
-            (metrics.tokens.completionTokens ?? 0)}{' '}
-        tokens
-      </span>
-      {metrics.turnsWithUnknownCost > 0 && (
-        <span>
-          {metrics.attemptsWithUnknownCost} unknown-cost attempts across{' '}
-          {metrics.turnsWithUnknownCost} turns
-        </span>
-      )}
-      {metrics.attemptsWithUnknownTokenUsage > 0 && (
-        <span>
-          Partial token totals · {metrics.attemptsWithUnknownTokenUsage}{' '}
-          attempts missing token usage
-        </span>
-      )}
-    </div>
-  );
-}
-
 const defaultCustomOptions: CustomExportOptions = {
   turnObservations: true,
-  personalityTextHistory: true,
   nearbyAgents: true,
   recentEvents: true,
-  recentPublicMessages: true,
-  recentDirectMessages: true,
   recentControlChanges: true,
   validationDetails: true,
   resultingEvents: true,
@@ -5142,7 +2860,6 @@ const defaultCustomOptions: CustomExportOptions = {
   initialWorldState: false,
   currentWorldState: true,
   computedMetrics: true,
-  communications: true,
   controlChanges: true,
 };
 
@@ -5193,12 +2910,6 @@ function ExperimentExportPanel({
   const [actions, setActions] = useState<
     Array<'move' | 'infect' | 'capture' | 'wait'>
   >(['move', 'infect', 'capture', 'wait']);
-  const [communicationChannel, setCommunicationChannel] = useState<
-    'all' | 'public' | 'direct'
-  >('all');
-  const [communicationStatus, setCommunicationStatus] = useState<
-    'all' | 'accepted' | 'rejected'
-  >('all');
   const [custom, setCustom] = useState(defaultCustomOptions);
   const [preview, setPreview] = useState<ExperimentExportPreview | null>(null);
   const [document, setDocument] = useState<ExperimentExportDocument | null>(
@@ -5228,7 +2939,6 @@ function ExperimentExportPanel({
           'operator-skipped',
         ] as const,
         actions: ['move', 'infect', 'capture', 'wait'] as const,
-        communications: { channel: 'all' as const, status: 'all' as const },
         level: 'full-safe' as const,
         serialization,
       }
@@ -5245,10 +2955,6 @@ function ExperimentExportPanel({
               : { mode: 'range' as const, fromTurn, toTurn },
         outcomes,
         actions,
-        communications: {
-          channel: communicationChannel,
-          status: communicationStatus,
-        },
         level,
         serialization,
         ...(level === 'custom' ? { custom } : {}),
@@ -5487,7 +3193,7 @@ function ExperimentExportPanel({
           Swarm exports include all agents, retained swarm ticks, and provider
           attempts. Full-safe exports retain legacy schema fields for archive
           compatibility; those fields do not drive swarm execution. Agent, turn,
-          communication, and custom filters do not apply.
+          and custom filters do not apply.
         </p>
       ) : (
         <>
@@ -5634,38 +3340,6 @@ function ExperimentExportPanel({
             selected={actions}
             onToggle={(value) => setActions(toggle(actions, value))}
           />
-          <div className="range-row">
-            <label>
-              Communication channel
-              <select
-                value={communicationChannel}
-                onChange={(event) =>
-                  setCommunicationChannel(
-                    event.target.value as typeof communicationChannel,
-                  )
-                }
-              >
-                <option value="all">All</option>
-                <option value="public">Public</option>
-                <option value="direct">Direct</option>
-              </select>
-            </label>
-            <label>
-              Communication result
-              <select
-                value={communicationStatus}
-                onChange={(event) =>
-                  setCommunicationStatus(
-                    event.target.value as typeof communicationStatus,
-                  )
-                }
-              >
-                <option value="all">All</option>
-                <option value="accepted">Accepted</option>
-                <option value="rejected">Rejected</option>
-              </select>
-            </label>
-          </div>
           {level === 'custom' && (
             <fieldset>
               <legend>Advanced Custom switches</legend>
@@ -5677,8 +3351,6 @@ function ExperimentExportPanel({
                       disabled={
                         (key === 'nearbyAgents' ||
                           key === 'recentEvents' ||
-                          key === 'recentPublicMessages' ||
-                          key === 'recentDirectMessages' ||
                           key === 'recentControlChanges') &&
                         !custom.turnObservations
                       }
@@ -5692,8 +3364,6 @@ function ExperimentExportPanel({
                           ) {
                             next.nearbyAgents = false;
                             next.recentEvents = false;
-                            next.recentPublicMessages = false;
-                            next.recentDirectMessages = false;
                             next.recentControlChanges = false;
                           }
                           return next;
@@ -5718,7 +3388,7 @@ function ExperimentExportPanel({
         <p className="muted">
           {swarmMode
             ? 'Pause playback and wait for the active swarm tick or reset to finish.'
-            : 'Pause playback and wait for all turn, reset, and personality work to finish.'}
+            : 'Pause playback and wait for all turn and reset work to finish.'}
         </p>
       )}
       {preview &&
@@ -5748,20 +3418,8 @@ function ExperimentExportPanel({
         ) : (
           <dl className="preview-grid" aria-label="Export preview">
             <div>
-              <dt>Matching</dt>
-              <dd>{preview.matchingTurnCount} turns</dd>
-            </div>
-            <div>
-              <dt>Communications</dt>
-              <dd>{preview.matchingCommunicationCount} matched</dd>
-            </div>
-            <div>
               <dt>Control changes</dt>
               <dd>{preview.matchingControlChangeCount} matched</dd>
-            </div>
-            <div>
-              <dt>Diplomacy/alliance events</dt>
-              <dd>{preview.matchingDiplomacyEventCount} matched</dd>
             </div>
             <div>
               <dt>Size</dt>
@@ -5843,11 +3501,8 @@ function FilterChecks<T extends string>({
 function customOptionLabel(key: keyof CustomExportOptions): string {
   return {
     turnObservations: 'Turn observations',
-    personalityTextHistory: 'Personality text and history',
     nearbyAgents: 'Nearby agents',
     recentEvents: 'Recent events',
-    recentPublicMessages: 'Recent public messages in observations',
-    recentDirectMessages: 'Recent direct messages in observations',
     recentControlChanges: 'Recent control changes in observations',
     validationDetails: 'Validation details',
     resultingEvents: 'Resulting events',
@@ -5855,7 +3510,6 @@ function customOptionLabel(key: keyof CustomExportOptions): string {
     initialWorldState: 'Initial world state',
     currentWorldState: 'Current world state',
     computedMetrics: 'Computed metrics',
-    communications: 'Canonical communications',
     controlChanges: 'Canonical control changes',
   }[key];
 }
@@ -5904,181 +3558,4 @@ async function sha256Hex(value: string): Promise<string> {
   return Array.from(new Uint8Array(digest), (byte) =>
     byte.toString(16).padStart(2, '0'),
   ).join('');
-}
-
-function EventLog({
-  snapshot,
-  turns,
-  agents,
-  collapsed,
-  onCollapsedChange,
-}: {
-  snapshot: SimulationSnapshot;
-  turns: AgentTurnRecord[];
-  agents: SimulationSnapshot['world']['agents'];
-  collapsed: boolean;
-  onCollapsedChange: (collapsed: boolean) => void;
-}) {
-  return (
-    <section
-      className={`panel event-panel${collapsed ? ' dock-collapsed' : ''}`}
-      id="activity-events"
-      role="tabpanel"
-    >
-      <div className="dock-heading">
-        <div>
-          <p className="panel-kicker">World events</p>
-          <h2>Event log</h2>
-        </div>
-        <button
-          type="button"
-          aria-expanded={!collapsed}
-          aria-label={`${collapsed ? 'Expand' : 'Collapse'} Event log`}
-          onClick={() => onCollapsedChange(!collapsed)}
-        >
-          {collapsed ? 'Expand' : 'Collapse'}
-        </button>
-      </div>
-      {!collapsed && (
-        <ol aria-label="World event log">
-          {turns.length === 0 ? (
-            <li>
-              <time>Initial</time>
-              <span>Development world loaded with {agents.length} agents.</span>
-            </li>
-          ) : (
-            turns
-              .slice(-20)
-              .toReversed()
-              .map((turn) => (
-                <li
-                  data-outcome={turn.outcome}
-                  key={turn.turnNumber}
-                  style={{
-                    borderLeft: `3px solid ${resolveAgentColor(snapshot, turn.agentId)}`,
-                    paddingLeft: 8,
-                  }}
-                >
-                  <time>{formatRecordSequence(turn)}</time>
-                  <span>{formatTurn(turn, agents)}</span>
-                  <small>
-                    {agents.find(({ id }) => id === turn.agentId)?.name ??
-                      turn.agentId}
-                    {' · '}
-                    {turn.provider?.model ?? 'model unavailable'}
-                  </small>
-                </li>
-              ))
-          )}
-        </ol>
-      )}
-    </section>
-  );
-}
-
-function formatAction(
-  action: Extract<
-    AgentTurnRecord,
-    { outcome: 'accepted' | 'rejected' }
-  >['worldAction'],
-) {
-  if (action.type === 'move') return `move → ${action.targetCell}`;
-  return action.type;
-}
-
-function formatTurn(
-  turn: AgentTurnRecord,
-  agents: SimulationSnapshot['world']['agents'],
-) {
-  if (turn.outcome === 'lost-tick')
-    return `Lost tick ${turn.tickNumber}: ${turn.failure.code}`;
-  if (turn.outcome === 'provider-error')
-    return `Provider failure · ${turn.failure.message}`;
-  if (turn.outcome === 'operator-skipped')
-    return `Operator skipped · ${turn.failure.message}`;
-  const communication = !turn.communicationResult.requested
-    ? ''
-    : turn.communicationResult.accepted
-      ? ` + ${turn.communicationResult.event.channel} message accepted`
-      : ` + ${turn.communicationResult.attempt.channel} message rejected (${turn.communicationResult.reason})`;
-  const diplomacy = !turn.diplomacyResult.requested
-    ? ''
-    : turn.diplomacyResult.accepted
-      ? ` + ${turn.diplomacyResult.intent.type} accepted`
-      : ` + ${turn.diplomacyResult.attempt.type} rejected (${turn.diplomacyResult.reason})`;
-  if (!turn.worldActionResult.accepted)
-    return `Rejected ${formatAction(turn.worldAction)} · ${turn.worldActionResult.reason}${communication}${diplomacy}`;
-  const event = turn.worldActionResult.event;
-  if (event.type === 'agent-moved')
-    return `Movement · ${event.toCell}${communication}${diplomacy}`;
-  if (event.type === 'hex-infected')
-    return `Infection · ${event.cell}${communication}${diplomacy}`;
-  if (event.type === 'hex-captured') {
-    const capturer = agents.find(({ id }) => id === event.controllerAgentId);
-    const previous = agents.find(
-      ({ id }) => id === event.previousControllerAgentId,
-    );
-    return `${capturer?.name ?? event.controllerAgentId} captured ${event.cell} from ${previous?.name ?? event.previousControllerAgentId}.${communication}${diplomacy}`;
-  }
-  return `Waited${communication}${diplomacy}`;
-}
-
-type AllianceWorldEvent = Extract<
-  SimulationSnapshot['world']['events'][number],
-  {
-    type:
-      | 'alliance-proposed'
-      | 'alliance-proposal-closed'
-      | 'alliance-formed'
-      | 'agent-joined-alliance'
-      | 'agent-left-alliance'
-      | 'alliance-dissolved';
-  }
->;
-
-function allianceEventParticipants(event: AllianceWorldEvent): AgentId[] {
-  if (event.type === 'alliance-proposed')
-    return [event.agentId, event.recipientAgentId];
-  if (event.type === 'alliance-proposal-closed')
-    return [event.proposerAgentId, event.recipientAgentId];
-  if (event.type === 'alliance-formed') return event.memberAgentIds;
-  if (event.type === 'agent-joined-alliance') return event.memberAgentIds;
-  if (event.type === 'agent-left-alliance')
-    return [event.leftAgentId, ...event.remainingMemberAgentIds];
-  return event.formerMemberAgentIds;
-}
-
-function formatAllianceEvent(
-  event: AllianceWorldEvent,
-  snapshot: SimulationSnapshot,
-): string {
-  const name = (id: AgentId) =>
-    snapshot.world.agents.find((agent) => agent.id === id)?.name ?? id;
-  if (event.type === 'alliance-proposed')
-    return `${name(event.agentId)} proposed an alliance with ${name(event.recipientAgentId)}.`;
-  if (event.type === 'alliance-formed')
-    return `${event.memberAgentIds.map(name).join(' and ')} formed an alliance.`;
-  if (event.type === 'agent-joined-alliance')
-    return `${name(event.joinedAgentId)} joined the alliance.`;
-  if (event.type === 'agent-left-alliance')
-    return `${name(event.leftAgentId)} left the alliance.`;
-  if (event.type === 'alliance-dissolved') return 'The alliance dissolved.';
-  return `The proposal from ${name(event.proposerAgentId)} to ${name(event.recipientAgentId)} was ${event.reason}.`;
-}
-
-function formatTimestamp(timestamp: string): string {
-  return new Date(timestamp).toLocaleTimeString([], {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  });
-}
-
-function formatRecordSequence(
-  turn?: Pick<AgentTurnRecord, 'tickNumber' | 'turnNumber'>,
-): string {
-  if (!turn) return 'Record unavailable';
-  return turn.tickNumber === undefined
-    ? `Turn ${turn.turnNumber}`
-    : `Tick ${turn.tickNumber}`;
 }

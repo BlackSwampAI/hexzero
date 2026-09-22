@@ -57,11 +57,7 @@ function detailFilters(args: Arguments): DetailFilters {
     agent: flag(args, 'agent'),
     fromTurn: integerFlag(args, 'from-turn'),
     toTurn: integerFlag(args, 'to-turn'),
-    action: flag(args, 'action'),
     outcome: flag(args, 'outcome'),
-    channel: flag(args, 'channel'),
-    sender: flag(args, 'sender'),
-    recipient: flag(args, 'recipient'),
     reason: flag(args, 'reason'),
     limit: integerFlag(args, 'limit'),
   };
@@ -186,11 +182,7 @@ const HELP = `Usage:
   pnpm experiment:db list [--limit n] [--format ...]
   pnpm experiment:db summary <experiment-id> [--format ...]
   pnpm experiment:db compare <experiment-id> <experiment-id> [--format ...]
-  pnpm experiment:db turns <experiment-id> [--agent id] [--from-turn n] [--to-turn n] [--action action] [--outcome outcome] [--limit n]
-  pnpm experiment:db communications <experiment-id> [--channel channel] [--sender id] [--recipient id] [--reason reason] [--limit n]
-  pnpm experiment:db alliance-events <experiment-id> [--agent id] [--from-turn n] [--to-turn n] [--reason reason] [--limit n]
-  pnpm experiment:db patient-zero <experiment-id> [--agent id] [--from-turn n] [--to-turn n] [--limit n]
-  pnpm experiment:db failures <experiment-id> [--agent id] [--reason code] [--limit n]
+  pnpm experiment:db failures <experiment-id> [--agent id] [--from-turn n] [--to-turn n] [--reason code] [--limit n]
   pnpm experiment:db provider-attempts <experiment-id> [--agent id] [--from-turn n] [--to-turn n] [--outcome value] [--limit n]
   pnpm experiment:db notes import <file.md> --type <type> --status <status> [--tag tag] [--experiment id] [--provenance text] [--supersedes note-id]
   pnpm experiment:db notes search <query> [--type type] [--status status] [--tag tag] [--experiment id] [--limit n]
@@ -225,26 +217,6 @@ async function main(): Promise<void> {
       result = queries.compare(
         requirePositional(args, 1, 'first experiment ID'),
         requirePositional(args, 2, 'second experiment ID'),
-      );
-    } else if (command === 'turns') {
-      result = queries.turns(
-        requirePositional(args, 1, 'experiment ID'),
-        detailFilters(args),
-      );
-    } else if (command === 'communications') {
-      result = queries.communications(
-        requirePositional(args, 1, 'experiment ID'),
-        detailFilters(args),
-      );
-    } else if (command === 'alliance-events') {
-      result = queries.allianceEvents(
-        requirePositional(args, 1, 'experiment ID'),
-        detailFilters(args),
-      );
-    } else if (command === 'patient-zero') {
-      result = queries.patientZero(
-        requirePositional(args, 1, 'experiment ID'),
-        detailFilters(args),
       );
     } else if (command === 'failures') {
       result = queries.failures(

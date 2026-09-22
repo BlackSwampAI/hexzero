@@ -1,5 +1,5 @@
 import { type ReflexProvider, type SwarmPlanner } from '@hexzero/agent-runtime';
-import { assignBehavior, type CompatibleModel } from '@hexzero/shared';
+import { type CompatibleModel } from '@hexzero/shared';
 import { generateDeterministicRoster } from '@hexzero/world-engine';
 import { SimulationService } from './simulation-service';
 import type { CompiledReflexObservation } from './reflex-execution';
@@ -340,7 +340,6 @@ function exportRequest() {
     turns: { mode: 'entire-retained' },
     outcomes: ['accepted', 'rejected', 'provider-error', 'operator-skipped'],
     actions: ['move', 'infect', 'capture', 'wait'],
-    communications: { channel: 'all', status: 'all' },
     serialization: 'compact',
     level: 'full-safe',
   } as const;
@@ -406,16 +405,6 @@ async function runVariant(
       globalReasoningProfile: 'low',
       overrides: [],
       locked: false,
-    },
-    // This transitional scenario field remains required until PR 2 removes
-    // legacy behavior configuration from the shared world setup schema.
-    behaviorConfiguration: {
-      ...request.behaviorConfiguration,
-      assignments: assignBehavior(
-        roster.map(({ id }) => id),
-        `live-behavior-${seed}`,
-        'balanced-random',
-      ),
     },
   });
   const ticks: LiveComparisonTick[] = [];

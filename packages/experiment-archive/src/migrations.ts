@@ -354,4 +354,43 @@ export const migrations: readonly Migration[] = [
         ON swarm_ticks(experiment_id, virtual_time, tick_number);
     `,
   },
+  {
+    version: 6,
+    description:
+      'remove legacy per-agent-LLM social systems (turn records, communications, diplomacy, alliances, personalities)',
+    sql: `
+      DROP INDEX IF EXISTS communications_experiment_channel_idx;
+      DROP INDEX IF EXISTS communications_sender_idx;
+      DROP INDEX IF EXISTS communications_recipient_idx;
+      DROP TABLE communication_recipients;
+      DROP TABLE communications;
+
+      DROP INDEX IF EXISTS diplomacy_attempts_experiment_idx;
+      DROP INDEX IF EXISTS diplomacy_attempts_rejection_idx;
+      DROP TABLE diplomacy_attempts;
+
+      DROP INDEX IF EXISTS alliance_events_experiment_type_idx;
+      DROP INDEX IF EXISTS alliance_events_reason_idx;
+      DROP TABLE alliance_events;
+
+      DROP INDEX IF EXISTS turns_experiment_agent_idx;
+      DROP INDEX IF EXISTS turns_experiment_outcome_idx;
+      DROP INDEX IF EXISTS turns_experiment_action_idx;
+      DROP INDEX IF EXISTS turns_experiment_tick_idx;
+      DROP INDEX IF EXISTS model_attempts_experiment_failure_idx;
+      DROP TABLE model_attempts;
+      DROP TABLE turns;
+
+      DROP INDEX IF EXISTS world_events_experiment_type_idx;
+      ALTER TABLE world_events RENAME COLUMN turn_number TO tick_number;
+      CREATE INDEX world_events_experiment_type_idx ON world_events(experiment_id, type, tick_number, id);
+
+      ALTER TABLE experiments DROP COLUMN behavior_configuration_json;
+      ALTER TABLE experiments DROP COLUMN source_alliances_json;
+
+      ALTER TABLE agents DROP COLUMN personality_id;
+      ALTER TABLE agents DROP COLUMN strategy_id;
+      ALTER TABLE agents DROP COLUMN personality;
+    `,
+  },
 ] as const;

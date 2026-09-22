@@ -21,22 +21,14 @@ import {
   experimentExportRequestSchema,
   experimentExportPreviewSchema,
   experimentExportResponseSchema,
-  experimentImportRequestSchema,
-  experimentImportResponseSchema,
   healthResponseSchema,
   modelCatalogResponseSchema,
   modelVerificationSchema,
-  PERSONALITY_MAX_LENGTH,
   resetSimulationResponseSchema,
-  restoreDefaultPersonalitiesResponseSchema,
   simulationSnapshotSchema,
   singleTickResponseSchema,
-  updateAgentPersonalityRequestSchema,
-  updateAgentPersonalityResponseSchema,
   updateExperimentModelsRequestSchema,
   updateExperimentModelsResponseSchema,
-  updateExperimentBehaviorRequestSchema,
-  updateExperimentBehaviorResponseSchema,
   verifyModelRequestSchema,
   verifyModelResponseSchema,
   worldSnapshotSchema,
@@ -441,48 +433,6 @@ export function createApp(options: AppOptions = {}) {
     }
   });
 
-  app.post('/api/simulation/experiment/behavior', async (context) => {
-    const request = updateExperimentBehaviorRequestSchema.safeParse(
-      await context.req.json().catch(() => undefined),
-    );
-    if (!request.success)
-      return context.json(
-        apiErrorSchema.parse({
-          error: {
-            code: 'invalid_behavior_configuration',
-            message: 'The behavior configuration is invalid.',
-          },
-        }),
-        400,
-      );
-    try {
-      return context.json(
-        updateExperimentBehaviorResponseSchema.parse({
-          snapshot: service.updateBehaviorConfiguration(request.data),
-        }),
-      );
-    } catch (error) {
-      if (error instanceof SimulationConflictError)
-        return context.json(
-          apiErrorSchema.parse({
-            error: {
-              code: 'behavior_configuration_conflict',
-              message: error.message,
-            },
-          }),
-          409,
-        );
-      if (error instanceof SimulationValidationError)
-        return context.json(
-          apiErrorSchema.parse({
-            error: { code: error.code, message: error.message },
-          }),
-          400,
-        );
-      throw error;
-    }
-  });
-
   app.post('/api/simulation/tick', async (context) => {
     try {
       const response = await mutationPromise(context, 'tick', async () => {
@@ -550,73 +500,6 @@ export function createApp(options: AppOptions = {}) {
         return context.json(
           apiErrorSchema.parse({
             error: { code: 'reset_conflict', message: error.message },
-          }),
-          409,
-        );
-      }
-      throw error;
-    }
-  });
-
-  app.post('/api/simulation/agents/:agentId/personality', async (context) => {
-    const request = updateAgentPersonalityRequestSchema.safeParse(
-      await context.req.json().catch(() => undefined),
-    );
-    if (!request.success) {
-      return context.json(
-        apiErrorSchema.parse({
-          error: {
-            code: 'invalid_personality',
-            message: `Personality must contain 1 to ${PERSONALITY_MAX_LENGTH} characters.`,
-          },
-        }),
-        400,
-      );
-    }
-    try {
-      const agent = service.updateAgentPersonality(
-        context.req.param('agentId'),
-        request.data.personality,
-      );
-      return context.json(
-        updateAgentPersonalityResponseSchema.parse({
-          snapshot: service.getSnapshot(),
-          agent,
-        }),
-      );
-    } catch (error) {
-      if (error instanceof SimulationConflictError) {
-        return context.json(
-          apiErrorSchema.parse({
-            error: { code: 'personality_conflict', message: error.message },
-          }),
-          409,
-        );
-      }
-      if (error instanceof SimulationValidationError) {
-        return context.json(
-          apiErrorSchema.parse({
-            error: { code: error.code, message: error.message },
-          }),
-          error.code === 'unknown_agent' ? 404 : 400,
-        );
-      }
-      throw error;
-    }
-  });
-
-  app.post('/api/simulation/personalities/restore-defaults', (context) => {
-    try {
-      return context.json(
-        restoreDefaultPersonalitiesResponseSchema.parse({
-          snapshot: service.restoreDefaultPersonalities(),
-        }),
-      );
-    } catch (error) {
-      if (error instanceof SimulationConflictError) {
-        return context.json(
-          apiErrorSchema.parse({
-            error: { code: 'personality_conflict', message: error.message },
           }),
           409,
         );
@@ -751,52 +634,6 @@ export function createApp(options: AppOptions = {}) {
         }),
         500,
       );
-    }
-  });
-
-  app.post('/api/simulation/experiment/import', async (context) => {
-    const request = experimentImportRequestSchema.safeParse(
-      await context.req.json().catch(() => undefined),
-    );
-    if (!request.success)
-      return context.json(
-        apiErrorSchema.parse({
-          error: {
-            code: 'invalid_import',
-            message: 'The experiment import is invalid.',
-          },
-        }),
-        400,
-      );
-    const currentCatalog = modelCatalogResponseSchema.parse(
-      await catalog.getCatalog(false),
-    );
-    service.setCompatibleModels(currentCatalog.models);
-    try {
-      return context.json(
-        experimentImportResponseSchema.parse(
-          service.importModelConfiguration(request.data.document),
-        ),
-      );
-    } catch (error) {
-      if (error instanceof SimulationConflictError)
-        return context.json(
-          apiErrorSchema.parse({
-            error: {
-              code: 'model_configuration_conflict',
-              message: error.message,
-            },
-          }),
-          409,
-        );
-      if (error instanceof SimulationValidationError)
-        return context.json(
-          apiErrorSchema.parse({
-            error: { code: 'invalid_import', message: error.message },
-          }),
-          400,
-        );
-      throw error;
     }
   });
 

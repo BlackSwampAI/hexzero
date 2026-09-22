@@ -19,7 +19,6 @@ import type {
   H3Cell,
   Hex,
   HexState,
-  Alliance,
   SimulationSnapshot,
   SimulatedPlayerState,
 } from '@hexzero/shared';
@@ -31,7 +30,6 @@ interface WorldMapProps {
   longitude: number;
   hexes: Hex[];
   agents: AgentProfile[];
-  alliances: Alliance[];
   patientZeroAgentId: AgentId | null;
   simulatedPlayer: SimulatedPlayerState | null;
   selectedCell: H3Cell | null;
@@ -66,17 +64,16 @@ const initialOverlayDiagnostics: OverlayDiagnostics = {
 function asGeoJson(
   hexes: WorldMapProps['hexes'],
   agents: AgentProfile[],
-  alliances: Alliance[],
   selectedCell: H3Cell | null,
 ) {
   const agentById = new globalThis.Map(
     agents.map((agent) => [agent.id, agent]),
   );
-  const colorState = { world: { agents, alliances } } as unknown as Pick<
+  const colorState = { world: { agents } } as unknown as Pick<
     SimulationSnapshot,
     'world'
   >;
-  const effectiveColor = (agentId: AgentId) =>
+  const agentColor = (agentId: AgentId) =>
     resolveAgentColor(colorState, agentId);
   return {
     type: 'FeatureCollection' as const,
@@ -89,7 +86,7 @@ function asGeoJson(
           hex.state === 'infected'
             ? hex.controllerAgentId === null
               ? '#8d8069'
-              : (effectiveColor(hex.controllerAgentId) ?? '#e44f45')
+              : (agentColor(hex.controllerAgentId) ?? '#e44f45')
             : '#4a8178',
         controllerName:
           hex.state === 'infected'
@@ -120,7 +117,6 @@ export function WorldMap(props: WorldMapProps) {
     longitude,
     hexes,
     agents,
-    alliances,
     patientZeroAgentId,
     simulatedPlayer,
     selectedCell,
@@ -137,7 +133,6 @@ export function WorldMap(props: WorldMapProps) {
   const onSelectAgentRef = useRef(onSelectAgent);
   const initialHexes = useRef(hexes);
   const initialAgents = useRef(agents);
-  const initialAlliances = useRef(alliances);
   const initialSelectedCell = useRef(selectedCell);
   const currentHexesRef = useRef(hexes);
   const fittedWorldRef = useRef(hexes.map(({ cell }) => cell).join(','));
@@ -291,7 +286,6 @@ export function WorldMap(props: WorldMapProps) {
           data: asGeoJson(
             initialHexes.current,
             initialAgents.current,
-            initialAlliances.current,
             initialSelectedCell.current,
           ),
         });
@@ -379,7 +373,7 @@ export function WorldMap(props: WorldMapProps) {
     const source = mapRef.current?.getSource(sourceId) as
       GeoJSONSource | undefined;
     if (!source) return;
-    source.setData(asGeoJson(hexes, agents, alliances, selectedCell));
+    source.setData(asGeoJson(hexes, agents, selectedCell));
     const signature = hexes.map(({ cell }) => cell).join(',');
     if (signature !== fittedWorldRef.current && mapRef.current) {
       fittedWorldRef.current = signature;
@@ -394,7 +388,7 @@ export function WorldMap(props: WorldMapProps) {
       });
     }
     scheduleOverlayInspectionRef.current?.();
-  }, [agents, alliances, hexes, selectedCell]);
+  }, [agents, hexes, selectedCell]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -425,16 +419,13 @@ export function WorldMap(props: WorldMapProps) {
         `Select agent ${agent.name}${agent.id === patientZeroAgentId ? ', Patient Zero' : ''}`,
       );
       element.title = `${agent.name}${agent.id === patientZeroAgentId ? ' · Patient Zero' : ''} · ${agent.currentCell}`;
-      const effectiveColor = resolveAgentColor(
-        { world: { agents, alliances } } as unknown as Pick<
-          SimulationSnapshot,
-          'world'
-        >,
+      const agentColor = resolveAgentColor(
+        { world: { agents } } as unknown as Pick<SimulationSnapshot, 'world'>,
         agent.id,
       );
-      element.style.setProperty('--agent-color', effectiveColor);
+      element.style.setProperty('--agent-color', agentColor);
       element.dataset.baseColor = agent.color;
-      element.dataset.effectiveColor = effectiveColor;
+      element.dataset.agentColor = agentColor;
       element.textContent = agent.name.slice(0, 1);
       element.addEventListener('click', (event) => {
         event.stopPropagation();
@@ -467,14 +458,7 @@ export function WorldMap(props: WorldMapProps) {
           .addTo(map),
       );
     }
-  }, [
-    agents,
-    alliances,
-    mapReady,
-    patientZeroAgentId,
-    selectedAgentId,
-    simulatedPlayer,
-  ]);
+  }, [agents, mapReady, patientZeroAgentId, selectedAgentId, simulatedPlayer]);
 
   const overlayReady = overlayDiagnostics.status === 'ready';
   const overlayLabel = overlayReady
@@ -496,14 +480,14 @@ export function WorldMap(props: WorldMapProps) {
           .flatMap((hex) => {
             if (hex.state === 'open' || hex.controllerAgentId === null)
               return [];
-            const effectiveColor = resolveAgentColor(
-              { world: { agents, alliances } } as unknown as Pick<
+            const agentColor = resolveAgentColor(
+              { world: { agents } } as unknown as Pick<
                 SimulationSnapshot,
                 'world'
               >,
               hex.controllerAgentId,
             );
-            return [`${hex.cell}:${effectiveColor ?? 'unknown'}`];
+            return [`${hex.cell}:${agentColor ?? 'unknown'}`];
           })
           .join(',')}
         data-testid="world-map"
