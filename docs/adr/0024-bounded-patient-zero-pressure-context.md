@@ -4,6 +4,10 @@
 
 Accepted for Slice D1.2.
 
+The pressure rollup remains part of the Agent Zero strategic observation.
+Its legacy communication and alliance recommendation behavior is superseded
+by [ADR 0033](0033-retire-legacy-multi-agent-architecture.md).
+
 ## Decision
 
 Every displayed current-interval Patient Zero cleaner event carries a compact

@@ -8,22 +8,21 @@
 > one generative planner (Agent Zero, contract `swarm-planner-v2`) issues
 > structured directives; workers resolve them via TypeSafe Jev reflex cognition.
 > Personalities, agent-to-agent communication, formal alliances, per-worker
-> goals, and prose memories are removed. Real Player Mode, capture, respawn,
-> GPS authority, and background timing remain future work.
+> goals, and prose memories are removed. Agent capture by the simulated
+> trail-hunter exists; capture by real players, respawn, GPS authority, and
+> background timing remain future work.
 
 ## Current Agent Zero planning slice
 
-In the zero-swarm architecture Agent Zero makes an OpenRouter planning call
-only when strategic replanning is required; otherwise the last valid directive
-set is reused with no planner call. Agent Zero issues a strategy summary and
-per-worker structured directives (fields: mission, nullable target cell,
-priority, risk tolerance, issue tick, expiry tick, optional note up to 160
-characters). Workers resolve their directive via TypeSafe Jev reflex cognition
-over enumerated `action_N` candidates with a probability distribution and
-confidence score; `deterministic-fallback` is used when the Jev call is
-unavailable or its output fails validation. `zero-llm` is Agent Zero's own
-planning cognition source, not a worker source. Agent Zero has no
-extra movement or world-action power; it is one roster agent like any other.
+In the zero-swarm architecture Agent Zero makes an OpenRouter planning call on
+tick 1, at scheduled five-tick reviews (ticks 6, 11, and so on), and when a
+material replanning trigger occurs. Other ticks reuse the committed directives
+without a planner call. Agent Zero issues a strategy summary and one structured
+directive per worker. Workers resolve their directive via TypeSafe Jev reflex
+cognition over enumerated legal-action candidates; deterministic selection is
+the fallback when Jev is unavailable or its output fails validation. Agent
+Zero is also a roster agent and selects its own legal physical action. The
+server assigns directive IDs, target cells, and bounded lifetimes.
 Current setup rejects a missing or null Agent Zero designation. Pre-swarm
 exports (schema versions 9–11) are not readable by current code; schema
 version 12 with `swarmArchitectureVersion: 'zero-swarm-v1'` is required.
@@ -93,12 +92,14 @@ virtual timing.
 
 Player interactions occur continuously in real time. Agents act on server-authoritative global ticks.
 
-- Freeze one authoritative snapshot for all surviving agents.
-- Build every surviving agent's observation from that same snapshot.
-- Request decisions concurrently under a shared bounded deadline.
-- No agent sees another agent's decision from the same tick.
-- Missing, malformed, or late decisions become final attributed lost ticks after the one permitted in-deadline repair or transient retry is exhausted.
-- Valid decisions resolve simultaneously and deterministically.
+- Freeze the pressure-adjusted candidate state for the tick.
+- Build Agent Zero's strategic observation and worker observations from that
+  same state.
+- Call Agent Zero when a strategic replan is required, then request worker
+  reflex choices sequentially under the shared tick deadline.
+- Use deterministic fallbacks when planning or reflex calls fail; no worker
+  sees another worker's same-tick choice.
+- Resolve the selected actions in seeded order and commit the tick atomically.
 - Each explicit tick advances the deterministic virtual clock by a hidden seeded interval, initially tunable between 5 and 10 minutes; no background scheduler exists yet.
 - The exact schedule remains server-only. Player Mode must not receive or display
   `nextTickAt`, a countdown, progress ring, or equivalent timing information.
@@ -146,30 +147,15 @@ actions:
 
 Hiding indefinitely is not success; survival preserves the ability to pursue influence.
 
-## Bounded agent knowledge
+## Bounded agent observations
 
-Agents know that human opposition exists, but receive only engine-produced evidence.
-Prose and compact memories across ticks were specific to the legacy per-agent
-architecture and are removed. Structured per-tick observations remain and should
-include:
-
-- Current directive from Agent Zero (mission, target cell, priority, risk
-  tolerance).
-- Recent cells gained and lost.
-- Nearby disinfection patterns.
-- Last-known player encounters with age and location.
-- Explicit priority notifications for nearby territory loss.
-
-Examples of legitimate observations include:
-
-- `You lost cell X four minutes ago.`
-- `Three cells southwest of you were disinfected recently.`
-- `An agent was captured near cell Y.`
-- `A player was last observed in your cell one tick ago.`
-
-Agents must not receive live player GPS, future player routes, an omniscient
-global player-location list, exact next-tick timing, raw private reasoning or
-chain-of-thought, or another agent's unresolved decision.
+Agent Zero receives the bounded strategic observation needed to assign
+directives, including current roster, strategic targets, territory and
+simulated-player pressure. Each worker receives its directive, current legal
+actions, a compact local world projection, and bounded local pressure facts.
+The server does not add chat, per-worker goals, prose memory, diplomacy, or
+future movement predictions. No runtime agent receives real-player GPS or raw
+private reasoning.
 
 ## Real-time player interactions
 
@@ -233,30 +219,10 @@ This preserves a persistent world without granting agents health or extra lives.
 
 ## Alliances
 
-> **Removed (zero-swarm migration).** Formal alliances and agent diplomacy were
-> specific to the legacy per-agent decision contract. The swarm architecture has
-> one planner (Agent Zero) whose directives already coordinate all workers;
-> there is no per-worker negotiation loop that alliances were designed to
-> facilitate. Alliance engine code, the diplomacy affordances schema, and all
-> related prompt layers were deleted in PRs 1–4 of this migration. Alliances
-> are not current behavior. Whether they should return as a future feature for
-> a Player Mode social layer is an open product question not settled by this
-> migration; no roadmap milestone currently calls for them. The original design
-> rationale is preserved below as history.
-
-Original design intent: alliances should initially improve survival through
-information rather than numerical combat bonuses.
-
-Potential alliance benefits included:
-
-- Shared last-known player cells and observation age.
-- Nearby territory-disturbance warnings.
-- Capture notifications.
-- Coordinated expansion directions.
-- Reduced competition for the same cells.
-
-Allies would not initially receive health, damage, extra lives, shared
-ownership, or automatic rescue mechanics.
+Formal alliances, diplomacy, and agent communication were removed by ADR 0033.
+They are not current behavior or a deferred feature. Reconsidering them
+requires an explicit new product decision and roadmap change. Historical design
+rationale remains in ADRs 0008 and 0016.
 
 ## Deterministic simulated players
 
@@ -271,9 +237,10 @@ Initial profiles:
 Slice D1 implements only zero-or-one **Casual cleaner**. It moves at most one
 adjacent H3 cell per explicit interval toward visible infection, uses its seed
 for stable tie-breaking, and attempts at most one disinfection. An occupied
-infected cell blocks cleaning. Other profiles and capture remain deferred.
+infected cell blocks cleaning. The trail hunter described below is also
+implemented; the area-defender profile remains deferred.
 
-The later `trail-hunter-v1` experiment adds a separate optional profile. It
+The optional `trail-hunter-v1` profile
 routes from visible infected cells without using hidden agent positions as
 targets. Co-location can capture an agent, immediately remove it, and leave its
 territory infected but abandoned. If this removes the last agent, or removes
@@ -355,25 +322,22 @@ Every experiment export should preserve the complete initial scenario configurat
 
 ## Simultaneous decision dispatch
 
-Simultaneous gameplay semantics must not depend on one inference provider's batch feature. The simulation service should own a provider-neutral decision dispatcher. In the zero-swarm architecture, a tick involves an optional planning call (Agent Zero, only when strategic replanning is required) followed by one Jev reflex call per worker (currently issued sequentially; every worker observes the same frozen pre-tick state and actions resolve together):
+Simultaneous gameplay semantics do not depend on provider batch support. The
+Game API owns tick execution. Each tick may include one Agent Zero planning
+call when strategic replanning is required, followed by one sequential TypeSafe
+Jev reflex call per worker. Workers use the same pre-action world state, and
+their actions resolve in deterministic order. The engine remains authoritative.
 
-1. Freeze the authoritative snapshot.
-2. Build Agent Zero's world observation and each worker's reflex observation.
-3. Dispatch Agent Zero's planning call through the configured transport under the shared tick deadline.
-4. Distribute the resulting directives to workers; issue one Jev reflex call per worker sequentially.
-5. Preserve one shared tick deadline and per-worker result identity.
-6. Retry only against the saved observation.
-7. Convert unfinished decisions to lost turns; fall back to `deterministic-fallback` for workers whose Jev call fails.
-8. Resolve accepted worker actions in deterministic engine order.
+1. Advance simulated-player pressure into an uncommitted candidate.
+2. Determine whether Agent Zero must replan; reuse valid directives otherwise.
+3. Reserve the required provider-attempt capacity before any provider call.
+4. Call Agent Zero if needed, then call Jev sequentially for each worker.
+5. Use deterministic fallbacks for planner or worker failures.
+6. Resolve actions in seeded order and commit the complete tick atomically.
 
-Expected transports include:
-
-- Concurrent ordinary OpenRouter requests for live experiments.
-- Optional asynchronous OpenRouter batches after measured latency proves suitable.
-- Independent concurrent OpenAI-compatible calls to local vLLM endpoints, allowing each server to schedule its own work.
-- Deterministic offline providers for tests.
-
-The engine waits only until the shared deadline before resolving the tick regardless of which calls complete.
+Provider recovery stays within the tick deadline. Cancellation or failure before
+commit leaves world state unchanged, while already-started provider attempts
+remain in the independent attempt ledger.
 
 ## Evaluation telemetry
 
@@ -429,8 +393,8 @@ Do not initially add:
 - Real-time agent warnings that a player is approaching.
 - Omniscient simulated players.
 - Multiple movement actions per tick solely to compensate for human travel speed.
-- Alliances, alliance stat bonuses, or shared lives. (Alliances were built and
-  removed by the zero-swarm migration; see the Alliances section.)
+- Alliances, alliance stat bonuses, or shared lives. Alliances were built and
+  removed by ADR 0033; their return requires a new product decision.
 - LLM-controlled simulated players.
 
 ## Tunable values, not settled mechanics

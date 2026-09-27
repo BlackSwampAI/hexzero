@@ -1,6 +1,6 @@
 # ADR 0005: Nearby agent messaging as bounded world events
 
-- Status: Accepted
+- Status: Superseded by [ADR 0033](0033-retire-legacy-multi-agent-architecture.md)
 - Date: 2026-08-14
 
 ## Context

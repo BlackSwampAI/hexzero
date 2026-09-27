@@ -241,8 +241,7 @@
   .operator-workspace {
     grid-template-columns: 220px minmax(0, 1fr) 300px;
   }
-  .status-popover,
-  .failed-turn-controls.inactive {
+  .status-popover {
     display: none;
   }
   .command-navbar {
@@ -282,7 +281,7 @@ body {
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr) clamp(160px, 22dvh, 210px);
 }
-.world-lab-shell.chat-collapsed {
+.world-lab-shell.activity-collapsed {
   grid-template-rows: auto auto minmax(0, 1fr) 54px;
 }
 button,
@@ -802,14 +801,6 @@ h2 {
   background: #2e684b;
   color: #f4fff8;
 }
-.failed-turn-controls {
-  display: inline-flex;
-  gap: 4px;
-  min-width: 132px;
-}
-.failed-turn-controls.inactive {
-  visibility: hidden;
-}
 .dock-heading {
   display: flex;
   align-items: flex-start;
@@ -833,8 +824,7 @@ h2 {
   margin: 14px 0;
 }
 .model-filters label,
-.model-select-label,
-.agent-model-overrides label {
+.model-select-label {
   display: grid;
   gap: 5px;
   color: #aebdb8;
@@ -843,8 +833,7 @@ h2 {
 .model-console input,
 .model-console select,
 .model-console button,
-.dock-heading button,
-.new-message-button {
+.dock-heading button {
   padding: 7px 9px;
   border: 1px solid #465752;
   border-radius: 5px;
@@ -864,27 +853,10 @@ h2 {
 .model-facts div {
   grid-template-columns: 75px minmax(0, 1fr);
 }
-.agent-model-overrides {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-  margin-top: 14px;
-}
-.agent-model-overrides > strong {
-  grid-column: 1 / -1;
-}
-.agent-model-override {
-  display: grid;
-  gap: 6px;
-  padding: 7px;
-  border: 1px solid #34433f;
-  border-radius: 5px;
-}
 .model-dialog {
   width: min(760px, calc(100vw - 28px));
 }
 .model-dialog .model-select-label select,
-.model-dialog .agent-model-override select,
 .export-dialog select,
 .export-dialog input[type='number'] {
   width: 100%;
@@ -984,11 +956,6 @@ h2 {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.details-sidebar > .controls-panel,
-.details-sidebar > .world-chat-panel,
-.details-sidebar > .event-panel {
-  display: none;
-}
 .bottom-dock {
   min-height: 0;
   height: auto;
@@ -1019,32 +986,10 @@ h2 {
   min-height: 0;
   overflow-y: auto;
 }
-.bottom-dock .world-chat-feed {
-  min-height: 0;
-  max-height: none;
-  flex: 1;
-  margin-top: 6px;
-}
-.bottom-dock .world-chat-panel {
-  display: flex;
-  min-height: 0;
-  flex-direction: column;
-}
-.bottom-dock .world-chat-panel.chat-collapsed {
-  justify-content: center;
-}
-.bottom-dock .event-panel.dock-collapsed {
-  justify-content: center;
-}
 .bottom-dock .dock-heading {
   min-height: 37px;
   flex: 0 0 auto;
   overflow: visible;
-}
-.new-message-button {
-  margin-top: 7px;
-  color: #a9e7c4;
-  cursor: pointer;
 }
 .panel {
   padding: 14px;
@@ -1287,7 +1232,6 @@ dd {
   border-color: #fff2d3;
   box-shadow: 0 0 0 2px #fff2d344;
 }
-.controls-panel h2,
 .event-panel h2 {
   color: #e6ece8;
   margin-bottom: 11px;
@@ -1452,10 +1396,7 @@ dd {
   color: #ffafa3 !important;
   font-size: 0.74rem !important;
 }
-.agent-inspector > p,
-.turn-detail p,
-.turn-detail details,
-.compact-history {
+.agent-inspector > p {
   color: #bcc9c5;
   font-size: 0.77rem;
   line-height: 1.5;
@@ -1466,80 +1407,8 @@ dd {
   border: 2px solid #e6ece8;
   border-radius: 50%;
 }
-.outcome {
-  display: inline-block;
-  padding: 2px 6px;
-  border-radius: 4px;
-  text-transform: uppercase;
-  font-size: 0.67rem !important;
-  font-weight: 750;
-}
-.outcome.accepted {
-  background: #214b39;
-  color: #8ff1ba;
-}
-.outcome.rejected,
-.outcome.provider-error,
-.outcome.lost-tick,
-.outcome.operator-skipped {
-  background: #512b27;
-  color: #ffafa3;
-}
-.provider-meta,
 .muted {
   color: #81928c !important;
-}
-.turn-detail details {
-  margin-top: 10px;
-}
-.turn-detail details p {
-  margin-top: 6px;
-  overflow-wrap: anywhere;
-}
-.observation-note {
-  color: #8fa19b !important;
-  font-style: italic;
-}
-.observation-difference {
-  color: #ffd58a !important;
-}
-.compact-history {
-  margin: 0;
-  padding-left: 18px;
-}
-.world-chat-feed small {
-  color: #82938e;
-}
-.world-chat-feed {
-  list-style: none;
-  max-height: 260px;
-  overflow-y: auto;
-  margin: 12px 0 0;
-  padding: 0 4px 0 0;
-}
-.world-chat-feed li {
-  border-left: 3px solid transparent;
-  border-bottom: 1px solid #26332f;
-  padding: 6px 0 6px 7px;
-  font-size: 13px;
-  line-height: 1.35;
-}
-.world-chat-feed li:last-child {
-  border-bottom: 0;
-}
-.world-chat-feed div {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-}
-.world-chat-feed p {
-  margin: 2px 0 0;
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
-}
-.world-chat-feed small {
-  font-size: 11px;
-  line-height: 1.3;
 }
 .component-result {
   border-left: 2px solid #4e766a;
@@ -1665,7 +1534,6 @@ dd {
   .modal-body {
     padding: 12px;
   }
-  .agent-model-overrides,
   .model-global-grid,
   .model-filters,
   .range-row {
@@ -1973,13 +1841,7 @@ summary:focus-visible {
   color: var(--text-muted);
   font-size: 0.66rem;
 }
-.world-chat-feed strong {
-  text-shadow:
-    0 1px 2px #000,
-    0 0 4px #000;
-}
-.cancel-request-slot.inactive,
-.failed-turn-controls.inactive {
+.cancel-request-slot.inactive {
   visibility: hidden;
 }
 .overflow-menu summary {
@@ -2070,8 +1932,7 @@ textarea,
 .model-console input,
 .model-console select,
 .model-console button,
-.dock-heading button,
-.new-message-button {
+.dock-heading button {
   border-color: var(--line);
   background: var(--surface-raised);
   color: var(--text);
@@ -2081,8 +1942,7 @@ dt,
 .catalog-state,
 .modal-header p,
 .model-filters label,
-.model-select-label,
-.agent-model-overrides label {
+.model-select-label {
   color: var(--text-muted) !important;
 }
 .primary-action:not(:disabled) {

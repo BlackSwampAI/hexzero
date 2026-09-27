@@ -35,6 +35,13 @@ the server retains directive targets and the action mapping. The key, raw
 TypeSafe requests and responses, and provider error bodies never enter safe
 telemetry, World Lab, archives, or exports. TypeSafe token usage is factual;
 no monetary cost is inferred from it.
+
+The World Lab uses the standard HTTPS OpenStreetMap raster tile endpoint
+without a provider key. Browser requests retain normal caching and referrer
+behavior, and the app does not prefetch or download tiles for offline use.
+Visible OpenStreetMap attribution remains on the map. See the
+[OpenStreetMap Tile Usage Policy](https://operations.osmfoundation.org/policies/tiles/).
+
 The second Jev question returns only a bounded yes probability in the same
 request as the action choice. Code applies the replan threshold and stores a
 structured signal; it grants no action or mutation authority. Reused directives
@@ -83,11 +90,14 @@ unknown; the command never launches from default tests or CI.
 
 ## Model-provider isolation
 
-Simultaneous ticks retain the same provider isolation. Every job receives a
-schema-validated clone of its frozen observation, resolved model and reasoning
-profile, abort signal, and the tick's shared deadline. Agent-authored output
-cannot mutate the world directly or enter another same-tick observation.
-Cancellation discards every result from the uncommitted tick.
+Simultaneous ticks retain provider isolation. Each provider call receives a
+schema-validated observation, resolved model and reasoning profile, abort
+signal, and the tick's shared deadline. Agent-authored output cannot mutate the
+world directly. Agent Zero's response is parsed and validated; only its
+bounded structured plan and worker directives are supplied as worker
+observation data. Raw planner text is not forwarded. Workers do not receive
+other workers' choices. Cancellation discards every result from the
+uncommitted tick.
 
 When strategic replanning is required, the OpenRouter planner receives one bounded strategic observation and is instructed to return exactly one plain JSON object naming opaque worker and target choices plus a Zero-action selection. TypeSafe Jev receives a compact semantic observation with opaque legal candidate IDs per worker and returns a probability distribution over candidates; a second question in the same request returns an optional bounded replan probability. The runtime performs bounded extraction and conservative repair for wrappers such as code fences, surrounding prose, and trailing commas, then rejects missing text, unusable JSON, unknown fields, or output truncation before the deterministic world engine validates all resolved components independently.
 
@@ -95,11 +105,14 @@ The request uses the selected model, messages, `max_tokens`, `stream: false`, an
 
 Explicit scripted mode bypasses repository `.env` loading entirely. This keeps deterministic browser validation offline and prevents test-provider processes from unnecessarily reading genuine-provider credentials; genuine mode retains the existing environment conventions.
 
-## Location-search boundary
+## Tick recovery
 
-Tick recovery is server-owned and bounded to the existing at-most-one automatic
-repair or transient retry inside the shared deadline. Lost ticks are final;
-there is no browser-driven Retry/Skip or unattended recovery path.
+Tick recovery is server-owned and bounded inside the shared deadline. The
+OpenRouter planner and Jev each allow at most one retry for HTTP 429 or 529.
+Failed planning and worker choices use deterministic fallbacks. There is no
+browser-driven Retry/Skip or unattended recovery path.
+
+## Location-search boundary
 
 Search runs only after explicit submission. Queries are trimmed to 120 characters, URL-encoded, receive no browser credentials, and are not logged by application code. The replaceable Nominatim adapter identifies the project, requests at most five results, limits upstream access to once per second per process, caches at most 100 normalized queries, times out after five seconds, and returns safe failures. `NOMINATIM_BASE_URL` replaces the upstream. Tests inject a fake; manual coordinates remain available.
 
@@ -107,31 +120,35 @@ Non-success OpenRouter bodies are read only up to a fixed bound. The adapter ext
 
 ## Prompt and reasoning data
 
-New logical turns may use one automatic repair or transient transport retry,
-but never both, and all calls share the original 75-second deadline. A
-corrective request contains the same authoritative observation plus only
-allowlisted validation codes; it never contains the raw invalid response, raw
-Zod issues, stack traces, provider bodies, or copied diagnostic text.
-Engine-rejected normalized decisions are not retried. Tick recovery is limited
-to one bounded in-deadline automatic repair or transient retry; an unresolved
-decision becomes a final attributed lost tick.
+OpenRouter planner retries stay within the tick deadline. Planner responses
+are normalized into a strict bounded schema before server code maps worker and
+target choices into directives; workers receive those validated directives as
+ordinary observation data. Raw planner text, raw Zod issues, stack traces, and
+provider bodies are not forwarded to another provider or retained in telemetry.
+Failed planner and reflex calls follow the documented deterministic fallback
+paths; cancellation discards the uncommitted world tick.
 
-The model is explicitly instructed to return only one flat JSON decision with one concise visible summary and no hidden reasoning or chain-of-thought. Optional reasoning configuration always sets `exclude: true`; Provider default sends no reasoning instruction. Only numeric reasoning-token billing metadata is retained if OpenRouter reports it. The application stores no raw prompts, raw provider payloads, reasoning text, or private reasoning.
+Agent Zero is instructed to return one bounded JSON plan; Jev returns a
+structured reflex choice. Neither is asked for hidden reasoning or
+chain-of-thought. Optional reasoning configuration always sets `exclude: true`;
+Provider default sends no reasoning instruction. Only numeric reasoning-token
+billing metadata is retained if OpenRouter reports it. The application stores
+no raw prompts, raw provider payloads, reasoning text, or private reasoning.
 
-Agent Zero's strategy summary and directive notes (at most 160 characters each)
-and Jev's structured reflex output are bounded, agent-authored, untrusted data.
-They appear only inside the immutable user observation, never the fixed system
-instruction. There is no agent chat, diplomacy text, or memory prose. The engine
-validates every world action, infection, and capture before committing state;
-agent-authored outputs cannot grant engine authority, weaken validation, or
-authorize prompt or reasoning disclosure. World Lab renders model text through
-React text nodes and never raw HTML.
+Agent Zero's strategy summary and directive notes are bounded, untrusted text.
+They may appear in World Lab or as data in later planner observations. Only
+schema-validated directives enter worker observations, and no agent-authored
+text is placed in a system instruction. There is no agent chat, diplomacy text,
+or memory prose. The engine validates every world action, infection, and
+capture before committing state; agent-authored outputs cannot grant engine
+authority, weaken validation, or authorize prompt or reasoning disclosure.
+World Lab renders model text through React text nodes and never raw HTML.
 
 ## Experiment telemetry and exports
 
 Tick failures retain only sanitized diagnostics, model/reasoning selections,
-timestamps, and the safe frozen observation. A resolved lost tick is final and
-has no manual retry/skip path. Raw provider responses, reasoning text,
+timestamps, and the safe frozen observation. Failed ticks do not partially
+commit world changes and have no manual retry/skip path. Raw provider responses, reasoning text,
 credentials, and authorization headers are not retained.
 
 The Game API captures only schema-validated safe observations, requested world actions, separate result records, visible concise summaries, sanitized rejected attempts, bounded provider failures, and normalized usage metadata. Malformed identifiers use nullable or absent sanitized representations; raw provider output is never retained. It never records or exports API keys, authorization data, fixed or hidden prompts, raw provider request/response bodies, private chain-of-thought, hidden analysis, secrets, or unbounded diagnostics. Historical records are cloned and immutable.

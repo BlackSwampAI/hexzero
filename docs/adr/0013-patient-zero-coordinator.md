@@ -1,6 +1,11 @@
 # ADR 0013: Experimental Patient Zero coordinator
 
-Status: accepted experiment; optional designation superseded by ADR 0017
+## Status
+
+The Patient Zero designation remains the Agent Zero roster designation.
+Superseded by [ADR 0033](0033-retire-legacy-multi-agent-architecture.md) for
+legacy broadcasts, diplomacy, and coordinator behavior; the current role is
+defined by the zero-swarm architecture.
 
 Historical scenarios may designate one roster agent as Patient Zero, or `null`
 for a legacy baseline. ADR 0017 requires the designation for all current/live

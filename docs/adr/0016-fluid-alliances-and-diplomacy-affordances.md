@@ -2,10 +2,8 @@
 
 ## Status
 
-Accepted. This supersedes ADR 0008's fixed eight-member and four-active-alliance
-limits while preserving its ownership, privacy, and telemetry decisions.
-
-Superseded by ADR 0033.
+Superseded by [ADR 0033](0033-retire-legacy-multi-agent-architecture.md);
+retained as a historical record of the removed alliance and diplomacy system.
 
 ## Context
 

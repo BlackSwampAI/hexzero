@@ -4,6 +4,10 @@
 
 Accepted for Slice D1.1.
 
+The bounded cleaner feed remains part of the Agent Zero strategic observation.
+Its legacy recommendations to communicate, negotiate alliances, or coordinate
+agents are superseded by [ADR 0033](0033-retire-legacy-multi-agent-architecture.md).
+
 ## Decision
 
 The existing single Patient Zero receives an engine-authored global cleaner

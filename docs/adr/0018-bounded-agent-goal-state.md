@@ -1,8 +1,7 @@
 # ADR 0018: Bounded agent goal state
 
-- Status: Accepted
+- Status: Superseded by [ADR 0033](0033-retire-legacy-multi-agent-architecture.md)
 - Date: 2026-08-23
-- Status: Superseded by ADR 0033
 
 ## Decision
 

@@ -32,15 +32,6 @@ const metrics = {
   territoryGainedThroughInfection: 0,
   territoryGainedThroughCapture: 0,
   territoryLostThroughCapture: 0,
-  publicMessagesRequested: 0,
-  publicMessagesAccepted: 0,
-  publicMessagesRejected: 0,
-  directMessagesRequested: 0,
-  directMessagesDelivered: 0,
-  directMessagesRejected: 0,
-  publicMessagesSent: 0,
-  directMessagesSent: 0,
-  directMessagesReceived: 0,
   uniqueVisitedCells: 0,
   tokens: {},
   knownCostCredits: 0,
@@ -129,6 +120,32 @@ function committedTick(tickNumber: number) {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('WorldLab swarm workspace', () => {
+  it('restores and persists the collapsed activity dock preference', async () => {
+    const key = 'hexzero.world-lab.activity-dock';
+    window.localStorage.removeItem(key);
+    window.localStorage.setItem(key, 'collapsed');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => response(snapshot)),
+    );
+    const user = userEvent.setup();
+    render(<WorldLab />);
+
+    const expandButton = await screen.findByRole('button', {
+      name: 'Expand activity',
+    });
+    expect(screen.getByRole('main')).toHaveClass('activity-collapsed');
+    await user.click(expandButton);
+    expect(
+      await screen.findByRole('button', { name: 'Collapse activity' }),
+    ).toBeVisible();
+    await waitFor(() =>
+      expect(window.localStorage.getItem(key)).toBe('expanded'),
+    );
+    expect(screen.getByRole('main')).not.toHaveClass('activity-collapsed');
+    window.localStorage.removeItem(key);
+  });
+
   it('shows the fixed swarm architecture and Agent Zero model readiness', async () => {
     vi.stubGlobal(
       'fetch',

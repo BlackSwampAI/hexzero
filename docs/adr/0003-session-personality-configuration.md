@@ -1,8 +1,7 @@
 # ADR 0003: Server-owned session personality configuration
 
-- Status: Accepted
+- Status: Superseded by [ADR 0033](0033-retire-legacy-multi-agent-architecture.md)
 - Date: 2026-08-14
-- Status: Superseded by ADR 0033
 
 ## Context
 

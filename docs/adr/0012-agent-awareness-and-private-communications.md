@@ -1,6 +1,10 @@
 # ADR 0012: Agent awareness and private communications
 
-Status: accepted
+## Status
+
+Superseded by [ADR 0033](0033-retire-legacy-multi-agent-architecture.md) for
+per-agent communication and social awareness. This ADR remains a historical
+record; zero-swarm uses Agent Zero planning and bounded worker observations.
 
 Agent decisions use `text-flat-json-v2` and the engine-owned `durable-influence-v2` objective. One optional communication intent is `public`, `direct`, or `alliance`. Public content is globally and future-player-visible; direct and alliance content is player-hidden and remains an untrusted claim.
 

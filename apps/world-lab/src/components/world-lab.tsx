@@ -104,7 +104,7 @@ export function WorldLab() {
   >({});
   const [verifyingModelId, setVerifyingModelId] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
-  const [chatCollapsed, setChatCollapsed] = useState(false);
+  const [activityCollapsed, setActivityCollapsed] = useState(false);
   const [activityDockLoaded, setActivityDockLoaded] = useState(false);
   const inFlightRef = useRef(false);
   const boundedRunTargetRef = useRef<number | null>(null);
@@ -134,7 +134,7 @@ export function WorldLab() {
       (value) => value === 'collapsed' || value === 'expanded',
     );
     const hydrationTask = window.setTimeout(() => {
-      setChatCollapsed(collapsed === 'collapsed');
+      setActivityCollapsed(collapsed === 'collapsed');
       setActivityDockLoaded(true);
     }, 0);
     return () => window.clearTimeout(hydrationTask);
@@ -144,9 +144,9 @@ export function WorldLab() {
     if (!activityDockLoaded) return;
     window.localStorage.setItem(
       activityDockStorageKey,
-      chatCollapsed ? 'collapsed' : 'expanded',
+      activityCollapsed ? 'collapsed' : 'expanded',
     );
-  }, [activityDockLoaded, chatCollapsed]);
+  }, [activityDockLoaded, activityCollapsed]);
 
   useEffect(() => {
     if (
@@ -609,7 +609,9 @@ export function WorldLab() {
 
   return (
     <main
-      className={`world-lab-shell${chatCollapsed ? ' chat-collapsed' : ''}`}
+      className={`world-lab-shell${
+        activityCollapsed ? ' activity-collapsed' : ''
+      }`}
     >
       <header className="command-navbar" aria-label="World Lab command bar">
         <div className="command-brand">
@@ -1181,13 +1183,13 @@ export function WorldLab() {
               <span className="panel-kicker">Swarm activity</span>
               <button
                 type="button"
-                aria-expanded={!chatCollapsed}
-                onClick={() => setChatCollapsed((collapsed) => !collapsed)}
+                aria-expanded={!activityCollapsed}
+                onClick={() => setActivityCollapsed((collapsed) => !collapsed)}
               >
-                {chatCollapsed ? 'Expand activity' : 'Collapse activity'}
+                {activityCollapsed ? 'Expand activity' : 'Collapse activity'}
               </button>
             </div>
-            {!chatCollapsed && <SwarmActivityPanel snapshot={snapshot} />}
+            {!activityCollapsed && <SwarmActivityPanel snapshot={snapshot} />}
           </section>
         </>
       ) : (

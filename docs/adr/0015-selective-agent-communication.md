@@ -2,9 +2,8 @@
 
 ## Status
 
-Accepted for the simultaneous-tick experiment foundation.
-
-Superseded by ADR 0033.
+Superseded by [ADR 0033](0033-retire-legacy-multi-agent-architecture.md);
+retained as a historical record of the removed per-agent communication system.
 
 ## Context
 
