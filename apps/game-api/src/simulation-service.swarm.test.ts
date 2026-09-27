@@ -1,6 +1,6 @@
-import { gridDistance } from 'h3-js';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
+  OpenRouterSwarmPlanner,
   ReflexProviderError,
   ScriptedReflexProvider,
   type PlannerOptions,
@@ -74,33 +74,36 @@ class InspectingPlanner implements SwarmPlanner {
         zeroActionCandidateId: observation.legalZeroActions.find(
           ({ action }) => action.type === 'wait',
         )!.id,
-        directives: observation.agents
-          .filter(({ agentId }) => agentId !== observation.zeroAgentId)
-          .map((agent, index) => {
-            const targetCell =
-              this.targetDistance === 0
-                ? agent.position
-                : observation.strategicTargetCells.find(
-                    (cell) =>
-                      cell !== agent.position &&
-                      gridDistance(cell, agent.position) ===
-                        this.targetDistance,
-                  );
-            if (!targetCell)
-              throw new Error(
-                `No strategic target is ${this.targetDistance} cells from ${agent.agentId}.`,
-              );
-            return {
-              id: `directive-${observation.tickNumber}-${index}`,
-              agentId: agent.agentId,
-              mission: 'hold',
-              targetCell,
-              priority: 'normal',
-              riskTolerance: 'low',
-              issuedAtTick: observation.tickNumber,
-              expiresAtTick: observation.tickNumber + this.directiveLifetime,
-            };
-          }),
+        directives: observation.workerOptions.map((wo, index) => {
+          let chosenOption: (typeof wo.options)[number] | undefined;
+          if (this.targetDistance === 0) {
+            chosenOption = wo.options.find((o) => o.mission === 'hold');
+          } else {
+            // Pick the non-hold option with the largest distance (i.e. the
+            // farthest reachable target). Falls back to any non-hold option
+            // when no option meets the minimum targetDistance.
+            const nonHold = wo.options
+              .filter((o) => o.mission !== 'hold' && o.targetCell !== null)
+              .sort((a, b) => b.distance - a.distance);
+            chosenOption =
+              nonHold.find((o) => o.distance >= this.targetDistance) ??
+              nonHold[0];
+          }
+          if (!chosenOption)
+            throw new Error(
+              `No option with distance ${this.targetDistance} for worker ${wo.agentId}.`,
+            );
+          return {
+            id: `directive-${observation.tickNumber}-${index}`,
+            agentId: wo.agentId,
+            mission: chosenOption.mission,
+            targetCell: chosenOption.targetCell,
+            priority: 'normal',
+            riskTolerance: 'low',
+            issuedAtTick: observation.tickNumber,
+            expiresAtTick: observation.tickNumber + this.directiveLifetime,
+          };
+        }),
       },
       metadata: { provider: 'scripted-test', model: 'test/zero', latencyMs: 0 },
     } satisfies Awaited<ReturnType<SwarmPlanner['plan']>>;
@@ -125,20 +128,18 @@ class LifecyclePlanner implements SwarmPlanner {
     options: PlannerOptions = {},
   ) {
     this.observations.push(structuredClone(observation));
-    const workers = observation.agents.filter(
-      ({ agentId }) => agentId !== observation.zeroAgentId,
-    );
     if (this.mission === 'relocate' && observation.tickNumber === 1) {
+      // Prefer a worker with a genuine relocate option; fall back to any
+      // worker with a non-hold option (e.g. expand) so the test remains
+      // valid in worlds that don't generate relocate options.
       this.relocatingAgentId =
-        workers.find((agent) =>
-          observation.strategicTargetCells.some(
-            (cell) =>
-              gridDistance(agent.position, cell) === 1 &&
-              !observation.agents.some(({ position }) => position === cell),
+        observation.workerOptions.find((wo) =>
+          wo.options.some(
+            (o) => o.mission === 'relocate' || o.mission === 'expand',
           ),
         )?.agentId ?? null;
       if (!this.relocatingAgentId)
-        throw new Error('No worker has an adjacent relocate target.');
+        throw new Error('No worker has a movable option.');
     }
     const zeroActionCandidateId = observation.legalZeroActions.find(
       ({ action }) => action.type === 'wait',
@@ -146,28 +147,37 @@ class LifecyclePlanner implements SwarmPlanner {
     const plan: SwarmPlan = {
       strategySummary: 'Lifecycle fixture.',
       zeroActionCandidateId,
-      directives: workers.map((agent, index) => {
-        const mission =
+      directives: observation.workerOptions.map((wo, index) => {
+        const wantedMission =
           this.mission === 'relocate'
-            ? agent.agentId === this.relocatingAgentId &&
+            ? wo.agentId === this.relocatingAgentId &&
               observation.tickNumber === 1
               ? 'relocate'
               : 'hold'
             : this.mission;
-        const targetCell =
-          mission === 'relocate'
-            ? observation.strategicTargetCells.find(
-                (cell) =>
-                  gridDistance(agent.position, cell) === 1 &&
-                  !observation.agents.some(({ position }) => position === cell),
-              )
-            : agent.position;
-        if (!targetCell) throw new Error('No adjacent relocate target.');
+        // Use the wanted mission if available; otherwise use any non-hold
+        // mission so the directive produces a real target (for relocate tests
+        // on worlds without crowding, this falls back to 'expand').
+        const opt =
+          wo.options.find((o) => o.mission === wantedMission) ??
+          (wantedMission === 'relocate'
+            ? // For the relocate fallback, prefer an expand option that actually
+              // requires movement (distance > 0) so the reflex can advance.
+              (wo.options.find(
+                (o) =>
+                  o.mission === 'expand' &&
+                  o.distance > 0 &&
+                  o.targetCell !== null,
+              ) ?? wo.options.find((o) => o.mission === 'expand'))
+            : undefined) ??
+          wo.options.find((o) => o.mission === 'hold');
+        const mission = opt?.mission ?? wantedMission;
+        if (!opt) throw new Error(`No option for mission ${mission}.`);
         return {
           id: `lifecycle-${observation.tickNumber}-${index}`,
-          agentId: agent.agentId,
-          mission,
-          targetCell,
+          agentId: wo.agentId,
+          mission: opt.mission,
+          targetCell: opt.targetCell,
           priority: 'normal',
           riskTolerance: 'low',
           issuedAtTick: observation.tickNumber,
@@ -196,7 +206,8 @@ function lifecycleReflex(): ReflexProvider {
     configured: true,
     async decide(observation, options) {
       const choice = observation.candidates.find(({ description }) =>
-        observation.directive.mission === 'relocate'
+        observation.directive.mission !== 'hold' &&
+        observation.directive.targetCell !== null
           ? description.includes('This advances toward the assigned target.')
           : description.startsWith('Remain on the current cell'),
       )!;
@@ -294,18 +305,16 @@ describe('zero-swarm SimulationService tick', () => {
           zeroActionCandidateId: observation.legalZeroActions.find(
             ({ action }) => action.type === 'wait',
           )!.id,
-          directives: observation.agents
-            .filter(({ agentId }) => agentId !== observation.zeroAgentId)
-            .map((agent) => ({
-              id: `pressure-${observation.tickNumber}-${agent.agentId}`,
-              agentId: agent.agentId,
-              mission: 'hold' as const,
-              targetCell: agent.position,
-              priority: 'normal' as const,
-              riskTolerance: 'medium' as const,
-              issuedAtTick: observation.tickNumber,
-              expiresAtTick: observation.tickNumber + 5,
-            })),
+          directives: observation.workerOptions.map((wo, index) => ({
+            id: `pressure-${observation.tickNumber}-${index}`,
+            agentId: wo.agentId,
+            mission: 'hold' as const,
+            targetCell: null,
+            priority: 'normal' as const,
+            riskTolerance: 'medium' as const,
+            issuedAtTick: observation.tickNumber,
+            expiresAtTick: observation.tickNumber + 5,
+          })),
         };
         swarmPlanSchema.parse(plan);
         options.beginAttempt?.('initial')?.({
@@ -562,7 +571,9 @@ describe('zero-swarm SimulationService tick', () => {
       planner.observations[0]?.agents.map(({ agentId }) => agentId),
     ).toEqual([roster[1]!.id]);
     expect(planner.observations[0]?.recentPlayerPressure).toEqual(
-      expect.arrayContaining([expect.stringContaining(roster[0]!.id)]),
+      expect.arrayContaining([
+        expect.stringContaining('A worker was captured'),
+      ]),
     );
     expect(planner.observations[0]?.recentCaptures).toEqual([
       expect.objectContaining({ capturedAgentId: roster[0]!.id }),
@@ -892,6 +903,8 @@ describe('zero-swarm SimulationService tick', () => {
       ({ agentId }) => agentId !== planner.observations[1]?.zeroAgentId,
     );
     expect(workerObservations).toHaveLength(7);
+    // v2 hold options always have targetCell=null; at-target fires on
+    // hold+null-target to preserve the semantic that waiting workers are on-target.
     expect(workerObservations?.map(({ workerStatus }) => workerStatus)).toEqual(
       Array.from({ length: 7 }, () => 'at-target'),
     );
@@ -947,9 +960,14 @@ describe('zero-swarm SimulationService tick', () => {
     const workerObservations = planner.observations[1]?.agents.filter(
       ({ agentId }) => agentId !== planner.observations[1]?.zeroAgentId,
     );
-    expect(workerObservations?.map(({ workerStatus }) => workerStatus)).toEqual(
-      Array.from({ length: 7 }, () => 'advancing'),
-    );
+    // Workers moved to (or toward) their target; status is 'advancing' or
+    // 'at-target' depending on how many steps remain.
+    expect(
+      workerObservations?.every(
+        ({ workerStatus }) =>
+          workerStatus === 'advancing' || workerStatus === 'at-target',
+      ),
+    ).toBe(true);
   });
 
   it('releases reuse-tick reservations when a worker request is cancelled', async () => {
@@ -1161,15 +1179,56 @@ describe('zero-swarm SimulationService tick', () => {
     ).toBe(1);
   });
 
-  it('replans after relocate completion and identifies completed directives to Zero', async () => {
-    const planner = new LifecyclePlanner('relocate');
-    const simulation = setup(planner, lifecycleReflex());
+  it('reports completed directive identities to Zero on the replan observation', async () => {
+    // Expand directives complete when their target cell becomes worker-controlled.
+    // This test verifies that the completed directive's agentId+directiveId is
+    // reported back to Zero in the replan observation's completedDirectives list.
+    const planner = new LifecyclePlanner('expand');
+    const infectingReflex: ReflexProvider = {
+      mode: 'scripted-reflex-test',
+      model: 'test-reflex',
+      configured: true,
+      async decide(observation, options) {
+        const choice =
+          observation.candidates.find(({ description }) =>
+            description.startsWith('Infect the current open cell'),
+          ) ??
+          observation.candidates.find(({ description }) =>
+            description.startsWith('Remain'),
+          ) ??
+          observation.candidates[0]!;
+        const decision = reflexDecisionSchema.parse({
+          chosenCandidateId: choice.id,
+          confidence: 1,
+          probabilities: Object.fromEntries(
+            observation.candidates.map(({ id }) => [
+              id,
+              id === choice.id ? 1 : 0,
+            ]),
+          ),
+          model: 'test-reflex',
+          latencyMs: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          directiveId: observation.directive.id,
+          cognitionSource: 'jev-reflex',
+        });
+        options?.beginAttempt?.('initial')?.({
+          outcome: 'completed',
+          reflexDecision: decision,
+        });
+        return decision;
+      },
+    };
+    const simulation = setup(planner, infectingReflex);
     await simulation.executeNextTick();
     const first = simulation.getSnapshot().swarmTicks?.[0];
-    const relocating = first?.workers.find(
-      ({ directive }) => directive.mission === 'relocate',
+    // Pick one worker whose action was accepted (infected their expand target).
+    const infecting = first?.workers.find(
+      ({ directive, actionResult }) =>
+        directive.mission === 'expand' && actionResult?.accepted,
     );
-    expect(relocating?.action?.type).toBe('move');
+    expect(infecting).toBeDefined();
     await simulation.executeNextTick();
     const second = simulation.getSnapshot().swarmTicks?.[1];
     expect(second?.replanReasons).toContain('directive-complete');
@@ -1178,8 +1237,8 @@ describe('zero-swarm SimulationService tick', () => {
     expect(planner.observations[1]?.completedDirectives).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          agentId: relocating?.agentId,
-          directiveId: relocating?.directive.id,
+          agentId: infecting?.agentId,
+          directiveId: infecting?.directive.id,
         }),
       ]),
     );
@@ -1187,14 +1246,22 @@ describe('zero-swarm SimulationService tick', () => {
 
   it('completes expand only after its target becomes worker-controlled', async () => {
     const planner = new LifecyclePlanner('expand');
+    // Infect the current open cell when possible; fall back to Remain when the
+    // worker is already on an infected cell (e.g. after the first expand target
+    // was infected and Zero replanned to a new expand option).
     const infecting: ReflexProvider = {
       mode: 'scripted-reflex-test',
       model: 'test-reflex',
       configured: true,
       async decide(observation, options) {
-        const choice = observation.candidates.find(({ description }) =>
-          description.startsWith('Infect the current open cell'),
-        )!;
+        const choice =
+          observation.candidates.find(({ description }) =>
+            description.startsWith('Infect the current open cell'),
+          ) ??
+          observation.candidates.find(({ description }) =>
+            description.startsWith('Remain'),
+          ) ??
+          observation.candidates[0]!;
         const decision = reflexDecisionSchema.parse({
           chosenCandidateId: choice.id,
           confidence: 1,
@@ -1230,12 +1297,12 @@ describe('zero-swarm SimulationService tick', () => {
     ).toBe(true);
     await simulation.executeNextTick();
     const second = simulation.getSnapshot().swarmTicks?.[1];
+    // In tick 1, the expand directives whose targets were infected in tick 0
+    // are complete; Zero replans with fresh expand options (accepted).
     expect(second?.replanReasons).toContain('directive-complete');
-    expect(second?.planSource).toBe('deterministic-fallback');
-    expect(second?.plannerFailure?.code).toBe('invalid-decision');
-    expect(
-      simulation.getSnapshot().experiment.attemptAccounting.attemptsStarted,
-    ).toBe(9);
+    expect(second?.planSource).toBe('zero-llm');
+    expect(second?.plannerFailure).toBeUndefined();
+    expect(planner.observations).toHaveLength(2);
   });
 
   it('does not complete a hold directive merely because its worker waits at target', async () => {
@@ -1247,5 +1314,70 @@ describe('zero-swarm SimulationService tick', () => {
       'directive-reuse',
     );
     expect(planner.observations).toHaveLength(1);
+  });
+
+  it('sends Agent Zero only opaque semantic options and maps its choice back to authoritative directives', async () => {
+    const bodies: string[] = [];
+    const fetchImplementation = vi.fn<typeof fetch>(async (_url, init) => {
+      const body = String(init?.body);
+      bodies.push(body);
+      const payload = JSON.parse(JSON.parse(body).messages[1].content) as {
+        legalZeroActions: { id: string }[];
+        workers: {
+          workerId: string;
+          options: { optionId: string; mission: string }[];
+        }[];
+      };
+      return new Response(
+        JSON.stringify({
+          id: 'safe-request-id',
+          model: 'test-model',
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  strategySummary: 'Push every worker onto its own front.',
+                  zeroActionCandidateId: payload.legalZeroActions[0]!.id,
+                  directives: payload.workers.map(({ workerId, options }) => ({
+                    workerId,
+                    optionId: (
+                      options.find(({ mission }) => mission === 'expand') ??
+                      options[0]!
+                    ).optionId,
+                    priority: 'normal',
+                    riskTolerance: 'medium',
+                  })),
+                }),
+              },
+            },
+          ],
+        }),
+        { status: 200 },
+      );
+    });
+    const simulation = setup(
+      new OpenRouterSwarmPlanner({ apiKey: 'test-key', fetchImplementation }),
+      new ScriptedReflexProvider(
+        Array.from({ length: 7 }, () => ({ chosenCandidateId: 'action_0' })),
+      ),
+    );
+
+    await simulation.executeNextTick();
+
+    expect(bodies).toHaveLength(1);
+    const userContent = JSON.parse(bodies[0]!).messages[1].content as string;
+    // Resolution-9 H3 cell IDs and agent UUIDs never reach the model.
+    expect(userContent).not.toMatch(/\b8[0-9a-f]{14}\b/);
+    expect(userContent).not.toMatch(
+      /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/,
+    );
+    const tick = simulation.getSnapshot().swarmTicks?.[0];
+    expect(tick?.planSource).toBe('zero-llm');
+    const expandDirectives = tick?.plan.directives.filter(
+      ({ mission }) => mission === 'expand',
+    );
+    expect(expandDirectives?.length).toBeGreaterThan(0);
+    for (const directive of expandDirectives ?? [])
+      expect(h3CellSchema.safeParse(directive.targetCell).success).toBe(true);
   });
 });

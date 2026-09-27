@@ -32,7 +32,7 @@ import {
 } from './geographic-direction';
 
 export interface ExperimentSource {
-  schemaVersion: 12;
+  schemaVersion: 13;
   id: ExperimentId;
   startedAt: string;
   providerMode: 'openrouter' | 'scripted-test';

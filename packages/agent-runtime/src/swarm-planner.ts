@@ -83,6 +83,10 @@ const openRouterResponseSchema = z.object({
     .min(1),
 });
 
+/**
+ * v2 compact plan: model returns opaque optionId per worker; server resolves
+ * mission + targetCell from the authoritative option map in the observation.
+ */
 const compactPlanSchema = z
   .object({
     strategySummary: z.string().trim().min(1).max(500),
@@ -91,17 +95,7 @@ const compactPlanSchema = z
         z
           .object({
             workerId: z.string().regex(/^worker_[0-9]+$/),
-            mission: z.enum([
-              'expand',
-              'hold',
-              'relocate',
-              'reinforce',
-              'evade',
-            ]),
-            targetId: z
-              .string()
-              .regex(/^target_[0-9]+$/)
-              .nullable(),
+            optionId: z.string().regex(/^w[0-9]+_o[0-9]+$/),
             priority: z.enum(['low', 'normal', 'high']),
             riskTolerance: z.enum(['low', 'medium', 'high']),
           })
@@ -443,27 +437,25 @@ export class DeterministicSwarmPlanner implements SwarmPlanner {
         message: 'The deterministic planner received no legal Zero action.',
         retryable: false,
       });
-    const target =
-      observation.strategicTargetCells.find(
-        (cell) =>
-          observation.cells.find((candidate) => candidate.cell === cell)
-            ?.state === 'open',
-      ) ?? null;
+    // Pick best expand option per worker; fall back to hold.
     const plan = swarmPlanSchema.parse({
       strategySummary: 'Deterministic swarm perimeter expansion.',
       zeroActionCandidateId: zeroAction.id,
-      directives: observation.agents
-        .filter(({ agentId }) => agentId !== observation.zeroAgentId)
-        .map(({ agentId }) => ({
-          id: `deterministic-${observation.tickNumber}-${agentId}`,
-          agentId,
-          mission: target ? 'expand' : 'hold',
-          targetCell: target,
+      directives: observation.workerOptions.map((wo) => {
+        const expandOpt = wo.options.find((o) => o.mission === 'expand');
+        const holdOpt = wo.options.find((o) => o.mission === 'hold')!;
+        const chosen = expandOpt ?? holdOpt;
+        return {
+          id: `deterministic-${observation.tickNumber}-${wo.agentId}`,
+          agentId: wo.agentId,
+          mission: chosen.mission,
+          targetCell: chosen.targetCell,
           priority: 'normal',
           riskTolerance: 'medium',
           issuedAtTick: observation.tickNumber,
           expiresAtTick: observation.tickNumber + 4,
-        })),
+        };
+      }),
     });
     const metadata = metadataFor(model, 0);
     finalize?.({ outcome: 'completed', provider: metadata, swarmPlan: plan });
@@ -471,62 +463,100 @@ export class DeterministicSwarmPlanner implements SwarmPlanner {
   }
 }
 
-function buildSwarmPlannerRequest(
+export function buildSwarmPlannerRequest(
   observation: ZeroStrategicObservation,
   model: string,
   reasoningProfile: ReasoningProfile,
 ) {
-  const targetChoices = observation.strategicTargetCells.map((cell, index) => ({
-    targetId: `target_${index}`,
-    cell,
-  }));
-  const targetIdByCell = new Map(
-    targetChoices.map(({ targetId, cell }) => [cell, targetId]),
-  );
   const completedDirectiveByAgent = new Map(
     (observation.completedDirectives ?? []).map(({ agentId, directiveId }) => [
       agentId,
       directiveId,
     ]),
   );
-  const workers = observation.agents
-    .filter(({ agentId }) => agentId !== observation.zeroAgentId)
-    .map((agent, index) => ({
-      workerId: `worker_${index}`,
-      position: agent.position,
-      controlledCellCount: agent.controlledCellCount,
-      territoryDelta: agent.territoryDelta,
-      localPressure: agent.localPressure,
-      pressureDirection: agent.pressureDirection,
-      pressureDistance: agent.pressureDistance,
-      workerStatus: agent.workerStatus ?? 'unknown',
-      directiveComplete:
-        agent.directive !== null &&
-        agent.directive !== undefined &&
-        completedDirectiveByAgent.get(agent.agentId) === agent.directive.id,
-      activeDirective: agent.directive
-        ? {
-            mission: agent.directive.mission,
-            targetId: agent.directive.targetCell
-              ? (targetIdByCell.get(agent.directive.targetCell) ?? null)
-              : null,
-            priority: agent.directive.priority,
-            riskTolerance: agent.directive.riskTolerance,
-            ticksRemaining: Math.max(
-              0,
-              agent.directive.expiresAtTick - observation.tickNumber,
-            ),
-          }
-        : null,
-    }));
-  const workerIdByAgent = new Map(
-    observation.agents
-      .filter(({ agentId }) => agentId !== observation.zeroAgentId)
-      .map(({ agentId }, index) => [agentId, `worker_${index}`]),
-  );
   const zero = observation.agents.find(
     ({ agentId }) => agentId === observation.zeroAgentId,
   )!;
+  // Workers derived from workerOptions (stable sorted agentId order); no H3 or agent IDs sent.
+  const workers = observation.workerOptions.map((wo, index) => {
+    const agentFacts = observation.agents.find(
+      ({ agentId }) => agentId === wo.agentId,
+    )!;
+    return {
+      workerId: `worker_${index}`,
+      controlledCellCount: agentFacts.controlledCellCount,
+      territoryDelta: agentFacts.territoryDelta,
+      localPressure: agentFacts.localPressure,
+      pressureDirection: agentFacts.pressureDirection,
+      pressureDistance: agentFacts.pressureDistance,
+      workerStatus: agentFacts.workerStatus ?? 'unknown',
+      directiveComplete:
+        agentFacts.directive !== null &&
+        agentFacts.directive !== undefined &&
+        completedDirectiveByAgent.get(wo.agentId) === agentFacts.directive.id,
+      activeDirective: agentFacts.directive
+        ? {
+            mission: agentFacts.directive.mission,
+            direction:
+              wo.options.find(
+                (o) =>
+                  o.continuesActiveDirective &&
+                  o.mission === agentFacts.directive!.mission,
+              )?.direction ?? null,
+            distance:
+              wo.options.find(
+                (o) =>
+                  o.continuesActiveDirective &&
+                  o.mission === agentFacts.directive!.mission,
+              )?.distance ?? null,
+            priority: agentFacts.directive.priority,
+            riskTolerance: agentFacts.directive.riskTolerance,
+            ticksRemaining: Math.max(
+              0,
+              agentFacts.directive.expiresAtTick - observation.tickNumber,
+            ),
+          }
+        : null,
+      // Options projected WITHOUT targetCell (server-only field).
+      // Fields at their default value are omitted to reduce token cost:
+      // crowding omitted means 0, continuesActiveDirective omitted means false,
+      // pressureEffect omitted means none, null fields omitted mean null,
+      // distance omitted for hold.
+      options: wo.options.map(
+        ({
+          optionId,
+          mission,
+          direction,
+          distance,
+          targetState,
+          territoryRelation,
+          pressureAtTarget,
+          pressureEffect,
+          crowding,
+          continuesActiveDirective,
+          description,
+        }) => ({
+          optionId,
+          mission,
+          description,
+          pressureAtTarget,
+          ...(direction !== null ? { direction } : {}),
+          ...(mission !== 'hold' ? { distance } : {}),
+          ...(targetState !== null ? { targetState } : {}),
+          ...(territoryRelation !== null ? { territoryRelation } : {}),
+          ...(pressureEffect !== 'none' ? { pressureEffect } : {}),
+          ...(crowding > 0 ? { crowding } : {}),
+          ...(continuesActiveDirective ? { continuesActiveDirective } : {}),
+        }),
+      ),
+    };
+  });
+  const workerIdByAgent = new Map(
+    observation.workerOptions.map((wo, index) => [
+      wo.agentId,
+      `worker_${index}`,
+    ]),
+  );
   return {
     model,
     temperature: 0,
@@ -547,22 +577,26 @@ function buildSwarmPlannerRequest(
       {
         role: 'system',
         content:
-          "You are Agent Zero, a strategic planner. Return only a JSON object with strategySummary, zeroActionCandidateId, and directives. Return exactly one directive per offered worker, using each workerId once. Each directive has only workerId, mission (expand|hold|relocate|reinforce|evade), targetId (one offered targetId or null), priority (low|normal|high), and riskTolerance (low|medium|high). Select zeroActionCandidateId from legalZeroActions. Assign intent, never exact worker movement. Code supplies directive IDs, agent IDs, target cells, and tick lifetimes; do not output those fields. Use replanReasons, directiveComplete, workerReplanRequests, worker localPressure, spatial pressure categories, and recentCaptures when present. Under trail-hunter pressure, a worker caught by the simulated player is permanently captured and removed, and its controlled territory becomes abandoned. Treat sustained high local pressure as an existential threat. Hold under high pressure only as an intentional defensive or sacrifice choice. Non-hold missions need a target. Expand targets must be open cells. Reinforce targets must be infected or adjacent to infection. Do not assign a relocate, reinforce, or evade target equal to that worker's current position.",
+          "You are Agent Zero, a strategic planner. Return only a JSON object with strategySummary, zeroActionCandidateId, and directives. Return exactly one directive per offered worker, using each workerId once. Each directive has only workerId, optionId (one of the worker's offered optionIds), priority (low|normal|high), and riskTolerance (low|medium|high). Do not output mission or targetCell fields — those come from the chosen option server-side. Select zeroActionCandidateId from legalZeroActions. Assign intent, never exact worker movement. Use replanReasons, directiveComplete, workerReplanRequests, worker localPressure, spatial pressure categories, and recentCaptures when present. Under trail-hunter pressure, a worker caught by the simulated player is permanently captured and removed, and its controlled territory becomes abandoned. Treat sustained high local pressure as an existential threat. Hold under high pressure only as an intentional defensive or sacrifice choice. Each worker has a hold option (deliberate, not a default) and bounded pre-validated mission options with crowding, pressure, and territory context. Options with crowding>0 duplicate other workers' fronts. Idle workers waste the swarm — avoid assigning hold to workers with viable expand options unless under high threat. Option fields are omitted at their defaults: omitted crowding means 0, omitted continuesActiveDirective means false, omitted pressureEffect means none, omitted direction/targetState/territoryRelation are null, distance is omitted for hold.",
       },
       {
         role: 'user',
         content: JSON.stringify({
           tickNumber: observation.tickNumber,
           virtualTime: observation.virtualTime,
-          cells: observation.cells,
+          worldSummary: observation.worldSummary,
           zero: {
-            position: zero.position,
             controlledCellCount: zero.controlledCellCount,
             territoryDelta: zero.territoryDelta,
           },
           workers,
           recentPlayerPressure: observation.recentPlayerPressure,
-          recentCaptures: observation.recentCaptures ?? [],
+          recentCaptures: (observation.recentCaptures ?? []).map(
+            ({ originatingTick, abandonedCellCount }) => ({
+              originatingTick,
+              abandonedCellCount,
+            }),
+          ),
           replanReasons: observation.replanReasons ?? [],
           workerReplanRequests: (
             observation.workerReplanRequests ?? []
@@ -570,8 +604,12 @@ function buildSwarmPlannerRequest(
             const workerId = workerIdByAgent.get(agentId);
             return workerId ? [{ workerId, probability }] : [];
           }),
-          legalZeroActions: observation.legalZeroActions,
-          targetChoices,
+          legalZeroActions: observation.legalZeroActions.map(
+            ({ id, description }) => ({
+              id,
+              description,
+            }),
+          ),
         }),
       },
     ],
@@ -582,12 +620,6 @@ function decodePlanChoice(
   raw: unknown,
   observation: ZeroStrategicObservation,
 ): { plan: SwarmPlan; reason?: never } | { plan?: never; reason: string } {
-  // Valid full plans remain accepted for compatibility with existing callers.
-  const full = swarmPlanSchema.safeParse(raw);
-  if (full.success) {
-    const issue = planAuthorityIssue(full.data, observation);
-    return issue ? { reason: issue } : { plan: full.data };
-  }
   const compact = compactPlanSchema.safeParse(raw);
   if (!compact.success) {
     const topField = String(compact.error.issues[0]?.path[0] ?? 'object');
@@ -600,48 +632,55 @@ function decodePlanChoice(
       : 'object';
     return { reason: `invalid ${field} format` };
   }
-  const workerIds = observation.agents
-    .filter(({ agentId }) => agentId !== observation.zeroAgentId)
-    .map(({ agentId }, index) => ({ workerId: `worker_${index}`, agentId }));
-  if (compact.data.directives.length !== workerIds.length)
-    return { reason: 'missing or extra worker directives' };
+  // Build lookup: workerId -> agentId, and optionId -> option (with targetCell).
   const workerMap = new Map(
-    workerIds.map(({ workerId, agentId }) => [workerId, agentId]),
-  );
-  const targetMap = new Map(
-    observation.strategicTargetCells.map((cell, index) => [
-      `target_${index}`,
-      cell,
+    observation.workerOptions.map((wo, index) => [
+      `worker_${index}`,
+      wo.agentId,
     ]),
   );
-  const seen = new Set<string>();
-  for (const directive of compact.data.directives) {
-    if (!workerMap.has(directive.workerId) || seen.has(directive.workerId))
-      return { reason: 'unknown or repeated worker choice' };
-    seen.add(directive.workerId);
-    if (directive.targetId !== null && !targetMap.has(directive.targetId))
-      return { reason: 'unknown target choice' };
-  }
+  const optionMap = new Map(
+    observation.workerOptions.flatMap((wo, index) =>
+      wo.options.map((opt) => [
+        opt.optionId,
+        { ...opt, workerId: `worker_${index}` },
+      ]),
+    ),
+  );
+  if (compact.data.directives.length !== workerMap.size)
+    return { reason: 'missing or extra worker directives' };
   if (
     !observation.legalZeroActions.some(
       ({ id }) => id === compact.data.zeroActionCandidateId,
     )
   )
     return { reason: 'unknown Zero action choice' };
+  const seen = new Set<string>();
+  for (const directive of compact.data.directives) {
+    if (!workerMap.has(directive.workerId) || seen.has(directive.workerId))
+      return { reason: 'unknown or repeated worker choice' };
+    seen.add(directive.workerId);
+    const option = optionMap.get(directive.optionId);
+    if (!option) return { reason: 'unknown option choice' };
+    if (option.workerId !== directive.workerId)
+      return { reason: 'optionId belongs to different worker' };
+  }
   const plan = swarmPlanSchema.safeParse({
     strategySummary: compact.data.strategySummary,
     zeroActionCandidateId: compact.data.zeroActionCandidateId,
-    directives: compact.data.directives.map((directive) => ({
-      id: `directive-${observation.tickNumber}-${directive.workerId}`,
-      agentId: workerMap.get(directive.workerId)!,
-      mission: directive.mission,
-      targetCell:
-        directive.targetId === null ? null : targetMap.get(directive.targetId)!,
-      priority: directive.priority,
-      riskTolerance: directive.riskTolerance,
-      issuedAtTick: observation.tickNumber,
-      expiresAtTick: observation.tickNumber + 4,
-    })),
+    directives: compact.data.directives.map((directive) => {
+      const option = optionMap.get(directive.optionId)!;
+      return {
+        id: `directive-${observation.tickNumber}-${directive.workerId}`,
+        agentId: workerMap.get(directive.workerId)!,
+        mission: option.mission,
+        targetCell: option.targetCell,
+        priority: directive.priority,
+        riskTolerance: directive.riskTolerance,
+        issuedAtTick: observation.tickNumber,
+        expiresAtTick: observation.tickNumber + 4,
+      };
+    }),
   });
   return plan.success
     ? { plan: plan.data }
@@ -659,13 +698,17 @@ function planAuthorityIssue(
   )
     return 'unknown Zero action choice';
   const workers = new Set(
-    observation.agents
-      .filter(({ agentId }) => agentId !== observation.zeroAgentId)
-      .map(({ agentId }) => agentId),
+    observation.workerOptions.map(({ agentId }) => agentId),
   );
   if (plan.directives.length !== workers.size)
     return 'missing or extra worker directives';
-  const targets = new Set(observation.strategicTargetCells);
+  // Build a flat option lookup: agentId -> Set of {mission, targetCell key}
+  const workerOptionKeys = new Map(
+    observation.workerOptions.map((wo) => [
+      wo.agentId,
+      new Set(wo.options.map((o) => `${o.mission}:${o.targetCell ?? 'null'}`)),
+    ]),
+  );
   for (const directive of plan.directives) {
     if (!workers.delete(directive.agentId))
       return 'unknown or repeated worker choice';
@@ -676,7 +719,8 @@ function planAuthorityIssue(
       directive.expiresAtTick > observation.tickNumber + 9
     )
       return 'invalid directive expiry';
-    if (directive.targetCell && !targets.has(directive.targetCell))
+    const key = `${directive.mission}:${directive.targetCell ?? 'null'}`;
+    if (!workerOptionKeys.get(directive.agentId)?.has(key))
       return 'unknown target choice';
   }
   return null;

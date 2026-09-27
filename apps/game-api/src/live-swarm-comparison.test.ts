@@ -68,7 +68,7 @@ describe('runLiveComparison admission guard', () => {
                   id: `hold-${observation.tickNumber}-${index}`,
                   agentId: agent.agentId,
                   mission: 'hold' as const,
-                  targetCell: agent.position,
+                  targetCell: null,
                   priority: 'normal' as const,
                   riskTolerance: 'low' as const,
                   issuedAtTick: observation.tickNumber,
