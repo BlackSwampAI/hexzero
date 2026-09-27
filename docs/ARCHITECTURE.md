@@ -3,15 +3,16 @@
 ## Zero-swarm execution
 
 `zero-swarm-v1` is the sole cognition architecture. The service first advances
-deterministic player pressure
-into an uncommitted world candidate. Agent Zero plans on the first tick, every
-five ticks, and when an expiry or material event requires review. Other ticks
-reuse committed unexpired worker directives and compile a fresh legal Zero wait
-action. After plan validation, each worker receives a compact local projection and engine-legal
-physical actions as opaque candidates. Jev selects one candidate ID, which the
-service maps to a world action for seeded engine resolution. One complete tick
-commits atomically. Planner and worker failures use explicit deterministic
-fallbacks; provider attempts survive world rollback. See ADRs 0028, 0029, and 0031.
+deterministic player pressure into an uncommitted world candidate. Agent Zero
+plans on tick 1 and at scheduled five-tick reviews (ticks 6, 11, and so on).
+Expiry or a material event can trigger an earlier review. Other ticks reuse
+committed unexpired worker directives and compile a fresh legal Zero wait action. After
+plan validation, each worker receives a compact local projection and
+engine-legal physical actions as opaque candidates. Jev selects one candidate
+ID, which the service maps to a world action for seeded engine resolution. One
+complete tick commits atomically. Planner and worker failures use explicit
+deterministic fallbacks; provider attempts survive world rollback. See ADRs
+0028, 0029, and 0031.
 
 The worker observation includes bounded, current capture alerts. The TypeSafe
 request projects them as structured capture pressure without cell IDs or tick
@@ -56,12 +57,13 @@ attempt with unknown monetary cost, including TypeSafe Jev, retains its
 configured per-attempt credit reserve in admission exposure. That reserve is
 a conservative execution limit, not a measured charge or Jev cost estimate.
 The OpenRouter planner asks Zero for bounded worker IDs, strategic target choice
-IDs, mission, priority, risk, and its own legal action choice. Server code
-materializes agent IDs, H3 targets, directive IDs, and five-tick lifetimes from
-the frozen observation. Full valid plans remain accepted for compatibility,
-but invalid output is classified into safe validation reasons without retaining
-raw provider text. The selected Zero reasoning profile is sent to OpenRouter
-with private reasoning excluded, and output is bounded.
+IDs, mission, priority, risk, and its own legal action choice. For this compact
+wire format, server code materializes agent IDs, H3 targets, directive IDs, and
+five-tick lifetimes from the frozen observation. Full valid plans remain
+accepted for compatibility, subject to validation that caps their lifetime at
+ten ticks including the issue tick. Invalid output is classified into safe validation reasons
+without retaining raw provider text. The selected Zero reasoning profile is
+sent to OpenRouter with private reasoning excluded, and output is bounded.
 
 When Zero has no unexpired directive for a worker, a failed planning attempt
 gives that worker engine-legal deterministic local expansion without a Jev
@@ -156,7 +158,14 @@ World Lab issues explicit ticks while Start or a bounded run is active. Provider
 
 Its command navbar is the single persistent application-control row. Browser-session run-target selection remains client orchestration and preserves absolute tick semantics; execution and reconciliation still consume authoritative API snapshots. Agent color uses retained effective color, base agent color, and a neutral fallback.
 
-The default basemap is tokenless CARTO Dark Matter with OpenStreetMap and CARTO attribution. Deterministic tests inspect its configuration and mocked MapLibre H3 sources without requesting external tiles.
+The basemap uses the standard HTTPS OpenStreetMap raster tile endpoint with
+visible OpenStreetMap attribution. MapLibre applies dark, desaturated styling
+to the basemap while leaving world overlays independently styled. Tile requests
+remain viewport-driven and use normal browser caching and referrer behavior;
+the app does not prefetch or download tiles for offline use. Deterministic
+tests inspect the tile configuration and mocked MapLibre H3 sources without
+requesting external tiles. See the
+[OpenStreetMap Tile Usage Policy](https://operations.osmfoundation.org/policies/tiles/).
 
 Equivalent legal moves are ordered reproducibly from world seed, stable agent ID, and logical turn without process randomness. Their six-value compass labels are derived independently from the geographic initial bearing between H3 cell centers using equal 60-degree sectors; H3 traversal order never determines direction.
 

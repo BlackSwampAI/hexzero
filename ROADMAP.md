@@ -42,7 +42,8 @@ architecture and removed all legacy infrastructure:
 The retirement case is structural rather than measured: the legacy path made one
 full generative provider call per active agent per tick, so provider attempts,
 cost, and tick latency all scaled linearly with roster size. The zero-swarm path
-makes one Agent Zero planning call per tick regardless of roster size. No run in
+makes at most one initial Agent Zero planning call when replanning is required,
+regardless of roster size; other ticks reuse the current directives. No run in
 this repository has compared legacy cognition against zero-swarm cognition on
 real providers for cost, latency, or quality; that difference follows from the
 call pattern itself. See ADR 0033 for the full record.
@@ -54,8 +55,9 @@ implementation history.
 
 ## Agent Zero planner
 
-Agent Zero is the sole generative planner. It makes one OpenRouter call per
-tick regardless of roster size, under the versioned contract `swarm-planner-v1`.
+Agent Zero is the sole generative planner. It makes an OpenRouter planning call
+only when strategic replanning is required, regardless of roster size, under
+the versioned contract `swarm-planner-v1`.
 Each plan carries a strategy summary and one directive per active worker;
 directives persist across ticks and are reused when no replan is triggered.
 Agent Zero participates in the same frozen-world, simultaneous-tick transaction

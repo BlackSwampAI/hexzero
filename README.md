@@ -1,120 +1,173 @@
 # Hex Zero
 
-Hex Zero is an agent-first geographic experiment. A configurable roster of model-backed agents moves, infects, and captures territory on a real H3 map while the World Lab exposes every safe decision record. Full agent visibility is deliberate; there is no fog of war.
+[![CI](https://github.com/BlackSwampAI/hexzero/actions/workflows/ci.yml/badge.svg)](https://github.com/BlackSwampAI/hexzero/actions/workflows/ci.yml)
+[![Node.js 24.18.0](https://img.shields.io/badge/Node.js-24.18.0-339933?logo=nodedotjs&logoColor=white)](.nvmrc)
+[![pnpm 11.21.0](https://img.shields.io/badge/pnpm-11.21.0-F69220?logo=pnpm&logoColor=white)](package.json)
 
-`zero-swarm-v1` is the sole cognition architecture. Workers make reflex decisions each active worker tick. Agent Zero makes one OpenRouter planning call only when strategic replanning is required (for example, after roster changes, directive completions, or elevated pressure), under the versioned contract `swarm-planner-v1`; otherwise the last valid directive set is reused with no planner call. Each plan carries a strategy summary and a per-worker directive set. Worker nodes resolve their directives with TypeSafe Jev reflex cognition, choosing among enumerated `action_N` candidates with a probability distribution and a confidence value, over the deterministic H3 world engine.
+Hex Zero is an agent-first geographic experiment. Agent Zero plans territory
+expansion on a real H3 map, and TypeSafe Jev workers resolve those directives
+into movement, infection, capture, or wait. The World Lab is the developer/admin
+surface for configuring runs and inspecting safe decisions, territory, and
+provider usage. Every agent is visible.
 
-Directives carry: identifier, agent identifier, mission (`expand` | `hold` | `relocate` | `reinforce` | `evade`), a nullable target cell, priority (`low` | `normal` | `high`), risk tolerance (`low` | `medium` | `high`), issue and expiry ticks, and an optional note of at most 160 characters. When no replan is triggered, the previous plan's directives are reused without a planning call. Replans are triggered by: `initial`, `periodic-review`, `directive-complete`, `directive-expired`, `worker-request`, `worker-stalled`, `territory-loss`, `high-pressure`, `player-disinfection`, and `roster-changed`.
+![World Lab Live workspace with the H3 map, agent roster, scoreboard, and swarm activity](docs/assets/world-lab-live.png)
 
-Cognition sources are `zero-llm` (Agent Zero via OpenRouter), `jev-reflex` (TypeSafe Jev via the TypeSafe API), and `deterministic-fallback`. Routing summary: Agent Zero → OpenRouter; Workers → TypeSafe Jev API. The deterministic-worker baseline—workers that resolve directives without a model call—is retained as the ablation control that isolates what Jev's reflex calls contribute, not as a second production architecture.
+## How it works
 
-The capability-gated objective version is `durable-influence-v3`. Without simulated-player pressure, scenarios use a `durable-influence-v2`-compatible objective.
+`zero-swarm-v1` is the sole cognition architecture:
 
-## Workspace
+1. **Agent Zero plans through OpenRouter** on the first tick, periodic review,
+   or a material change such as directive completion, expiry, or player pressure.
+   Other ticks reuse the current directives without a planner call.
+2. **Workers resolve directives through TypeSafe Jev** using compact observations
+   and opaque, engine-legal action candidates. Workers share a frozen pre-action
+   world; their calls currently run sequentially under one tick deadline.
+3. **The deterministic world engine validates and resolves actions** in seeded
+   order. A complete tick commits atomically; cancellation commits no world
+   changes. Provider failures retain safe attempt records and use explicit
+   deterministic fallbacks.
 
-| Path                          | Responsibility                                                                              |
-| ----------------------------- | ------------------------------------------------------------------------------------------- |
-| `apps/world-lab`              | Next.js developer/admin map, controls, inspector, and event log                             |
-| `apps/game-api`               | Hono HTTP boundary and in-memory simulation service                                         |
-| `packages/world-engine`       | Pure world validation and consequence application                                           |
-| `packages/agent-runtime`      | OpenRouter planner, TypeSafe Jev reflex provider, model catalog, and scripted testing seams |
-| `packages/shared`             | Runtime-validated schemas and inferred domain types                                         |
-| `packages/experiment-archive` | Durable SQLite imports and bounded research queries                                         |
+Cells are `open` or `infected`, and each infected cell has one controller.
+Movement leaves infection behind. Capture transfers an abandoned infected
+current cell from another controller. There is no agent chat, diplomacy,
+personality configuration, per-worker goal state, or prose memory.
 
-## Local development
+The deterministic-worker variant exists only as an ablation control for the
+comparison CLIs. It is not a second production architecture.
 
-Requirements are Node.js 24.18.0 and pnpm 11.21.0. Copy the example environment file to the repository-root `.env`, replace only the placeholder key, install dependencies, and start both applications:
+## Run locally
+
+Use **Node.js 24.18.0** and **pnpm 11.21.0**, pinned in the repository.
 
 ```bash
-cp .env.example .env
-# Edit .env and set OPENROUTER_API_KEY and TYPESAFE_API_KEY.
 corepack enable
 pnpm install --frozen-lockfile
+cp .env.example .env
+# Set OPENROUTER_API_KEY and TYPESAFE_API_KEY in the root .env.
 pnpm dev
 ```
 
-For deterministic local automation, `pnpm dev:test-provider` sets
-`HEXZERO_PROVIDER=scripted`. `HEXZERO_EXPERIMENT_DB` overrides the local
-experiment archive path.
+Open <http://localhost:3000>. The Game API binds to
+<http://127.0.0.1:8787>; Next.js proxies `/api/game/*` to it. Select a compatible
+Agent Zero model in **Agents**, then use **Single tick** or **Start**. Jev's
+worker model is pinned server-side. Both provider keys are required for genuine
+runs; keys never belong in browser environment variables.
 
-Open the World Lab at <http://localhost:3000>. The Game API binds to <http://127.0.0.1:8787>; Next.js narrowly proxies `/api/game/*` to it. `OPENROUTER_API_KEY` (Agent Zero) and `TYPESAFE_API_KEY` (Jev workers) are both required for real runs. Select a compatible model for Agent Zero in World Lab. Each assignment may use the provider's default reasoning behavior, disable optional reasoning, or select only an effort advertised by that model's catalog metadata. The Jev worker model is pinned server-side and shown as system information.
+For a deterministic walkthrough without provider keys or paid calls:
 
-Each tick makes one Jev reflex call per active worker; an Agent Zero planning call is made only when strategic replanning is required and may incur an OpenRouter charge plus at most one in-deadline repair or transient-retry charge. TypeSafe monetary cost is not reported. All workers observe the same frozen pre-tick world; valid decisions resolve together while an individual provider failure is retained as that worker's final lost tick. Start is deliberately disabled when the server has no key. This development API has no authentication or provider-account balance enforcement. Its experiment-scoped attempt and credit-admission limits are operator safeguards, not an upstream billing guarantee, so it is not suitable for unauthenticated public deployment.
+```bash
+pnpm dev:test-provider
+```
 
-State is held only in the Game API process. The API captures one active safe experiment with bounded complete tick groups while the browser snapshot remains bounded without splitting a tick. The sole export format is schema version 12, which carries `swarmArchitectureVersion: 'zero-swarm-v1'`, an independent safe bounded provider-attempt ledger including work that did not produce a committed turn, and tick attribution. Pre-swarm exports (schema versions 9–11) are not readable by current code; inspecting them requires checking out a Git revision predating the zero-swarm migration. The Agent Zero model assignment and reasoning profile may be changed between ticks. A saved slug absent from the current compatible catalog is preserved and blocks execution until explicitly replaced. Agent Zero returns one structured plan under `swarm-planner-v1`; each Jev worker returns a candidate choice with a probability distribution and confidence value. The runtime extracts and conservatively repairs JSON before strict local schemas and the world engine apply authoritative validation.
+Scripted mode bypasses `.env` loading and uses local deterministic providers.
+The basemap still loads external OpenStreetMap tiles; explicit location search uses
+Nominatim. Neither is needed by the offline unit tests.
 
-Export previews report exact serialized UTF-8 bytes and a model-agnostic `ceil(bytes / 4)` approximate AI-input-token estimate. Compact JSON is the default for AI sharing; Pretty JSON remains available for human review, and preview estimates reflect the selected serialization. This is a sharing-budget aid, not tokenizer output or a billing guarantee. Exports exclude fixed prompts, raw provider payloads, credentials, authorization headers, private reasoning, and unbounded diagnostics.
+The basemap uses OpenStreetMap's standard raster tiles without a key. MapLibre
+applies a dark grayscale treatment to that layer while preserving agent and
+territory colors. Requests use normal browser caching and referrer behavior;
+there is no tile prefetch or offline map download. Follow the
+[OpenStreetMap tile usage policy](https://operations.osmfoundation.org/policies/tiles/)
+when deploying or extending the map.
 
-World Setup also configures server-owned provider-attempt and conservative
-credit-admission limits. The per-attempt credit reservation bounds admission
-exposure using exact decimal accounting; it is not an upstream provider-account
-spending cap or billing guarantee.
-Provider-attempt records contain only bounded sanitized attribution, usage, and
-failure fields; prompts, raw responses, credentials, and private reasoning are
-excluded.
+![World Lab Agents workspace showing the Agent Zero planner and pinned Jev worker configuration](docs/assets/world-lab-agents.png)
 
-## Opt-in real-provider checks
+These screenshots show the current interface in scripted mode. Capture details
+are in [the screenshot guide](docs/assets/README.md).
 
-Two surfaces make genuine provider requests, and neither runs in default tests
-or CI. World Lab's **Test Agent Zero planner** button sends exactly one bounded,
-non-mutating request using the Agent Zero planner contract and selected
-reasoning profile; it may incur a small charge and is cached by model, profile,
-and contract version. `pnpm compare:live` runs the paid Jev-versus-deterministic-worker
-comparison, which requires an explicit provider-cost acknowledgement and an
-operator-selected Zero model, and enforces hard attempt and credit-admission
-caps. Both read `OPENROUTER_API_KEY` from the repository-root `.env`; `pnpm compare:live` also requires `TYPESAFE_API_KEY`.
+## World Lab
 
-## Development map source
+- **World Setup:** preview and apply H3 resolutions 8–11, 1–32 agents, and up
+  to 5,000 generated cells. The default is a 127-cell disk around Toledo, Ohio,
+  with eight perimeter starts. Optional seeded player pressure uses
+  `casual-cleaner` or `trail-hunter-v1`.
+- **Bounded execution:** run to absolute tick targets of 5, 10, 25, 50, or 100,
+  cancel an active tick, or reset the scenario. Playback pauses at the target
+  or full infection. There is no background scheduler.
+- **Inspection:** switch between Live and Agents while the same execution
+  controller stays mounted. Inspect Zero strategy, worker directives, reflex
+  choices, validation outcomes, territory, and safe activity records.
+- **Research exports:** generate compact or pretty schema-v12 JSON, download
+  it, or manually save the exact generated artifact to local SQLite. Exports
+  include bounded safe tick and provider-attempt records, including attempts
+  that did not produce a committed tick.
 
-The compatible default centers on Toledo, Ohio (`41.6528, -83.5379`) at H3 resolution 9 and renders the same deterministic radius-six disk of exactly 127 cells with eight fixed perimeter starts. World Setup previews and applies resolution 8–11 scenarios with 1–32 agents, radius at most 40, and at most 5,000 actual generated cells. It may optionally add one seeded deterministic simulated player, using the `casual-cleaner` or `trail-hunter-v1` profile. MapLibre uses CARTO Dark Matter's tokenless raster tiles with `© OpenStreetMap contributors © CARTO` attribution.
+Live world state and active run telemetry are process-local. Restarting the
+Game API loses the active run; the SQLite archive stores exported research
+artifacts and cannot resume a simulation.
 
-Combat systems, real-player GPS/capture, restartable world persistence, and autonomous scheduling remain deferred.
+## Provider costs and trust
 
-When every development cell is infected, World Lab automatically pauses
-playback and disables Start to avoid accidental provider calls. Reset and export
-remain available, and Single tick remains an explicitly manual diagnostic
-action.
+A genuine tick normally makes one Jev request per active worker and an
+OpenRouter planning request only when replanning is required. A planner call
+may make at most one transient retry within the original deadline.
+OpenRouter cost is shown only when reported; TypeSafe monetary cost remains
+unknown. World Setup's attempt and credit-admission limits are operator
+safeguards, not upstream billing guarantees.
 
-World Lab provides browser-owned absolute tick targets of **5, 10, 25, 50,
-and 100**. The session-selected target defaults to 25. A bounded run pauses at
-the authoritative tick target, on cancellation, or when the world is fully
-infected. There is no background scheduler.
+The local API has no authentication or provider-account balance enforcement.
+Keep it on loopback; it is not suitable for unauthenticated public deployment.
+Provider credentials stay behind the agent runtime. Exports and archives omit
+raw provider payloads, fixed prompts, credentials, and private reasoning.
+See [Security](docs/SECURITY.md).
 
-The persistent operator shell keeps execution controls, run target, playback speed, current tick, known cost, and run state visible while switching between Live and Agents workspaces. Live centers the map between an independently scrolling agent rail and semantic Scoreboard, Agent, Hex, and Run inspector tabs; a bounded activity dock separates events and safe failure/recovery records. Agent configuration uses the same mounted execution controller and existing server-authoritative mutations, so workspace switching cannot duplicate or interrupt playback. Infrequent and destructive operations remain in the accessible overflow menu. Blackberry/teal/mint/celadon/vanilla semantic tokens define the dark application chrome without replacing domain-owned agent colors.
+## Workspace
 
-The agent roster defaults to browser-local **Follow latest** behavior: after a
-tick the inspector follows the last record in deterministic resolution order.
-Selecting an agent manually disables following without hiding the roster's
-textual Latest marker; the preference remains in that browser and is never
-exported. The event log is a newest-first bounded feed, and the shared Model and Export dialogs keep their headers/actions fixed while their bodies scroll within the viewport.
+| Path                          | Responsibility                                                  |
+| ----------------------------- | --------------------------------------------------------------- |
+| `apps/world-lab`              | Next.js developer/admin map and operator controls               |
+| `apps/game-api`               | Hono HTTP boundary and in-memory simulation orchestration       |
+| `packages/world-engine`       | Pure deterministic world validation and consequence application |
+| `packages/agent-runtime`      | OpenRouter planner, TypeSafe Jev adapter, and model catalog     |
+| `packages/shared`             | Runtime-validated boundary schemas and inferred types           |
+| `packages/experiment-archive` | SQLite imports and bounded research queries                     |
 
-See [Testing](docs/TESTING.md), [Architecture](docs/ARCHITECTURE.md), [Security](docs/SECURITY.md), the accepted future [Gameplay Foundation](docs/GAMEPLAY_FOUNDATION.md), and the [Roadmap](ROADMAP.md).
+## Validation and research
 
-Schema-v12 exports can be imported into an ignored local SQLite archive and queried without repeatedly loading full JSON artifacts. See [Local experiment archive](docs/EXPERIMENT_ARCHIVE.md).
-After Generate export, World Lab can also save that exact current validated
-artifact to the configured local archive with **Save to SQLite**. Preview
-remains an optional estimate and does not gate generation or saving.
-The action is manual and idempotent; changed options require regeneration.
+Default tests and GitHub CI are deterministic and make no model-provider calls.
+The repository owner runs local validation before a branch is pushed or a
+draft PR is opened:
 
-## Rename compatibility
+```bash
+pnpm install --frozen-lockfile
+pnpm validate
+pnpm exec playwright install chromium # first run only
+pnpm test:e2e
+```
 
-Hex Zero was formerly named Agentborne. Workspace packages now use the
-`@hexzero/*` namespace, and the repository URL will be
-`https://github.com/BlackSwampAI/hexzero` after the external repository rename.
-Existing environments may continue using `AGENTBORNE_PROVIDER` and
-`AGENTBORNE_EXPERIMENT_DB`; the corresponding `HEXZERO_` variable takes
-precedence, and selecting a legacy alias emits a value-free deprecation notice.
+`pnpm validate` checks formatting, lint, types, unit/component tests, and builds.
+Playwright starts scripted application servers separately. See
+[Testing](docs/TESTING.md) for coverage and the owner validation workflow.
 
-New archives default to `.hexzero/experiments.sqlite`. When that file does not
-exist, an existing `.agentborne/experiments.sqlite` is opened in place with a
-migration notice; Hex Zero never moves or overwrites it automatically. To
-migrate manually, stop every Hex Zero process, create `.hexzero`, copy the
-legacy database (including any `-wal` and `-shm` sidecars if present), verify
-the copy opens, and only then remove the legacy files if desired.
+| Command                | Purpose                                                      |
+| ---------------------- | ------------------------------------------------------------ |
+| `pnpm compare:offline` | Reproducible Jev-fixture versus deterministic comparison     |
+| `pnpm compare:live`    | Paid comparison; explicit acknowledgement and model required |
+| `pnpm diagnose:swarm`  | Summarize a running local API without provider calls         |
+| `pnpm experiment:db`   | Import and query safe exports in the local archive           |
 
-New downloads use `hexzero-experiment-`. A legacy
-`agentborne-experiment-*.json` filename is not itself a barrier to import, but
-its contents must be schema version 12; the schema-v9 artifacts that name
-generally accompanies are rejected like any other pre-swarm export. Browser-owned
-settings stored under legacy `agentborne` keys are schema-validated and copied
-once to the new `hexzero` keys.
+The **Test Agent Zero planner** button is also an explicit paid, non-mutating
+probe. Neither that probe nor `compare:live` runs in default tests or CI.
+
+## Documentation
+
+- [Architecture](docs/ARCHITECTURE.md) — tick flow, boundaries, and HTTP endpoints
+- [Testing](docs/TESTING.md) — coverage and exact validation commands
+- [Security](docs/SECURITY.md) — secrets, prompts, telemetry, and deployment limits
+- [Experiment archive](docs/EXPERIMENT_ARCHIVE.md) — SQLite import and queries
+- [Offline comparison](docs/ZERO_SWARM_COMPARISON.md) and
+  [live comparison](docs/LIVE_SWARM_COMPARISON.md) — methodology and evidence limits
+- [Roadmap](ROADMAP.md) and [Gameplay Foundation](docs/GAMEPLAY_FOUNDATION.md) —
+  delivered behavior and future product scope
+- [ADR 0033](docs/adr/0033-retire-legacy-multi-agent-architecture.md) — retirement
+  of the previous architecture
+
+Current code reads only schema-v12 exports. Pre-swarm scenarios, snapshots, and
+exports require an older Git revision. Historical ADRs and experiment reports
+remain as decision history.
+
+Hex Zero was formerly named Agentborne. Deprecated `AGENTBORNE_PROVIDER` and
+`AGENTBORNE_EXPERIMENT_DB` aliases remain supported; corresponding `HEXZERO_`
+settings take precedence. Existing `.agentborne` archive paths and browser
+preferences retain the documented rename compatibility. See
+[archive path migration](docs/EXPERIMENT_ARCHIVE.md).

@@ -1,14 +1,24 @@
 import { describe, expect, it } from 'vitest';
-import { DARK_TILE_ATTRIBUTION, DARK_TILE_URLS } from './map-config';
+import { DARK_RASTER_PAINT, OSM_RASTER_SOURCE } from './map-config';
 
-describe('dark basemap configuration', () => {
-  it('uses tokenless CARTO Dark Matter tiles with complete attribution', () => {
-    expect(DARK_TILE_URLS).toHaveLength(3);
-    expect(DARK_TILE_URLS.every((url) => url.includes('/dark_all/'))).toBe(
-      true,
+describe('dark OpenStreetMap basemap configuration', () => {
+  it('uses standard OSM tiles with attribution and the documented zoom ceiling', () => {
+    expect(OSM_RASTER_SOURCE).toMatchObject({
+      type: 'raster',
+      tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+      tileSize: 256,
+      maxzoom: 19,
+      attribution:
+        '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>',
+    });
+  });
+
+  it('renders OSM tiles as desaturated dark tiles', () => {
+    expect(DARK_RASTER_PAINT['raster-saturation']).toBe(-1);
+    expect(DARK_RASTER_PAINT['raster-brightness-min']).toBeGreaterThan(0);
+    expect(DARK_RASTER_PAINT['raster-brightness-max']).toBeLessThan(1);
+    expect(DARK_RASTER_PAINT['raster-brightness-max']).toBeLessThan(
+      DARK_RASTER_PAINT['raster-brightness-min'],
     );
-    expect(DARK_TILE_URLS.every((url) => !url.includes('token'))).toBe(true);
-    expect(DARK_TILE_ATTRIBUTION).toContain('OpenStreetMap');
-    expect(DARK_TILE_ATTRIBUTION).toContain('CARTO');
   });
 });

@@ -2,6 +2,19 @@ import { expect, test } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { experimentExportDocumentSchema } from '@hexzero/shared';
 
+test.beforeEach(async ({ page }) => {
+  await page.route('https://tile.openstreetmap.org/**', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'image/png',
+      body: Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+        'base64',
+      ),
+    }),
+  );
+});
+
 async function openMoreActions(page: Parameters<typeof test>[0]['page']) {
   const menu = page.locator('details.overflow-menu');
   if (

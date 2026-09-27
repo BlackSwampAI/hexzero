@@ -58,4 +58,6 @@ Do not reduce a run to final territory. Review these questions after the first b
 6. Inspect low-confidence choices, high-confidence bad-looking choices, repeated stalls, capture-alert response, and high trail-hunter-pressure response. Does the narrow Jev state/question keep deterministic work in code and confidence routing meaningful?
 7. Is Jev worth its complexity against deterministic workers?
 
-This experiment's results, together with earlier offline comparisons, informed the decision to retire the legacy multi-agent architecture (see ADR 0033).
+This experiment compares Jev reflex workers with the deterministic-worker
+ablation; it does not compare against the retired per-agent architecture. ADR
+0033 records the retirement decision and its structural rationale.

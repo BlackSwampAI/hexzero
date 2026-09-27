@@ -1,8 +1,7 @@
 # ADR 0010: Versioned agent behavior and seeded assignment
 
-- Status: Accepted
+- Status: Superseded by [ADR 0033](0033-retire-legacy-multi-agent-architecture.md)
 - Date: 2026-08-15
-- Status: Superseded by ADR 0033
 
 ## Decision
 

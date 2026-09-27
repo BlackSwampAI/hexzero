@@ -4,6 +4,10 @@
 
 Accepted for PR D.
 
+Superseded by [ADR 0033](0033-retire-legacy-multi-agent-architecture.md) for its
+statement that legacy execution remained in place; persistent directives and
+event-driven replanning remain current.
+
 ## Decision
 
 In `zero-swarm-v1`, Agent Zero plans on the first tick and at a fixed five-tick

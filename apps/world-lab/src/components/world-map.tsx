@@ -23,7 +23,7 @@ import type {
   SimulatedPlayerState,
 } from '@hexzero/shared';
 import { resolveAgentColor } from './ui-color';
-import { DARK_TILE_ATTRIBUTION, DARK_TILE_URLS } from './map-config';
+import { DARK_RASTER_PAINT, OSM_RASTER_SOURCE } from './map-config';
 
 interface WorldMapProps {
   latitude: number;
@@ -162,14 +162,16 @@ export function WorldMap(props: WorldMapProps) {
       style: {
         version: 8,
         sources: {
-          'carto-dark': {
-            type: 'raster',
-            tiles: [...DARK_TILE_URLS],
-            tileSize: 256,
-            attribution: DARK_TILE_ATTRIBUTION,
-          },
+          'osm-dark': OSM_RASTER_SOURCE,
         },
-        layers: [{ id: 'carto-dark', type: 'raster', source: 'carto-dark' }],
+        layers: [
+          {
+            id: 'osm-dark',
+            type: 'raster',
+            source: 'osm-dark',
+            paint: DARK_RASTER_PAINT,
+          },
+        ],
       },
     });
     mapRef.current = map;

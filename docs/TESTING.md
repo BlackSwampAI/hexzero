@@ -1,10 +1,10 @@
 # Testing
 
-The suite has 26 unit/component test files and one Playwright E2E file. All
-default tests are deterministic and offline; no default test or GitHub Actions
-job contacts OpenRouter or TypeSafe. Real-provider tests are separately named,
-explicitly opted into, and excluded from default CI. Tests are small behavior
-tests colocated with the code they cover; large snapshots are avoided.
+Unit/component tests are colocated with the code they cover, alongside one
+Playwright E2E file. All default tests are deterministic and offline; no default
+test or GitHub Actions job contacts OpenRouter or TypeSafe. Real-provider tests
+are separately named, explicitly opted into, and excluded from default CI.
+Tests focus on small behaviors; large snapshots are avoided.
 
 ## Coverage
 
@@ -173,25 +173,29 @@ reused-directive and structured-replan-request display.
 `world-lab.test.tsx` covers the swarm workspace: fixed swarm architecture and
 Agent Zero model readiness, fresh swarm setup without an architecture selector,
 tick commit, reset, exact-tick-cap execution without overlapping requests,
-cancellation reconciliation, full-safe export preview before export actions,
+cancellation reconciliation, activity-dock preference restoration and persistence,
+full-safe export preview before export actions,
 model console showing one Agent Zero planner row and no per-agent override
 controls, and export dialog without agent/turn/level/outcome/action filters.
 
-`model-options.test.ts` covers shared model options: deduplication and identical
-ordering for global and per-agent options, identifier-before-name ordering, and
+`model-options.test.ts` covers Agent Zero model options: deduplication,
+identifier-before-name ordering, and
 price-metadata preservation.
 
 `ui-color.test.ts` covers agent color resolution: own-color resolution and
 neutral fallback for unknown agents.
 
-`world-map-config.test.ts` covers dark basemap configuration: tokenless CARTO
-Dark Matter tiles with complete attribution.
+`world-map-config.test.ts` covers dark basemap configuration: standard
+OpenStreetMap tile URLs, visible attribution, source zoom bounds, and a dark
+raster treatment that leaves domain overlays untouched.
 
 ### Playwright E2E (`tests/e2e/world-lab.spec.ts`)
 
 Two tests: the long swarm-activity log scrolls inside the fixed-height bottom
 dock; and a deterministic scripted swarm tick commits and exports safe
-telemetry without an OpenRouter request.
+telemetry without an OpenRouter request. Browser tests fulfill OpenStreetMap
+tile requests with a local image fixture instead of contacting the public tile
+service.
 
 ## Scripted and deterministic seams
 

@@ -1,2 +1,4 @@
 **/next-env.d.ts
 logs/
+.claude/
+.codex/

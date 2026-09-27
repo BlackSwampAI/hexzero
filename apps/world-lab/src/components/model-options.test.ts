@@ -14,18 +14,16 @@ const model = (id: string, name: string, price = '0'): CompatibleModel => ({
 });
 
 describe('shared model options', () => {
-  it('deduplicates and orders global and per-agent options identically', () => {
+  it('deduplicates and orders model options consistently', () => {
     const catalog = [
       model('zeta/model', 'Alpha'),
       model('Acme/model-2', 'Zulu', '0.000001'),
       model('acme/model-1', 'Beta'),
       model('zeta/model', 'Duplicate ignored'),
     ];
-    const globalOptions = buildModelOptions(catalog);
-    const agentOptions = buildModelOptions(catalog);
+    const options = buildModelOptions(catalog);
 
-    expect(agentOptions).toEqual(globalOptions);
-    expect(globalOptions.map(({ value }) => value)).toEqual([
+    expect(options.map(({ value }) => value)).toEqual([
       'acme/model-1',
       'Acme/model-2',
       'zeta/model',

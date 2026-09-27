@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted.
+The mandatory Agent Zero roster designation remains current. Superseded by
+[ADR 0033](0033-retire-legacy-multi-agent-architecture.md) for the legacy
+global diplomacy summary and coordinator powers.
 
 ## Context
 
