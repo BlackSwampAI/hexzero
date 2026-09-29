@@ -21,11 +21,14 @@ without a planner call. Agent Zero issues a strategy summary and one structured
 directive per worker. Workers resolve their directive via TypeSafe Jev reflex
 cognition over enumerated legal-action candidates; deterministic selection is
 the fallback when Jev is unavailable or its output fails validation. Agent
-Zero is also a roster agent and selects its own legal physical action. The
-server assigns directive IDs, target cells, and bounded lifetimes.
+Zero is also a roster agent and selects its own legal physical action. Under
+`swarm-planner-v2` the server compiles bounded semantic strategic options per
+worker and Agent Zero selects an opaque option ID for each; the server resolves
+it to a mission and target cell and assigns directive IDs and bounded lifetimes.
+The model request carries no raw H3 cell or agent IDs.
 Current setup rejects a missing or null Agent Zero designation. Pre-swarm
 exports (schema versions 9–11) are not readable by current code; schema
-version 12 with `swarmArchitectureVersion: 'zero-swarm-v1'` is required.
+version 13 with `swarmArchitectureVersion: 'zero-swarm-v1'` is required.
 
 > **Status: accepted product and roadmap direction, not an implementation claim.**
 > This document records foundational decisions for future World Lab and Player

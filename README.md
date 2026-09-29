@@ -18,7 +18,9 @@ provider usage. Every agent is visible.
 
 1. **Agent Zero plans through OpenRouter** on the first tick, periodic review,
    or a material change such as directive completion, expiry, or player pressure.
-   Other ticks reuse the current directives without a planner call.
+   The server compiles bounded semantic strategic options per worker, and Agent
+   Zero selects an opaque option ID for each; the request carries no raw H3 cell
+   or agent IDs. Other ticks reuse the current directives without a planner call.
 2. **Workers resolve directives through TypeSafe Jev** using compact observations
    and opaque, engine-legal action candidates. Workers share a frozen pre-action
    world; their calls currently run sequentially under one tick deadline.
@@ -87,7 +89,7 @@ are in [the screenshot guide](docs/assets/README.md).
 - **Inspection:** switch between Live and Agents while the same execution
   controller stays mounted. Inspect Zero strategy, worker directives, reflex
   choices, validation outcomes, territory, and safe activity records.
-- **Research exports:** generate compact or pretty schema-v12 JSON, download
+- **Research exports:** generate compact or pretty schema-v13 JSON, download
   it, or manually save the exact generated artifact to local SQLite. Exports
   include bounded safe tick and provider-attempt records, including attempts
   that did not produce a committed tick.
@@ -162,7 +164,7 @@ probe. Neither that probe nor `compare:live` runs in default tests or CI.
 - [ADR 0033](docs/adr/0033-retire-legacy-multi-agent-architecture.md) — retirement
   of the previous architecture
 
-Current code reads only schema-v12 exports. Pre-swarm scenarios, snapshots, and
+Current code reads only schema-v13 exports. Pre-swarm scenarios, snapshots, and
 exports require an older Git revision. Historical ADRs and experiment reports
 remain as decision history.
 

@@ -99,7 +99,7 @@ observation data. Raw planner text is not forwarded. Workers do not receive
 other workers' choices. Cancellation discards every result from the
 uncommitted tick.
 
-When strategic replanning is required, the OpenRouter planner receives one bounded strategic observation and is instructed to return exactly one plain JSON object naming opaque worker and target choices plus a Zero-action selection. TypeSafe Jev receives a compact semantic observation with opaque legal candidate IDs per worker and returns a probability distribution over candidates; a second question in the same request returns an optional bounded replan probability. The runtime performs bounded extraction and conservative repair for wrappers such as code fences, surrounding prose, and trailing commas, then rejects missing text, unusable JSON, unknown fields, or output truncation before the deterministic world engine validates all resolved components independently.
+When strategic replanning is required, the OpenRouter planner receives one bounded strategic observation (a coarse `worldSummary` plus per-worker semantic `workerOptions`, with no raw H3 cell IDs or agent IDs) and is instructed to return exactly one plain JSON object naming opaque worker and option choices plus a Zero-action selection. TypeSafe Jev receives a compact semantic observation with opaque legal candidate IDs per worker and returns a probability distribution over candidates; a second question in the same request returns an optional bounded replan probability. The runtime performs bounded extraction and conservative repair for wrappers such as code fences, surrounding prose, and trailing commas, then rejects missing text, unusable JSON, unknown fields, or output truncation before the deterministic world engine validates all resolved components independently.
 
 The request uses the selected model, messages, `max_tokens`, `stream: false`, and at most one normalized reasoning object selected from sanitized model metadata. Provider default omits the object. Off is offered only for non-mandatory reasoning and sends `{ enabled: false, exclude: true }`; an advertised effort sends `{ enabled: true, effort, exclude: true }`. It deliberately sends no tools, `tool_choice`, `response_format`, `provider.require_parameters`, standalone `reasoning_effort`, or model-specific parameter. Model IDs are never inspected or special-cased. Transport/provider failures, unavailable-model/profile failures, text/JSON contract failures, and later simulation-rule rejection remain distinct safe outcomes. The adapter never silently substitutes a model or scripted behavior.
 
@@ -155,7 +155,7 @@ The Game API captures only schema-validated safe observations, requested world a
 
 Export requests, agent IDs, levels, ranges, and Custom dependencies are
 runtime-validated. Filtering and metrics remain server-owned. The export schema
-is exclusively version 12; exports carrying schema version 9, 10, or 11 are
+is exclusively version 13; exports carrying schema version 12 or earlier are
 rejected outright with no migration path. Reset clears swarm tick history and
 metrics while unlocking preserved roster assignments for the new experiment.
 

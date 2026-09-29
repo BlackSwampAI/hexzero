@@ -64,7 +64,7 @@ reproducibility and exposes comparable telemetry; it does not demonstrate
 real-model quality, production latency, or provider cost. Real-provider studies
 remain explicitly opted in and should archive their safe exports separately.
 
-The experiment archive importer now accepts only schema-v12 swarm-native
+The experiment archive importer now accepts only schema-v13 swarm-native
 exports, which always carry swarm tick records and independent provider
 attempt accounting; it does not replace this same-scenario, per-tick swarm
 harness.
