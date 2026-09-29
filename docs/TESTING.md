@@ -249,7 +249,7 @@ the Jev and deterministic-worker variants. `pnpm diagnose:swarm` summarizes a
 running local Game API snapshot without provider calls, keys, prompts, or raw
 responses.
 
-## Owner validation sequence
+## Validation sequence
 
 ```bash
 node --version
@@ -266,9 +266,9 @@ integration tests, and builds (`pnpm format:check && pnpm lint && pnpm typecheck
 web server starts both applications with `HEXZERO_PROVIDER=scripted`; that
 variable is never an implicit OpenRouter fallback.
 
-The repository owner runs local validation. Coding agents write tests and
-inspect GitHub CI but do not run local formatting, linting, type checking,
-tests, builds, Playwright, or real-provider calls unless explicitly asked.
+The repository owner and coding agents both run this sequence before pushing.
+Coding agents also write tests and inspect GitHub CI, but make real-provider
+calls only when the owner explicitly asks.
 
 ## Real-provider smoke
 
