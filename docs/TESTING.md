@@ -79,9 +79,9 @@ malformed-entry skipping, cache TTL, stale fallback, and safe failure states.
 
 ### Experiment archive (`packages/experiment-archive`)
 
-`archive.test.ts` covers schema-v12-only enforcement: swarm-native provenance
+`archive.test.ts` covers schema-v13-only enforcement: swarm-native provenance
 archival, idempotent import, query service, credential-like-data rejection before
-persistence, unknown-architecture-version rejection, and non-v12 schema
+persistence, unknown-architecture-version rejection, and non-v13 schema
 rejection.
 
 ### Game API (`apps/game-api`)

@@ -56,13 +56,13 @@ World Lab distinguishes provider-reported cost from admission exposure. Each
 attempt with unknown monetary cost, including TypeSafe Jev, retains its
 configured per-attempt credit reserve in admission exposure. That reserve is
 a conservative execution limit, not a measured charge or Jev cost estimate.
-The OpenRouter planner asks Zero for bounded worker IDs, strategic target choice
-IDs, mission, priority, risk, and its own legal action choice. For this compact
-wire format, server code materializes agent IDs, H3 targets, directive IDs, and
-five-tick lifetimes from the frozen observation. Full valid plans remain
-accepted for compatibility, subject to validation that caps their lifetime at
-ten ticks including the issue tick. Invalid output is classified into safe validation reasons
-without retaining raw provider text. The selected Zero reasoning profile is
+The OpenRouter planner asks Zero for one opaque `optionId` per offered worker
+plus priority, risk, and its own legal action choice. For this compact wire
+format, server code resolves each `optionId` to its mission and H3 target and
+materializes agent IDs, directive IDs, and five-tick lifetimes from the frozen
+observation; the model request contains no raw H3 cell IDs or agent IDs.
+Invalid output is classified into safe validation reasons without retaining raw
+provider text. The selected Zero reasoning profile is
 sent to OpenRouter with private reasoning excluded, and output is bounded.
 
 When Zero has no unexpired directive for a worker, a failed planning attempt
@@ -146,7 +146,7 @@ The Live workspace is a grid of independently scrolling agent rail, map, context
 
 The Game API also owns one process-local experiment record. Each completed safe swarm tick is captured once, independently from the browser snapshot, and server-side export filters apply without affecting provider requests.
 
-Schema-v12 exports may cross a separate offline archive boundary into `packages/experiment-archive`. Node's built-in SQLite stores normalized immutable research records through versioned migrations, foreign keys, prepared statements, and transactional idempotent imports. This downstream observability archive is never consulted by tick execution and cannot recover, resume, or mutate the active world. Its bounded query service is application-independent so a future read-only MCP adapter can reuse it without exposing arbitrary SQL.
+Schema-v13 exports may cross a separate offline archive boundary into `packages/experiment-archive`. Node's built-in SQLite stores normalized immutable research records through versioned migrations, foreign keys, prepared statements, and transactional idempotent imports. This downstream observability archive is never consulted by tick execution and cannot recover, resume, or mutate the active world. Its bounded query service is application-independent so a future read-only MCP adapter can reuse it without exposing arbitrary SQL.
 
 World Setup uses `world-scenario-v1`. Pure preview computes the actual H3 disk, exact count, summed cell area, deterministic roster/spawns, feasibility, and warnings. Apply recomputes and atomically replaces world and experiment state. Reset reconstructs the current scenario; the Toledo default preserves legacy starts. Explicit location search crosses a replaceable server-owned adapter with no autocomplete, a one-request-per-second Nominatim limit, bounded cache/timeout, normalized results, and OpenStreetMap attribution. Manual coordinates bypass that network boundary.
 
@@ -185,7 +185,7 @@ Equivalent legal moves are ordered reproducibly from world seed, stable agent ID
 - `POST /api/simulation/experiment/export/archive` — import the exact generated safe document into the configured local SQLite archive
 - `GET /api/simulation/models` — return the cached, sanitized compatible model catalog
 - `POST /api/simulation/models/refresh` — explicitly refresh that catalog
-- `POST /api/simulation/models/verify` — make one explicit, non-mutating compatibility probe against `swarm-planner-v1`
+- `POST /api/simulation/models/verify` — make one explicit, non-mutating compatibility probe against `swarm-planner-v2`
 - `POST /api/simulation/experiment/models` — replace the Agent Zero model assignment
 
 The `GET /api/development-world` and `GET /health` endpoints remain for low-level diagnostics.
@@ -282,17 +282,17 @@ metrics cannot drift apart. Movement-pattern metrics walk each agent's accepted
 moves separately, classifying each step with `geographicDirectionBetweenCells`;
 aggregates sum direction counts and revisits and report the longest
 single-agent streak. All exports
-use schema version 12, which carries `swarmArchitectureVersion: "zero-swarm-v1"`
-and independent provider-attempt accounting unconditionally. Pre-swarm exports
-(schema versions 9, 10, and 11) are rejected outright; there is no migration
-path. The provider-attempt ledger is canonical for attempt counts, latency,
-token, and cost totals.
+use schema version 13, which carries `swarmArchitectureVersion: "zero-swarm-v1"`
+and independent provider-attempt accounting unconditionally. Exports at schema
+version 12 and earlier are rejected outright; there is no migration path. The
+provider-attempt ledger is canonical for attempt counts, latency, token, and
+cost totals.
 
 The agent runtime follows [OpenRouter's usage-accounting contract](https://openrouter.ai/docs/cookbook/administration/usage-accounting) and normalizes optional non-streaming usage fields: prompt, completion, total, reasoning, cached-read, cache-write tokens, and actual `usage.cost` as `costCredits`. It never derives price from a table. Safe usage already returned with a billable response is retained on later decision JSON/schema failure; network and HTTP failures without usage remain unknown. Scripted providers explicitly report zero tokens and zero cost.
 
 ## Packages
 
-`packages/shared` owns centralized scenario limits and all public schemas, including model capabilities, swarm directives, metrics, and schema-v12 swarm tick exports. Other-agent observations remain deterministically capped at seven for larger rosters. Types are inferred from Zod.
+`packages/shared` owns centralized scenario limits and all public schemas, including model capabilities, swarm directives, metrics, and schema-v13 swarm tick exports. Other-agent observations remain deterministically capped at seven for larger rosters. Types are inferred from Zod.
 
 `packages/world-engine` remains deterministic and has no model, HTTP, UI, storage, or credential dependency. It validates world actions independently. Direct proximity is derived from a separately supplied pre-action state.
 
@@ -327,5 +327,5 @@ Structural provider failures retain the broad compatibility code plus bounded de
 
 ## Provider-attempt accounting
 
-Provider work has an independent bounded lifecycle ledger. Schema-v12 exports
+Provider work has an independent bounded lifecycle ledger. Schema-v13 exports
 and archive-v4 preserve safe attempt records even when no world tick commits.

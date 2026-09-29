@@ -38,6 +38,9 @@ architecture and removed all legacy infrastructure:
   `longestRepeatedDirectionStreak`, `recentCellRevisits`), which nothing had
   ever assigned since the migration, are computed per agent from accepted
   moves.
+- **PR #73** (`feat(swarm): compile semantic strategic options for Agent Zero`):
+  introduced `swarm-planner-v2` semantic strategic options and advanced export
+  schema to version 13. See ADR 0034.
 
 The retirement case is structural rather than measured: the legacy path made one
 full generative provider call per active agent per tick, so provider attempts,
@@ -57,7 +60,10 @@ implementation history.
 
 Agent Zero is the sole generative planner. It makes an OpenRouter planning call
 only when strategic replanning is required, regardless of roster size, under
-the versioned contract `swarm-planner-v1`.
+the versioned contract `swarm-planner-v2`. The server compiles bounded semantic
+strategic options for each worker and Agent Zero selects an opaque option ID per
+worker; the server resolves each option to a mission and target cell, so the
+model request carries no raw H3 cell or agent IDs (see ADR 0034).
 Each plan carries a strategy summary and one directive per active worker;
 directives persist across ticks and are reused when no replan is triggered.
 Agent Zero participates in the same frozen-world, simultaneous-tick transaction
@@ -165,14 +171,14 @@ paths or SQL, recovery, scheduling, MCP, and archive authority remain deferred.
 
 Persistent short- and long-term objectives, compact memories, plan revision, summaries, and longer simulation runs.
 
-_Note: per-agent strategic goals, the compact memory ledger, and the Behavior Trace introduced in this milestone were subsequently removed. The SQLite experiment archive (pre-PR-5 observability slice) remains current, updated to schema version 12. See ADR 0033._
+_Note: per-agent strategic goals, the compact memory ledger, and the Behavior Trace introduced in this milestone were subsequently removed. The SQLite experiment archive (pre-PR-5 observability slice) remains current, updated to schema version 13. See ADRs 0033 and 0034._
 
 ## PR 6 — Persistent autonomous world
 
 Scheduled turns, snapshots, replay, retries, idempotency, durable budget/attempt
 ledgers, failure recovery, and operation without the World Lab browser being
 open. The current process-local attempt and credit-admission ceilings are an
-operator safety boundary, and their schema-v12 safe ledger can be exported to
+operator safety boundary, and their schema-v13 safe ledger can be exported to
 the analysis archive even when no turn committed. This is not active runtime
 persistence, restart recovery, or provider-account balance enforcement.
 
