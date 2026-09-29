@@ -127,8 +127,8 @@ See [Security](docs/SECURITY.md).
 ## Validation and research
 
 Default tests and GitHub CI are deterministic and make no model-provider calls.
-The repository owner runs local validation before a branch is pushed or a
-draft PR is opened:
+Local validation runs before a branch is pushed or a draft PR is opened, by the
+repository owner or by a coding agent:
 
 ```bash
 pnpm install --frozen-lockfile
@@ -139,7 +139,7 @@ pnpm test:e2e
 
 `pnpm validate` checks formatting, lint, types, unit/component tests, and builds.
 Playwright starts scripted application servers separately. See
-[Testing](docs/TESTING.md) for coverage and the owner validation workflow.
+[Testing](docs/TESTING.md) for coverage and the validation workflow.
 
 | Command                | Purpose                                                      |
 | ---------------------- | ------------------------------------------------------------ |

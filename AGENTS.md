@@ -31,14 +31,10 @@ These instructions apply throughout the repository.
 - Update architecture, security, testing, and roadmap docs when changing the corresponding contract.
 - Do not commit `.env` files, credentials, generated build output, test reports, or caches.
 - Use Conventional Commit messages. Keep pull requests within one roadmap milestone.
-- Coding agents write and update appropriate tests, configure automatic GitHub CI, and provide the exact local validation commands for the repository owner to run.
-- The repository owner runs local formatting checks, lint, type checking, tests, builds, and Playwright. Coding agents must not run local validation unless the owner explicitly requests it in that session.
-- After implementation and test authoring, coding agents must stop before pushing a branch or opening a pull request.
-- The coding agent must provide the exact local validation commands and wait for the repository owner to run them.
-- A branch may be pushed and a draft pull request may be opened only after the owner explicitly confirms in the same session that final local validation passed.
-- If the owner reports a validation failure, fix it locally, provide the relevant commands, and pause again for owner retesting.
-- Never infer validation approval from the original task prompt, completed implementation, local commits, or expected CI behavior.
-- Automatic GitHub CI should begin only after the owner’s local validation gate has passed and the draft pull request is opened.
-- Coding agents still must not run local validation unless explicitly authorized by the owner.
-- Automatic GitHub CI may run after a branch is pushed. Coding agents may inspect CI status and failure logs.
-- Coding agents must never claim local tests passed unless the repository owner supplied the results.
+- Coding agents write and update appropriate tests, configure automatic GitHub CI, and run local validation themselves: `pnpm install --frozen-lockfile`, `pnpm validate` (formatting check, lint, type checking, tests, builds), and `pnpm test:e2e` when a change can affect World Lab or Game API behavior.
+- Local validation never makes real-provider calls. Paid or real-provider commands such as `pnpm compare:live` and the Agent Zero planner probe still run only when the owner explicitly asks in that session.
+- A branch may be pushed and a draft pull request opened once the coding agent's own final local validation passes on the commit being pushed.
+- If validation fails, fix the cause and re-run it before pushing. Never skip, disable, or weaken a check or test to get a pass.
+- When a check cannot run in the agent's environment (for example, Playwright without a browser), say which one, do not push as if it passed, and give the owner the exact command to run.
+- Automatic GitHub CI runs after the branch is pushed. Coding agents may inspect CI status and failure logs.
+- Report validation results faithfully: state which commands ran and their outcome, and never claim a check passed that was not run.
