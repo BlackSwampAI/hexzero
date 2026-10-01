@@ -19,7 +19,7 @@
   "devDependencies": {
     "@hexzero/agent-runtime": "workspace:*",
     "@hexzero/world-engine": "workspace:*",
-    "tsx": "4.23.12",
-    "vitest": "4.1.11"
+    "tsx": "4.23.15",
+    "vitest": "5.0.2"
   }
 }
