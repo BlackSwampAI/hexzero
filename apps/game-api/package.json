@@ -21,12 +21,12 @@
     "@hexzero/world-engine": "workspace:*",
     "@hono/node-server": "2.1.1",
     "h3-js": "4.5.0",
-    "hono": "4.13.5"
+    "hono": "4.13.9"
   },
   "devDependencies": {
-    "@types/node": "24.13.3",
+    "@types/node": "24.19.0",
     "esbuild": "0.28.2",
-    "tsx": "4.23.12",
-    "vitest": "4.1.11"
+    "tsx": "4.23.15",
+    "vitest": "5.0.2"
   }
 }
