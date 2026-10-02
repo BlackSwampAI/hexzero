@@ -1095,8 +1095,8 @@ export const reflexDecisionSchema = z
     replanProbability: z.number().finite().min(0).max(1).optional(),
     model: modelIdSchema,
     latencyMs: z.number().finite().nonnegative(),
-    inputTokens: z.number().int().nonnegative(),
-    outputTokens: z.number().int().nonnegative(),
+    inputTokens: z.number().int().nonnegative().optional(),
+    outputTokens: z.number().int().nonnegative().optional(),
     directiveId: z.string().trim().min(1).max(80),
     cognitionSource: cognitionSourceSchema,
   })
@@ -1372,6 +1372,23 @@ export const providerFailureSchema = z.object({
 });
 export type ProviderFailure = z.infer<typeof providerFailureSchema>;
 
+export const reflexBatchResultEnvelopeSchema = z.discriminatedUnion('status', [
+  z
+    .object({
+      agentId: agentIdSchema,
+      status: z.literal('completed'),
+      decision: z.unknown(),
+    })
+    .strict(),
+  z
+    .object({
+      agentId: agentIdSchema,
+      status: z.literal('failed'),
+      failure: providerFailureSchema,
+    })
+    .strict(),
+]);
+
 export const modelAttemptSchema = z.object({
   attemptNumber: z.number().int().positive(),
   kind: z.enum([
@@ -1392,6 +1409,44 @@ export type ModelAttempt = z.infer<typeof modelAttemptSchema>;
 
 export const providerAttemptIdSchema = z.uuid().brand<'ProviderAttemptId'>();
 export type ProviderAttemptId = z.infer<typeof providerAttemptIdSchema>;
+
+export const providerAttemptBatchSchema = z
+  .object({
+    id: z.uuid(),
+    members: z
+      .array(
+        z
+          .object({
+            agentId: agentIdSchema,
+            intendedTurnNumber: z.number().int().positive(),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(WORLD_SCENARIO_LIMITS.maximumAgents - 1),
+  })
+  .strict()
+  .superRefine((batch, context) => {
+    if (
+      new Set(batch.members.map(({ agentId }) => agentId)).size !==
+      batch.members.length
+    )
+      context.addIssue({
+        code: 'custom',
+        path: ['members'],
+        message: 'Batch members must have unique agent IDs.',
+      });
+    if (
+      new Set(batch.members.map(({ intendedTurnNumber }) => intendedTurnNumber))
+        .size !== batch.members.length
+    )
+      context.addIssue({
+        code: 'custom',
+        path: ['members'],
+        message: 'Batch members must have unique intended turns.',
+      });
+  });
+export type ProviderAttemptBatch = z.infer<typeof providerAttemptBatchSchema>;
 
 export const providerAttemptOutcomeSchema = z.enum([
   'completed',
@@ -1429,6 +1484,8 @@ export const providerAttemptRecordSchema = z
     agentId: agentIdSchema,
     intendedTurnNumber: z.number().int().positive(),
     intendedTickNumber: z.number().int().positive().optional(),
+    /** One HTTP dispatch shared by these workers; scalar fields anchor member zero. */
+    batch: providerAttemptBatchSchema.optional(),
     kind: modelAttemptSchema.shape.kind,
     startedAt: z.iso.datetime(),
     completedAt: z.iso.datetime().optional(),
@@ -1448,6 +1505,30 @@ export const providerAttemptRecordSchema = z
   .strict()
   .superRefine((attempt, context) => {
     const finalized = attempt.outcome !== 'in-flight';
+    if (attempt.batch) {
+      const first = attempt.batch.members[0];
+      if (
+        !first ||
+        attempt.agentId !== first.agentId ||
+        attempt.intendedTurnNumber !== first.intendedTurnNumber
+      )
+        context.addIssue({
+          code: 'custom',
+          path: ['batch'],
+          message: 'Scalar attribution must match the first batch member.',
+        });
+      if (attempt.intendedTickNumber === undefined)
+        context.addIssue({
+          code: 'custom',
+          path: ['intendedTickNumber'],
+          message: 'Batch attempts require a tick number.',
+        });
+      if (attempt.reflexDecision || attempt.swarmPlan)
+        context.addIssue({
+          code: 'custom',
+          message: 'Batch decisions belong on individual worker tick records.',
+        });
+    }
     if (finalized !== Boolean(attempt.completedAt))
       context.addIssue({
         code: 'custom',
@@ -2710,7 +2791,7 @@ export type ExperimentExportWorldState = z.infer<
 
 const experimentExportDocumentObjectSchema = z
   .object({
-    schemaVersion: z.literal(13),
+    schemaVersion: z.literal(14),
     generatedAt: z.iso.datetime(),
     experiment: experimentManifestSchema,
     retention: experimentRetentionSchema,
@@ -2808,7 +2889,16 @@ const experimentExportDocumentObjectSchema = z
       });
     if (
       attempts.some(
-        ({ agentId }) => !selectedIds.has(agentId) || !exportedIds.has(agentId),
+        (attempt) =>
+          !exportedIds.has(attempt.agentId) ||
+          (attempt.batch
+            ? !attempt.batch.members.some(({ agentId }) =>
+                selectedIds.has(agentId),
+              )
+            : !selectedIds.has(attempt.agentId)) ||
+          attempt.batch?.members.some(
+            ({ agentId }) => !exportedIds.has(agentId),
+          ),
       )
     )
       context.addIssue({

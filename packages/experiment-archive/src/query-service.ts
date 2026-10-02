@@ -46,6 +46,34 @@ function parseJson<T>(value: unknown, fallback: T): T {
   }
 }
 
+/** Agent and turn constraints must refer to the same participating worker. */
+function participantFilter(filters: DetailFilters) {
+  const scalar: string[] = [];
+  const member: string[] = [];
+  const values: Array<string | number> = [];
+  if (filters.agent !== undefined) {
+    scalar.push('agent_id = ?');
+    member.push("json_extract(member.value, '$.agentId') = ?");
+    values.push(filters.agent);
+  }
+  if (filters.fromTurn !== undefined) {
+    scalar.push('intended_turn_number >= ?');
+    member.push("json_extract(member.value, '$.intendedTurnNumber') >= ?");
+    values.push(filters.fromTurn);
+  }
+  if (filters.toTurn !== undefined) {
+    scalar.push('intended_turn_number <= ?');
+    member.push("json_extract(member.value, '$.intendedTurnNumber') <= ?");
+    values.push(filters.toTurn);
+  }
+  if (!scalar.length) return null;
+  return {
+    sql: `((json_extract(source_json, '$.batch') IS NULL AND ${scalar.join(' AND ')})
+      OR EXISTS (SELECT 1 FROM json_each(provider_attempts.source_json, '$.batch.members') AS member WHERE ${member.join(' AND ')}))`,
+    values: [...values, ...values],
+  };
+}
+
 function addDecimalStrings(left: string, right: string): string {
   const split = (value: string) => {
     const [whole, fraction = ''] = value.split('.');
@@ -104,17 +132,10 @@ export class ExperimentQueryService {
     const limit = boundedLimit(filters.limit);
     const clauses: string[] = [];
     const values: Array<string | number> = [];
-    if (filters.agent !== undefined) {
-      clauses.push('agent_id = ?');
-      values.push(filters.agent);
-    }
-    if (filters.fromTurn !== undefined) {
-      clauses.push('intended_turn_number >= ?');
-      values.push(filters.fromTurn);
-    }
-    if (filters.toTurn !== undefined) {
-      clauses.push('intended_turn_number <= ?');
-      values.push(filters.toTurn);
+    const attribution = participantFilter(filters);
+    if (attribution) {
+      clauses.push(attribution.sql);
+      values.push(...attribution.values);
     }
     if (filters.reason !== undefined) {
       clauses.push('failure_code = ?');
@@ -126,7 +147,7 @@ export class ExperimentQueryService {
         SELECT id, intended_turn_number AS turn, intended_tick_number AS tick,
                agent_id AS agent, kind, model_id AS model,
                failure_code AS code, failure_message AS message,
-               validation_codes_json AS validationCodes, latency_ms AS latencyMs
+               validation_codes_json AS validationCodes, latency_ms AS latencyMs, source_json AS source
         FROM provider_attempts
         WHERE experiment_id = ? AND failure_code IS NOT NULL
           ${clauses.map((clause) => `AND ${clause}`).join('\n')}
@@ -137,8 +158,12 @@ export class ExperimentQueryService {
       .all(experimentId, ...values, limit + 1) as Array<
       Record<string, unknown>
     >;
-    for (const row of rows)
+    for (const row of rows) {
       row.validationCodes = parseJson(row.validationCodes, []);
+      row.batch =
+        parseJson<Record<string, unknown>>(row.source, {}).batch ?? null;
+      delete row.source;
+    }
     return page(rows, limit);
   }
 
@@ -149,17 +174,10 @@ export class ExperimentQueryService {
     const limit = boundedLimit(filters.limit);
     const clauses: string[] = [];
     const values: Array<string | number> = [];
-    if (filters.agent) {
-      clauses.push('agent_id = ?');
-      values.push(filters.agent);
-    }
-    if (filters.fromTurn !== undefined) {
-      clauses.push('intended_turn_number >= ?');
-      values.push(filters.fromTurn);
-    }
-    if (filters.toTurn !== undefined) {
-      clauses.push('intended_turn_number <= ?');
-      values.push(filters.toTurn);
+    const attribution = participantFilter(filters);
+    if (attribution) {
+      clauses.push(attribution.sql);
+      values.push(...attribution.values);
     }
     if (filters.outcome) {
       clauses.push('outcome = ?');
@@ -173,7 +191,7 @@ export class ExperimentQueryService {
                completed_at AS completedAt, outcome, model_id AS model,
                reasoning_profile AS reasoning, provider, failure_code AS failureCode,
                reserved_credits AS reservedCredits,
-               actual_cost_credits AS actualCostCredits
+               actual_cost_credits AS actualCostCredits, source_json AS source
         FROM provider_attempts WHERE experiment_id = ?
           ${clauses.map((clause) => `AND ${clause}`).join('\n')}
         ORDER BY started_at ASC, id ASC LIMIT ?
@@ -182,6 +200,11 @@ export class ExperimentQueryService {
       .all(experimentId, ...values, limit + 1) as Array<
       Record<string, unknown>
     >;
+    for (const row of rows) {
+      const source = parseJson<Record<string, unknown>>(row.source, {});
+      row.batch = source.batch ?? null;
+      delete row.source;
+    }
     return page(rows, limit);
   }
 
@@ -288,27 +311,49 @@ export class ExperimentQueryService {
                ROUND(SUM(CAST(actual_cost_credits AS REAL)), 8) AS knownCostCredits,
                SUM(actual_cost_credits IS NULL) AS attemptsWithUnknownCost,
                SUM(CASE WHEN actual_cost_credits IS NULL THEN CAST(reserved_credits AS REAL) ELSE 0 END) AS reservedUnknownExposure
-        FROM provider_attempts WHERE experiment_id = ?
+        FROM provider_attempts WHERE experiment_id = ? AND json_extract(source_json, '$.batch') IS NULL
         GROUP BY agent_id ORDER BY agent_id
       `,
       )
       .all(experimentId) as Array<Record<string, unknown>>;
-    const usageAggregate = aggregateUsage(usageByAgent);
+    const usageAggregateRows = this.#db
+      .prepare(
+        `
+        SELECT COUNT(*) AS providerAttempts,
+               SUM(latency_ms) AS latencyTotalMs,
+               SUM(latency_ms IS NOT NULL) AS attemptsWithKnownLatency,
+               SUM(prompt_tokens) AS promptTokens,
+               SUM(completion_tokens) AS completionTokens,
+               SUM(total_tokens) AS totalTokens,
+               ROUND(SUM(CAST(actual_cost_credits AS REAL)), 8) AS knownCostCredits,
+               SUM(actual_cost_credits IS NULL) AS attemptsWithUnknownCost
+        FROM provider_attempts WHERE experiment_id = ?
+      `,
+      )
+      .get(experimentId) as Record<string, unknown>;
+    const usageAggregate = aggregateUsage([usageAggregateRows]);
     const independentAttemptRows = this.#db
       .prepare(
         `SELECT agent_id AS agent, outcome, reserved_credits AS reservedCredits,
-                actual_cost_credits AS actualCostCredits
+                actual_cost_credits AS actualCostCredits,
+                json_extract(source_json, '$.batch') IS NOT NULL AS isBatch
          FROM provider_attempts WHERE experiment_id = ?
          ORDER BY started_at, id`,
       )
       .all(experimentId) as Array<Record<string, unknown>>;
     const attemptOutcomes = countBy(independentAttemptRows, 'outcome');
     const attemptOutcomesByAgent = [
-      ...new Set(independentAttemptRows.map(({ agent }) => String(agent))),
+      ...new Set(
+        independentAttemptRows
+          .filter(({ isBatch }) => !isBatch)
+          .map(({ agent }) => String(agent)),
+      ),
     ].map((agent) => ({
       agent,
       outcomes: countBy(
-        independentAttemptRows.filter((row) => row.agent === agent),
+        independentAttemptRows.filter(
+          (row) => !row.isBatch && row.agent === agent,
+        ),
         'outcome',
       ),
     }));
@@ -581,14 +626,21 @@ function comparisonMetrics(db: DatabaseSync, experimentId: string) {
     .prepare(
       `
       SELECT COUNT(*) AS total,
-             COUNT(DISTINCT agent_id) AS activeAgents,
+             (SELECT COUNT(DISTINCT participant) FROM (
+               SELECT agent_id AS participant FROM provider_attempts
+               WHERE experiment_id = ? AND json_extract(source_json, '$.batch') IS NULL
+               UNION ALL
+               SELECT json_extract(member.value, '$.agentId') AS participant
+               FROM provider_attempts, json_each(provider_attempts.source_json, '$.batch.members') AS member
+               WHERE experiment_id = ?
+             )) AS activeAgents,
              SUM(outcome = 'accepted') AS accepted,
              SUM(outcome = 'provider-error') AS failed,
              SUM(outcome IN ('operator-skipped', 'lost-tick')) AS lost
       FROM provider_attempts WHERE experiment_id = ?
     `,
     )
-    .get(experimentId) as Record<string, unknown>;
+    .get(experimentId, experimentId, experimentId) as Record<string, unknown>;
   const simulatedPlayer = db
     .prepare(
       `

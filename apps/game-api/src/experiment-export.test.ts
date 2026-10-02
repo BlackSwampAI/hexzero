@@ -4,6 +4,7 @@ import {
   agentIdSchema,
   eventIdSchema,
   h3CellSchema,
+  providerAttemptRecordSchema,
   type AgentId,
   type H3Cell,
   type WorldAction,
@@ -72,6 +73,53 @@ function rejectedMove(tickNumber: number, agentId: AgentId, to: H3Cell) {
 }
 
 describe('movement-pattern metrics', () => {
+  it('counts shared batch usage once in aggregate and excludes it from per-agent attribution', () => {
+    const batchAttempt = providerAttemptRecordSchema.parse({
+      id: '018f3f38-6b7d-7db7-8e95-751b4ce2681e',
+      agentId: agentX,
+      intendedTurnNumber: 1,
+      intendedTickNumber: 1,
+      kind: 'initial',
+      startedAt: '2026-08-13T12:00:00.000Z',
+      completedAt: '2026-08-13T12:00:01.000Z',
+      outcome: 'completed',
+      modelId: 'jev-1.13.0',
+      reasoningProfile: 'provider-default',
+      reservedCredits: '0.01',
+      actualCostCredits: '0.006',
+      provider: {
+        provider: 'typesafe',
+        model: 'jev-1.13.0',
+        latencyMs: 12,
+        promptTokens: 30,
+        completionTokens: 2,
+        costCredits: 0.006,
+      },
+      batch: {
+        id: '018f3f38-6b7d-7db7-8e95-751b4ce2681f',
+        members: [
+          { agentId: agentX, intendedTurnNumber: 1 },
+          { agentId: agentY, intendedTurnNumber: 2 },
+        ],
+      },
+    });
+    const metrics = calculateExperimentMetrics(
+      [],
+      [agentX, agentY],
+      [batchAttempt],
+    );
+    expect(metrics.aggregate).toMatchObject({
+      modelCalls: 1,
+      knownCostCredits: 0.006,
+      tokens: { promptTokens: 30, completionTokens: 2 },
+    });
+    expect(metrics.byAgent.map(({ metrics: value }) => value)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ modelCalls: 0, knownCostCredits: 0 }),
+      ]),
+    );
+  });
+
   it('walks each agent path separately for direction streaks and revisits', () => {
     const { a, b, direction, opposite } = straightLine();
     const yTarget = neighbors(origin).find(

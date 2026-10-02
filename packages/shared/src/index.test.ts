@@ -26,6 +26,8 @@ import {
   swarmPlannerContractVersionSchema,
   archiveExperimentExportResponseSchema,
   providerAttemptRecordSchema,
+  reflexDecisionSchema,
+  reflexBatchResultEnvelopeSchema,
   zeroStrategicObservationSchema,
 } from '.';
 
@@ -851,6 +853,22 @@ describe('snapshot and export contracts', () => {
 });
 
 describe('provider and archive contracts', () => {
+  it('validates batch result envelopes independently by worker', () => {
+    expect(
+      reflexBatchResultEnvelopeSchema.safeParse({
+        agentId,
+        status: 'completed',
+        decision: { arbitrary: 'validated by decision schema later' },
+      }).success,
+    ).toBe(true);
+    expect(
+      reflexBatchResultEnvelopeSchema.safeParse({
+        agentId,
+        status: 'failed',
+        failure: { code: 'timeout', message: 'Timed out', retryable: true },
+      }).success,
+    ).toBe(true);
+  });
   it('accepts complete, partial and tiny-cost provider usage without fabricating unknowns', () => {
     expect(
       providerMetadataSchema.parse({
@@ -963,6 +981,24 @@ describe('provider and archive contracts', () => {
       cognitionSource: 'jev-reflex' as const,
     };
     expect(
+      reflexDecisionSchema.safeParse({
+        ...reflexDecision,
+        inputTokens: undefined,
+        outputTokens: undefined,
+      }).success,
+    ).toBe(true);
+    expect(
+      reflexDecisionSchema.safeParse({
+        chosenCandidateId: 'action_0',
+        confidence: 0.9,
+        probabilities: { action_0: 0.9, action_1: 0.1 },
+        model: 'jev-1.13.0',
+        latencyMs: 12,
+        directiveId: 'directive-1',
+        cognitionSource: 'jev-reflex',
+      }).success,
+    ).toBe(true);
+    expect(
       providerAttemptRecordSchema.safeParse({
         ...base,
         outcome: 'completed',
@@ -989,6 +1025,58 @@ describe('provider and archive contracts', () => {
         ...base,
         outcome: 'in-flight',
         rawResponse: 'unsafe',
+      }).success,
+    ).toBe(false);
+  });
+
+  it('validates batch attempts as one tick-scoped dispatch with honest anchors', () => {
+    const base = {
+      id: '018f3f38-6b7d-7db7-8e95-751b4ce2681e',
+      agentId,
+      intendedTurnNumber: 1,
+      intendedTickNumber: 1,
+      kind: 'initial',
+      startedAt: '2026-08-13T12:00:00.000Z',
+      modelId: 'jev-1.13.0',
+      reasoningProfile: 'provider-default',
+      reservedCredits: '0.01',
+      batch: {
+        id: '018f3f38-6b7d-7db7-8e95-751b4ce2681f',
+        members: [
+          { agentId, intendedTurnNumber: 1 },
+          {
+            agentId: '22222222-2222-4222-8222-222222222222',
+            intendedTurnNumber: 2,
+          },
+        ],
+      },
+    };
+    expect(
+      providerAttemptRecordSchema.safeParse({ ...base, outcome: 'in-flight' })
+        .success,
+    ).toBe(true);
+    expect(
+      providerAttemptRecordSchema.safeParse({
+        ...base,
+        agentId: '22222222-2222-4222-8222-222222222222',
+        outcome: 'in-flight',
+      }).success,
+    ).toBe(false);
+    expect(
+      providerAttemptRecordSchema.safeParse({
+        ...base,
+        intendedTickNumber: undefined,
+        outcome: 'in-flight',
+      }).success,
+    ).toBe(false);
+    expect(
+      providerAttemptRecordSchema.safeParse({
+        ...base,
+        batch: {
+          ...base.batch,
+          members: [base.batch.members[0], base.batch.members[0]],
+        },
+        outcome: 'in-flight',
       }).success,
     ).toBe(false);
   });

@@ -76,11 +76,13 @@ import {
 import { compileStrategicOptions } from './strategic-options';
 import { AttemptAccounting } from './attempt-accounting';
 import {
-  chooseReflexWorldAction,
+  chooseReflexWorldActions,
   compileReflexObservation,
   ReflexSelectionCancelledError,
+  ReflexSelectionDeadlineError,
   type CompiledReflexObservation,
   type ReflexSelection,
+  type ReflexBatchSelectionInput,
 } from './reflex-execution';
 import {
   isSwarmDirectiveComplete,
@@ -274,6 +276,8 @@ export class SimulationValidationError extends Error {
 export interface SimulationServiceOptions {
   swarmPlanner: SwarmPlanner;
   reflexProvider: ReflexProvider;
+  /** Server-owned individual-call pool cap, 1–8. Production Jev remains 1. */
+  reflexConcurrencyLimit?: number;
   /**
    * Offline comparison seam: choose one opaque, already legal candidate without
    * calling a reflex provider. Production zero-swarm execution leaves this unset.
@@ -290,6 +294,7 @@ export interface SimulationServiceOptions {
 export class SimulationService {
   readonly #swarmPlanner: SwarmPlanner;
   readonly #reflexProvider: ReflexProvider;
+  readonly #reflexConcurrencyLimit: number;
   readonly #deterministicWorkerCandidateSelector:
     ((compiled: CompiledReflexObservation) => string) | undefined;
   readonly #now: () => string;
@@ -329,6 +334,7 @@ export class SimulationService {
   constructor({
     swarmPlanner,
     reflexProvider,
+    reflexConcurrencyLimit = 1,
     deterministicWorkerCandidateSelector,
     now = () => new Date().toISOString(),
     createEventId = () => crypto.randomUUID(),
@@ -342,6 +348,15 @@ export class SimulationService {
       throw new Error('Experiment retention limit must be a positive integer.');
     this.#swarmPlanner = swarmPlanner;
     this.#reflexProvider = reflexProvider;
+    if (
+      !Number.isInteger(reflexConcurrencyLimit) ||
+      reflexConcurrencyLimit < 1 ||
+      reflexConcurrencyLimit > 8
+    )
+      throw new Error(
+        'Reflex concurrency limit must be an integer from 1 to 8.',
+      );
+    this.#reflexConcurrencyLimit = reflexConcurrencyLimit;
     this.#deterministicWorkerCandidateSelector =
       deterministicWorkerCandidateSelector;
     this.#now = now;
@@ -826,11 +841,12 @@ export class SimulationService {
     // Planning ticks reserve Zero plus Jev workers. The explicit deterministic
     // comparison seam only reserves Zero's planner call; it never dispatches a
     // reflex provider attempt.
-    const requiredAttempts = this.#deterministicWorkerCandidateSelector
-      ? replan
-        ? 1
-        : 0
-      : agents.length - (replan ? 0 : 1);
+    const workerAttemptCount = this.#deterministicWorkerCandidateSelector
+      ? 0
+      : this.#reflexProvider.decideBatch
+        ? Number(agents.length > 1)
+        : agents.length - 1;
+    const requiredAttempts = Number(replan) + workerAttemptCount;
     if (
       requiredAttempts > 0 &&
       !this.#attemptAccounting.reserve(requiredAttempts)
@@ -946,16 +962,14 @@ export class SimulationService {
       const zeroAction = observation.legalZeroActions.find(
         ({ id }) => id === plan.zeroActionCandidateId,
       )?.action ?? { type: 'wait' as const };
-      const selected = new Map<
-        AgentId,
-        Awaited<ReturnType<typeof chooseReflexWorldAction>>
-      >();
+      if (Date.now() >= deadlineAtMs) throw new ReflexSelectionDeadlineError();
+      const selected = new Map<AgentId, ReflexSelection>();
+      const reflexInputs: ReflexBatchSelectionInput[] = [];
       const workers = agents.filter(({ id }) => id !== zero.id);
       for (const worker of workers) {
         const directive = plan.directives.find(
           ({ agentId }) => agentId === worker.id,
         )!;
-        this.#activeAgentId = worker.id;
         const history = {
           previousCell: this.#lastSwarmPositions.get(worker.id),
           pressureEvents,
@@ -976,37 +990,49 @@ export class SimulationService {
               ({ directiveId }) => directiveId === previous.id,
             ),
         );
+        const compiled = compileReflexObservation(
+          candidate,
+          directive,
+          history,
+        );
         const choice =
           planSource === 'deterministic-fallback' && !retainedDirective
-            ? chooseDeterministicWorkerAction(
-                compileReflexObservation(candidate, directive, history),
-                (compiled) =>
-                  selectNeutralFallbackCandidate(compiled, candidate),
+            ? chooseDeterministicWorkerAction(compiled, (compiled) =>
+                selectNeutralFallbackCandidate(compiled, candidate),
               )
             : this.#deterministicWorkerCandidateSelector
               ? chooseDeterministicWorkerAction(
-                  compileReflexObservation(candidate, directive, history),
+                  compiled,
                   this.#deterministicWorkerCandidateSelector,
                 )
-              : await chooseReflexWorldAction(
-                  candidate,
-                  directive,
-                  this.#reflexProvider,
-                  {
-                    history,
-                    signal: controller.signal,
-                    deadlineAtMs,
-                    accounting: this.#attemptAccounting,
-                    initialPermitReserved: true,
-                    intendedTickNumber: tickNumber,
-                    intendedTurnNumber:
-                      tickTurnBase + order.indexOf(worker.id) + 1,
-                    now: this.#now,
-                  },
-                );
-        selected.set(worker.id, choice);
+              : null;
+        if (choice) selected.set(worker.id, choice);
+        else
+          reflexInputs.push({
+            compiled,
+            initialPermitReserved: true,
+            intendedTickNumber: tickNumber,
+            intendedTurnNumber: tickTurnBase + order.indexOf(worker.id) + 1,
+          });
       }
+      // Completion order never determines observation or resolution order.
+      this.#activeAgentId = null;
+      const choices = await chooseReflexWorldActions(
+        reflexInputs,
+        this.#reflexProvider,
+        {
+          signal: controller.signal,
+          deadlineAtMs,
+          accounting: this.#attemptAccounting,
+          concurrencyLimit: this.#reflexConcurrencyLimit,
+          now: this.#now,
+        },
+      );
+      reflexInputs.forEach(({ compiled }, index) =>
+        selected.set(compiled.observation.agentId, choices[index]!),
+      );
       if (controller.signal.aborted) throw new SimulationTurnCancelledError();
+      if (Date.now() >= deadlineAtMs) throw new ReflexSelectionDeadlineError();
       let state = candidate;
       const context = {
         now: () => virtualTime,
@@ -1026,6 +1052,7 @@ export class SimulationService {
         applied.set(agentId, result.result);
       }
       if (controller.signal.aborted) throw new SimulationTurnCancelledError();
+      if (Date.now() >= deadlineAtMs) throw new ReflexSelectionDeadlineError();
       const signals = workers.flatMap((worker) => {
         const selection = selected.get(worker.id)!;
         const probability = selection.decision?.replanProbability;
@@ -1725,7 +1752,7 @@ export class SimulationService {
       currentWorld: this.#worldSnapshot(),
       modelConfiguration: this.#modelConfiguration,
       scenario: this.#scenario,
-      schemaVersion: 13,
+      schemaVersion: 14,
       providerAttempts: this.#attemptAccounting.ledger(),
       attemptRetention: this.#attemptAccounting.retention(),
       attemptAccounting: this.#attemptAccounting.snapshot(),

@@ -107,6 +107,20 @@ Explicit scripted mode bypasses repository `.env` loading entirely. This keeps d
 
 ## Tick recovery
 
+The optional native-batch reflex boundary attributes results by worker ID and
+validates each envelope and decision independently. Duplicate IDs invalidate
+only that worker; unknown IDs are ignored and missing results fall back to wait.
+Providers receive copies of frozen observations, never authoritative action
+maps or mutable world state. The capped individual adapter stops queued work on
+abort or deadline expiry. Late results and accounting callbacks are closed out;
+they cannot commit a cancelled or expired tick. See ADR 0035.
+
+Shared batch costs and tokens remain on one dispatch record with explicit
+worker membership. The first worker is a storage anchor, not the recipient of
+the shared charge. Aggregate metrics count shared usage once; individual usage
+remains unknown unless separately reported. No provider secrets, raw bodies,
+or private reasoning are added to this contract.
+
 Tick recovery is server-owned and bounded inside the shared deadline. The
 OpenRouter planner and Jev each allow at most one retry for HTTP 429 or 529.
 Failed planning and worker choices use deterministic fallbacks. There is no
@@ -155,7 +169,7 @@ The Game API captures only schema-validated safe observations, requested world a
 
 Export requests, agent IDs, levels, ranges, and Custom dependencies are
 runtime-validated. Filtering and metrics remain server-owned. The export schema
-is exclusively version 13; exports carrying schema version 12 or earlier are
+is exclusively version 14; exports carrying schema version 13 or earlier are
 rejected outright with no migration path. Reset clears swarm tick history and
 metrics while unlocking preserved roster assignments for the new experiment.
 

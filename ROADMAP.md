@@ -56,6 +56,15 @@ call) is retained as the ablation control for the swarm comparisons, not as a
 second production architecture. Historical milestones below remain as
 implementation history.
 
+## Reflex-provider follow-up — batch-capable seam
+
+The local PR 3 change adds optional native-batch worker selection, independent
+result validation, and a capped individual-provider adapter. Production Jev
+retains cap 1; raising production concurrency is a separate rollout decision.
+Schema-v14 exports identify shared batch dispatches and preserve aggregate
+billing without per-worker allocations. No native production provider, Laya,
+training, planner-cadence changes, or player features are added. See ADR 0035.
+
 ## Agent Zero planner
 
 Agent Zero is the sole generative planner. It makes an OpenRouter planning call
@@ -171,14 +180,14 @@ paths or SQL, recovery, scheduling, MCP, and archive authority remain deferred.
 
 Persistent short- and long-term objectives, compact memories, plan revision, summaries, and longer simulation runs.
 
-_Note: per-agent strategic goals, the compact memory ledger, and the Behavior Trace introduced in this milestone were subsequently removed. The SQLite experiment archive (pre-PR-5 observability slice) remains current, updated to schema version 13. See ADRs 0033 and 0034._
+_Note: per-agent strategic goals, the compact memory ledger, and the Behavior Trace introduced in this milestone were subsequently removed. The SQLite experiment archive (pre-PR-5 observability slice) remains current, updated to schema version 14. See ADRs 0033–0035._
 
 ## PR 6 — Persistent autonomous world
 
 Scheduled turns, snapshots, replay, retries, idempotency, durable budget/attempt
 ledgers, failure recovery, and operation without the World Lab browser being
 open. The current process-local attempt and credit-admission ceilings are an
-operator safety boundary, and their schema-v13 safe ledger can be exported to
+operator safety boundary, and their schema-v14 safe ledger can be exported to
 the analysis archive even when no turn committed. This is not active runtime
 persistence, restart recovery, or provider-account balance enforcement.
 

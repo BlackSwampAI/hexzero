@@ -79,12 +79,23 @@ malformed-entry skipping, cache TTL, stale fallback, and safe failure states.
 
 ### Experiment archive (`packages/experiment-archive`)
 
-`archive.test.ts` covers schema-v13-only enforcement: swarm-native provenance
+`archive.test.ts` covers schema-v14-only enforcement: swarm-native provenance
 archival, idempotent import, query service, credential-like-data rejection before
-persistence, unknown-architecture-version rejection, and non-v13 schema
+persistence, unknown-architecture-version rejection, and non-v14 schema
 rejection.
 
 ### Game API (`apps/game-api`)
+
+Batch reflex tests use offline controlled providers and deferred promises to
+assert the individual-call concurrency cap, stable native-batch attribution,
+reordered/duplicate/extra/missing/malformed result policy, failure isolation,
+and cancellation/deadline closure of started work. Full tick tests compare
+frozen observations and committed seeded world results under reversed
+completion order, prove unstarted workers create no attempt records, and reject
+late callbacks after rollback. Shared batch billing tests count one dispatch
+and charge once while omitting fabricated per-worker allocations. Existing
+pressure, directive completion, planner-failure fallback and accounting tests
+remain required. No speed thresholds or paid calls are used. See ADR 0035.
 
 `app.test.ts` covers the API boundary: repeatable swarm-native scripted
 providers, health and swarm-setup contracts, atomic swarm tick through the public
