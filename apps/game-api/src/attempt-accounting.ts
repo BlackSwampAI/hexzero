@@ -4,6 +4,7 @@ import {
   type ModelAttempt,
   type ModelId,
   type ProviderAttemptRecord,
+  type ProviderAttemptBatch,
   type ProviderFailure,
   type ProviderMetadata,
   type ReflexDecision,
@@ -42,6 +43,7 @@ export interface AttemptStart {
   startedAt: string;
   modelId: ModelId;
   reasoningProfile: ReasoningProfile;
+  batch?: ProviderAttemptBatch;
 }
 
 export interface AttemptCompletion {
@@ -198,6 +200,40 @@ export class AttemptAccounting {
       this.#retain(record);
     }
     return permitId;
+  }
+
+  /**
+   * Earmark available retry capacity without exhausting admission on a partial
+   * allocation. The caller owns a fixed slot per eligible job and must never
+   * reassign unused slots; all reservations are released at tick completion.
+   */
+  reserveUpTo(count: number): number {
+    if (!Number.isInteger(count) || count < 0)
+      throw new Error('Retry reservation count must be a nonnegative integer.');
+    if (this.#exhaustionReason !== null) return 0;
+    let available = 0;
+    while (available < count) {
+      const next = available + 1;
+      if (
+        this.limit !== null &&
+        this.#started + this.#reserved + next > this.limit
+      )
+        break;
+      if (
+        this.creditLimit !== null &&
+        compare(
+          add(
+            this.#committedExposure,
+            multiply(this.reservationCreditsPerAttempt, this.#reserved + next),
+          ),
+          this.creditLimit,
+        ) > 0
+      )
+        break;
+      available = next;
+    }
+    if (available > 0) this.reserve(available);
+    return available;
   }
 
   startAdditional(details?: AttemptStart): number | null {

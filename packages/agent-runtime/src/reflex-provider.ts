@@ -21,6 +21,12 @@ export interface ReflexProvider {
     observation: ReflexObservation,
     options?: ReflexDecisionOptions,
   ): Promise<ReflexDecision>;
+  /** Optional native multi-observation request. Results are keyed because a
+   * provider may return them in a different order from the inputs. */
+  decideBatch?(
+    observations: readonly ReflexObservation[],
+    options?: ReflexBatchDecisionOptions,
+  ): Promise<readonly ReflexBatchDecisionResult[]>;
 }
 
 export interface ReflexDecisionOptions {
@@ -28,6 +34,25 @@ export interface ReflexDecisionOptions {
   deadlineAtMs?: number;
   beginAttempt?: ReflexAttemptStarter;
 }
+
+export interface ReflexBatchDecisionOptions {
+  signal?: AbortSignal;
+  deadlineAtMs?: number;
+  /** One callback per dispatched batch HTTP attempt, including retries. */
+  beginAttempt?: ReflexBatchAttemptStarter;
+}
+
+export type ReflexBatchDecisionResult =
+  | {
+      agentId: string;
+      status: 'completed';
+      decision: unknown;
+    }
+  | {
+      agentId: string;
+      status: 'failed';
+      failure: ProviderFailure;
+    };
 
 export interface ReflexAttemptCompletion {
   outcome: 'completed' | 'provider-error' | 'cancelled' | 'timeout';
@@ -43,6 +68,14 @@ export type ReflexAttemptFinalizer = (
 export type ReflexAttemptStarter = (
   kind: 'initial' | 'automatic-transport-retry',
 ) => ReflexAttemptFinalizer | null;
+
+export type ReflexBatchAttemptFinalizer = (
+  completion: Omit<ReflexAttemptCompletion, 'reflexDecision'>,
+) => void;
+
+export type ReflexBatchAttemptStarter = (
+  kind: 'initial' | 'automatic-transport-retry',
+) => ReflexBatchAttemptFinalizer | null;
 
 export class ReflexProviderError extends Error {
   constructor(

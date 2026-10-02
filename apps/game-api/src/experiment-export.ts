@@ -32,7 +32,7 @@ import {
 } from './geographic-direction';
 
 export interface ExperimentSource {
-  schemaVersion: 13;
+  schemaVersion: 14;
   id: ExperimentId;
   startedAt: string;
   providerMode: 'openrouter' | 'scripted-test';
@@ -203,7 +203,13 @@ export function createExperimentExport(
   const initialAgentsById = new Map(
     source.initialAgents.map((agent) => [agent.id, agent]),
   );
-  const selectedAgents = selectedAgentIds
+  const selectedProfileIds = new Set<AgentId>([
+    ...selectedAgentIds,
+    ...providerAttempts.flatMap(
+      (attempt) => attempt.batch?.members.map(({ agentId }) => agentId) ?? [],
+    ),
+  ]);
+  const selectedAgents = [...selectedProfileIds]
     .map(
       (agentId) =>
         currentAgentsById.get(agentId) ?? initialAgentsById.get(agentId),
@@ -390,8 +396,12 @@ function filterProviderAttempts(
   selected: Set<AgentId>,
   tickNumbers: Set<number> | 'all',
 ): ProviderAttemptRecord[] {
-  let attempts = source.providerAttempts.filter(({ agentId }) =>
-    selected.has(agentId),
+  let attempts = source.providerAttempts.filter(
+    ({ agentId, batch }) =>
+      selected.has(agentId) ||
+      Boolean(
+        batch?.members.some(({ agentId: memberId }) => selected.has(memberId)),
+      ),
   );
   if (tickNumbers !== 'all')
     attempts = attempts.filter(
@@ -521,7 +531,9 @@ function attemptMetrics(attempts: readonly ProviderAttemptRecord[]) {
   ).length;
   const groups = new Map<string, ProviderAttemptRecord[]>();
   for (const attempt of attempts) {
-    const key = `${attempt.agentId}:${attempt.intendedTickNumber ?? attempt.intendedTurnNumber}`;
+    const key = attempt.batch
+      ? `batch:${attempt.batch.id}`
+      : `${attempt.agentId}:${attempt.intendedTickNumber ?? attempt.intendedTurnNumber}`;
     groups.set(key, [...(groups.get(key) ?? []), attempt]);
   }
   const retriedGroups = [...groups.values()].filter((group) =>
@@ -745,7 +757,9 @@ export function calculateExperimentMetrics(
       agentId,
       metrics: metricCountsFor(
         resolvedActions.filter((action) => action.agentId === agentId),
-        providerAttempts.filter((attempt) => attempt.agentId === agentId),
+        providerAttempts.filter(
+          (attempt) => !attempt.batch && attempt.agentId === agentId,
+        ),
         controlChanges,
         [agentId],
         agentId,

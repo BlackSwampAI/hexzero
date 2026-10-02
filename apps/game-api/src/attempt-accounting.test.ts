@@ -2,6 +2,24 @@ import { describe, expect, it } from 'vitest';
 import { AttemptAccounting } from './attempt-accounting';
 
 describe('AttemptAccounting', () => {
+  it('earmarks only available retry capacity without poisoning admission or recording unstarted work', () => {
+    const accounting = new AttemptAccounting(10, '0.03', '0.01');
+    expect(accounting.reserve(2)).toBe(true);
+    expect(accounting.reserveUpTo(7)).toBe(1);
+    expect(accounting.reserveUpTo(1)).toBe(0);
+    expect(accounting.snapshot()).toMatchObject({
+      reservedPermits: 3,
+      attemptsStarted: 0,
+      exhausted: false,
+    });
+    accounting.releaseReservations();
+    expect(accounting.snapshot()).toMatchObject({
+      reservedPermits: 0,
+      committedCreditExposure: '0',
+      exhausted: false,
+    });
+    expect(accounting.ledger()).toEqual([]);
+  });
   it('reserves atomically and finalizes known and unknown cost exactly once', () => {
     const accounting = new AttemptAccounting(3, '0.03', '0.01');
     expect(accounting.reserve(3)).toBe(true);
@@ -57,6 +75,49 @@ describe('AttemptAccounting', () => {
       committedCreditExposure: '0.01',
       unstartedReservedCredits: '0',
       exhausted: false,
+    });
+  });
+
+  it('records one billed attempt for a batch and retains all participant attribution', () => {
+    const accounting = new AttemptAccounting(1, '0.01', '0.01');
+    expect(accounting.reserve(1)).toBe(true);
+    const first = '11111111-1111-4111-8111-111111111111' as never;
+    const second = '22222222-2222-4222-8222-222222222222' as never;
+    const permit = accounting.startReserved({
+      agentId: first,
+      intendedTurnNumber: 1,
+      intendedTickNumber: 1,
+      kind: 'initial',
+      startedAt: '2026-08-13T12:00:00.000Z',
+      modelId: 'jev-1.13.0' as never,
+      reasoningProfile: 'provider-default' as never,
+      batch: {
+        id: '018f3f38-6b7d-7db7-8e95-751b4ce2681f',
+        members: [
+          { agentId: first, intendedTurnNumber: 1 },
+          { agentId: second, intendedTurnNumber: 2 },
+        ],
+      },
+    })!;
+    accounting.finalize(permit, {
+      outcome: 'completed',
+      completedAt: '2026-08-13T12:00:01.000Z',
+      provider: {
+        provider: 'typesafe',
+        model: 'jev-1.13.0' as never,
+        latencyMs: 20,
+        costCredits: 0.007,
+      },
+    });
+    expect(accounting.ledger()).toHaveLength(1);
+    expect(accounting.ledger()[0]).toMatchObject({
+      batch: { members: [{ agentId: first }, { agentId: second }] },
+      actualCostCredits: '0.007',
+    });
+    expect(accounting.snapshot()).toMatchObject({
+      attemptsStarted: 1,
+      attemptsFinalized: 1,
+      knownFinalizedCostCredits: '0.007',
     });
   });
 

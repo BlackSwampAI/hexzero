@@ -128,8 +128,10 @@ tick commits.
 
 The Game API owns an operator-triggered tick transaction. It builds Zero's
 strategic observation from the frozen candidate world and dispatches the single
-planning call; worker reflex calls follow sequentially, each receiving an
-immutable compiled local observation. All calls share one absolute deadline.
+planning call; all worker observations are compiled before dispatch. Individual
+providers use an explicit pool cap of 1–8 (production Jev remains 1). Native
+batch providers receive one bounded group, at most 31 workers. All calls share
+one absolute deadline. See ADR 0035 for attribution and accounting.
 
 The simulation derives a reproducible per-tick agent order from the scenario
 seed. The world engine then resolves all world actions in that order. Only the
@@ -146,7 +148,7 @@ The Live workspace is a grid of independently scrolling agent rail, map, context
 
 The Game API also owns one process-local experiment record. Each completed safe swarm tick is captured once, independently from the browser snapshot, and server-side export filters apply without affecting provider requests.
 
-Schema-v13 exports may cross a separate offline archive boundary into `packages/experiment-archive`. Node's built-in SQLite stores normalized immutable research records through versioned migrations, foreign keys, prepared statements, and transactional idempotent imports. This downstream observability archive is never consulted by tick execution and cannot recover, resume, or mutate the active world. Its bounded query service is application-independent so a future read-only MCP adapter can reuse it without exposing arbitrary SQL.
+Schema-v14 exports may cross a separate offline archive boundary into `packages/experiment-archive`. Node's built-in SQLite stores normalized immutable research records through versioned migrations, foreign keys, prepared statements, and transactional idempotent imports. This downstream observability archive is never consulted by tick execution and cannot recover, resume, or mutate the active world. Its bounded query service is application-independent so a future read-only MCP adapter can reuse it without exposing arbitrary SQL.
 
 World Setup uses `world-scenario-v1`. Pure preview computes the actual H3 disk, exact count, summed cell area, deterministic roster/spawns, feasibility, and warnings. Apply recomputes and atomically replaces world and experiment state. Reset reconstructs the current scenario; the Toledo default preserves legacy starts. Explicit location search crosses a replaceable server-owned adapter with no autocomplete, a one-request-per-second Nominatim limit, bounded cache/timeout, normalized results, and OpenStreetMap attribution. Manual coordinates bypass that network boundary.
 
@@ -181,7 +183,7 @@ Equivalent legal moves are ordered reproducibly from world seed, stable agent ID
 - `POST /api/simulation/experiment/setup/roster/generate` — generate a deterministic roster
 - `POST /api/simulation/experiment/setup/location-search` — resolve a location query via the Nominatim adapter
 - `POST /api/simulation/experiment/export/preview` — validate filters and report subset size, retention, and cost
-- `POST /api/simulation/experiment/export` — construct one schema-v13 safe JSON document
+- `POST /api/simulation/experiment/export` — construct one schema-v14 safe JSON document
 - `POST /api/simulation/experiment/export/archive` — import the exact generated safe document into the configured local SQLite archive
 - `GET /api/simulation/models` — return the cached, sanitized compatible model catalog
 - `POST /api/simulation/models/refresh` — explicitly refresh that catalog
@@ -233,7 +235,8 @@ One tick executes as follows:
    without a provider call (`directive-reuse`).
 
 3. **Provider-attempt reservation.** When replanning, the tick reserves one
-   Zero planning attempt plus one Jev attempt per worker. Insufficient capacity
+   Zero planning attempt plus one individual attempt per worker, or one shared
+   attempt for a native worker batch. Insufficient capacity
    stops the tick before any provider call.
 
 4. **Zero planning.** The service builds Zero's strategic observation from the
@@ -246,10 +249,11 @@ One tick executes as follows:
    authoritatively. On failure the service falls back to a deterministic plan;
    the planner attempt is still recorded.
 
-5. **Worker reflex dispatch (sequential).** For each worker in seeded order:
-   compile a local observation with the assigned directive and history; call
-   TypeSafe Jev; Jev selects one opaque action candidate ID with a probability
-   distribution and confidence. If the worker lacks an unexpired directive under
+5. **Worker reflex dispatch.** Compile every local observation against the same
+   candidate before any dispatch. Use one native batch when the provider offers
+   it, otherwise a bounded individual-call pool; Jev remains supported without
+   native batching. Each result is attributed by worker ID, validated separately,
+   and mapped through its own authoritative candidate table. If the worker lacks an unexpired directive under
    a failed planner, the service substitutes deterministic local expansion
    without a Jev call.
 
@@ -282,9 +286,9 @@ metrics cannot drift apart. Movement-pattern metrics walk each agent's accepted
 moves separately, classifying each step with `geographicDirectionBetweenCells`;
 aggregates sum direction counts and revisits and report the longest
 single-agent streak. All exports
-use schema version 13, which carries `swarmArchitectureVersion: "zero-swarm-v1"`
+use schema version 14, which carries `swarmArchitectureVersion: "zero-swarm-v1"`
 and independent provider-attempt accounting unconditionally. Exports at schema
-version 12 and earlier are rejected outright; there is no migration path. The
+version 13 and earlier are rejected outright; there is no migration path. The
 provider-attempt ledger is canonical for attempt counts, latency, token, and
 cost totals.
 
@@ -292,7 +296,7 @@ The agent runtime follows [OpenRouter's usage-accounting contract](https://openr
 
 ## Packages
 
-`packages/shared` owns centralized scenario limits and all public schemas, including model capabilities, swarm directives, metrics, and schema-v13 swarm tick exports. Other-agent observations remain deterministically capped at seven for larger rosters. Types are inferred from Zod.
+`packages/shared` owns centralized scenario limits and all public schemas, including model capabilities, swarm directives, metrics, and schema-v14 swarm tick exports. Other-agent observations remain deterministically capped at seven for larger rosters. Types are inferred from Zod.
 
 `packages/world-engine` remains deterministic and has no model, HTTP, UI, storage, or credential dependency. It validates world actions independently. Direct proximity is derived from a separately supplied pre-action state.
 
@@ -327,5 +331,5 @@ Structural provider failures retain the broad compatibility code plus bounded de
 
 ## Provider-attempt accounting
 
-Provider work has an independent bounded lifecycle ledger. Schema-v13 exports
+Provider work has an independent bounded lifecycle ledger. Schema-v14 exports
 and archive-v4 preserve safe attempt records even when no world tick commits.

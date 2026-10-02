@@ -23,7 +23,8 @@ provider usage. Every agent is visible.
    or agent IDs. Other ticks reuse the current directives without a planner call.
 2. **Workers resolve directives through TypeSafe Jev** using compact observations
    and opaque, engine-legal action candidates. Workers share a frozen pre-action
-   world; their calls currently run sequentially under one tick deadline.
+   world; a bounded adapter runs individual calls under one tick deadline.
+   Jev remains sequential by default; the seam also accepts keyed native batches.
 3. **The deterministic world engine validates and resolves actions** in seeded
    order. A complete tick commits atomically; cancellation commits no world
    changes. Provider failures retain safe attempt records and use explicit
@@ -89,7 +90,7 @@ are in [the screenshot guide](docs/assets/README.md).
 - **Inspection:** switch between Live and Agents while the same execution
   controller stays mounted. Inspect Zero strategy, worker directives, reflex
   choices, validation outcomes, territory, and safe activity records.
-- **Research exports:** generate compact or pretty schema-v13 JSON, download
+- **Research exports:** generate compact or pretty schema-v14 JSON, download
   it, or manually save the exact generated artifact to local SQLite. Exports
   include bounded safe tick and provider-attempt records, including attempts
   that did not produce a committed tick.
@@ -164,7 +165,7 @@ probe. Neither that probe nor `compare:live` runs in default tests or CI.
 - [ADR 0033](docs/adr/0033-retire-legacy-multi-agent-architecture.md) — retirement
   of the previous architecture
 
-Current code reads only schema-v13 exports. Pre-swarm scenarios, snapshots, and
+Current code reads only schema-v14 exports. Pre-swarm scenarios, snapshots, and
 exports require an older Git revision. Historical ADRs and experiment reports
 remain as decision history.
 

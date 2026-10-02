@@ -322,7 +322,10 @@ function sample(
       latencyMs,
       promptTokens: inputTokens,
       completionTokens: outputTokens,
-      totalTokens: inputTokens + outputTokens,
+      totalTokens:
+        inputTokens === undefined || outputTokens === undefined
+          ? undefined
+          : inputTokens + outputTokens,
     })),
   ];
   return {

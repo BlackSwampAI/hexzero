@@ -484,6 +484,10 @@ export function SwarmRunPanel({
         (item.outputTokens ?? item.completionTokens ?? 0),
       0,
     );
+  const workersWithUnknownUsage = jev.filter(
+    (decision) =>
+      decision.inputTokens === undefined || decision.outputTokens === undefined,
+  ).length;
   const providers = snapshot.swarmProviderStatus;
   const retainedTicks = snapshot.swarmTicks ?? [];
   const zeroPlans = retainedTicks.filter(
@@ -577,6 +581,8 @@ export function SwarmRunPanel({
           <dd>
             {total(jev)} tokens ·{' '}
             {jev.reduce((sum, item) => sum + item.latencyMs, 0)} ms
+            {workersWithUnknownUsage > 0 &&
+              ` · usage unknown for ${workersWithUnknownUsage} worker decisions`}
           </dd>
         </div>
       </dl>

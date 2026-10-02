@@ -102,6 +102,16 @@ function snapshot(withTick = true): SimulationSnapshot {
 }
 
 describe('swarm telemetry panels', () => {
+  it('identifies unknown worker token usage without inventing a batch allocation', () => {
+    const value = snapshot();
+    const decision = value.swarmTicks![0]!.workers[0]!.reflexDecision!;
+    delete decision.inputTokens;
+    delete decision.outputTokens;
+    render(<SwarmRunPanel snapshot={value} status="paused" runTarget={10} />);
+    expect(
+      screen.getByText(/usage unknown for 1 worker decisions/),
+    ).toBeInTheDocument();
+  });
   it('summarizes inactive player pressure, actions, and provider failures', () => {
     const value = snapshot();
     value.swarmTicks![0]!.workers[0]!.failure = {

@@ -1,7 +1,15 @@
 # Local experiment archive
 
-The archive accepts only schema-v13 exports and rejects any other schema version outright.
-Exports at schema version 12 and earlier are rejected with no migration path. Reading a
+The archive accepts only schema-v14 exports and rejects any other schema version outright.
+
+Schema 14 adds explicit native-batch attempt membership. A shared dispatch is
+one provider attempt with one aggregate charge; its required agent/turn fields
+identify the first member as a storage anchor. Full membership is retained in
+source JSON, and agent-filtered attempt queries include participating batches.
+Per-agent cost summaries exclude shared charges; aggregate summaries count each
+shared dispatch once. No per-worker cost split is inferred. Worker token counts
+may be absent when only aggregate batch usage is available. See ADR 0035.
+Exports at schema version 13 and earlier are rejected with no migration path. Reading a
 schema-v12 export requires a Git revision before PR #73 (`swarm-planner-v2`); reading a
 pre-swarm export (schema versions 9, 10, and 11) requires a revision before PR 1 of the
 zero-swarm migration.
@@ -23,7 +31,7 @@ Migration 6 removes all legacy per-agent-LLM social-system tables: `turns`,
 `turn_number` column is renamed `tick_number`. Personality and behavior columns
 are dropped from `agents` and `experiments`.
 
-The experiment archive is a durable, local research surface for completed or partially retained exports. It does not participate in an active simulation: the Game API's in-memory engine remains authoritative, and an archive write cannot change an accepted game outcome. It imports schema-v13 JSON exports only; it is not crash recovery, restartable simulation state, or a scheduler.
+The experiment archive is a durable, local research surface for completed or partially retained exports. It does not participate in an active simulation: the Game API's in-memory engine remains authoritative, and an archive write cannot change an accepted game outcome. It imports schema-v14 JSON exports only; it is not crash recovery, restartable simulation state, or a scheduler.
 
 ## Storage and configuration
 
@@ -104,7 +112,7 @@ MCP and embeddings are deferred because bounded local retrieval solves the immed
 Archive schema v4 stores `providerAttempts` independently. Use
 `pnpm experiment:db provider-attempts <experiment-id>` to inspect committed and
 uncommitted provider work. Monetary values round-trip as canonical TEXT. This
-ledger is canonical for every current (schema-v13) export, which always
+ledger is canonical for every current (schema-v14) export, which always
 carries independent attempt accounting. The SQLite archive is for analysis
 and is not active runtime recovery.
 
@@ -116,7 +124,7 @@ swarm ticks.
 
 ## Zero-swarm comparisons
 
-The archive preserves safe schema-v13 swarm tick records and independent
+The archive preserves safe schema-v14 swarm tick records and independent
 provider attempts, but its `compare` command is not the same-scenario,
 per-tick swarm harness. Use `pnpm compare:offline` for the reproducible
 zero-swarm-vs-deterministic-workers fixture report. The runner does not
