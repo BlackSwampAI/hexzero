@@ -65,6 +65,15 @@ Schema-v14 exports identify shared batch dispatches and preserve aggregate
 billing without per-worker allocations. No native production provider, Laya,
 training, planner-cadence changes, or player features are added. See ADR 0035.
 
+The focused expansion-fulfillment clarification makes the existing completion
+rule explicit in Jev's context and the assigned-target infection candidate:
+the target must be infected and controlled by its worker; arrival and waiting
+do not fulfill expansion. Legal choices, Zero's risk assignments, probability
+validation, and replanning policy remain unchanged. The next owner-run live
+comparison should stratify open-target infection/wait rates by risk tolerance
+and also report captures and territory growth. One 25-tick run provides
+observational evidence, not proof of causation.
+
 ## Agent Zero planner
 
 Agent Zero is the sole generative planner. It makes an OpenRouter planning call

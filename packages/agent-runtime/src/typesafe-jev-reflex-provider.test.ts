@@ -167,6 +167,44 @@ describe('TypeSafeJevReflexProvider', () => {
     );
   });
 
+  it('adds bounded fulfillment context only for expand directives', () => {
+    const fulfillmentCondition =
+      'An expand directive is fulfilled when its target is infected and controlled by this worker. Arriving at an open target or waiting there does not fulfill it. The at-target progress label describes position, not fulfillment.';
+    for (const riskTolerance of ['low', 'medium', 'high'] as const) {
+      for (const mission of [
+        'hold',
+        'relocate',
+        'reinforce',
+        'evade',
+      ] as const) {
+        const request = buildTypeSafeJevRequest({
+          ...observation,
+          directive: {
+            ...observation.directive,
+            mission,
+            riskTolerance,
+          },
+        });
+        expect(request.state.directive).toEqual({
+          mission,
+          priority: observation.directive.priority,
+          riskTolerance,
+        });
+      }
+
+      const expandRequest = buildTypeSafeJevRequest({
+        ...observation,
+        directive: { ...observation.directive, riskTolerance },
+      });
+      expect(expandRequest.state.directive).toEqual({
+        mission: 'expand',
+        priority: observation.directive.priority,
+        riskTolerance,
+        fulfillmentCondition,
+      });
+    }
+  });
+
   it('rejects malformed responses and selections outside its candidates', async () => {
     const malformed = new TypeSafeJevReflexProvider({
       apiKey: 'test-key',

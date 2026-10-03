@@ -86,6 +86,13 @@ rejection.
 
 ### Game API (`apps/game-api`)
 
+Expansion clarification tests check Jev's fulfillment context across risk
+tolerances, the assigned-open-target infection description, and unchanged legal
+candidate IDs/actions. Engine-backed assertions distinguish arrival and waiting
+from successful worker-controlled infection. Valid wait decisions remain
+selectable through the individual and batch seams. Other missions and off-target
+infection retain their existing wording and completion behavior.
+
 Batch reflex tests use offline controlled providers and deferred promises to
 assert the individual-call concurrency cap, stable native-batch attribution,
 reordered/duplicate/extra/missing/malformed result policy, failure isolation,

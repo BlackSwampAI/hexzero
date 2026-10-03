@@ -357,6 +357,12 @@ export function buildTypeSafeJevRequest(observationInput: ReflexObservation) {
         mission: observation.directive.mission,
         priority: observation.directive.priority,
         riskTolerance: observation.directive.riskTolerance,
+        ...(observation.directive.mission === 'expand'
+          ? {
+              fulfillmentCondition:
+                'An expand directive is fulfilled when its target is infected and controlled by this worker. Arriving at an open target or waiting there does not fulfill it. The at-target progress label describes position, not fulfillment.',
+            }
+          : {}),
       },
       currentSituation: observation.currentSituation,
       ...(recentCaptures?.length
