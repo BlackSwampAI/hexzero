@@ -158,6 +158,12 @@ World Lab issues explicit ticks while Start or a bounded run is active. Provider
 
 `apps/world-lab` is a Next.js App Router developer/admin surface. It fetches runtime-validated simulation snapshots through a local rewrite, controls one tick at a time, and updates MapLibre's existing H3 GeoJSON source without recreating the map. Agent markers are fully visible and use deterministic offsets when sharing cells.
 
+MapLibre's worker URL includes the renderer's package version. The worker and
+its relative shared-module import use the same versioned route, which serves
+only the installed version and two allowlisted files. Versioned responses use
+immutable caching; legacy unversioned responses use `no-store`. This keeps
+dependency upgrades from pairing a new renderer with cached older workers.
+
 Its command navbar is the single persistent application-control row. Browser-session run-target selection remains client orchestration and preserves absolute tick semantics; execution and reconciliation still consume authoritative API snapshots. Agent color uses retained effective color, base agent color, and a neutral fallback.
 
 The basemap uses the standard HTTPS OpenStreetMap raster tile endpoint with

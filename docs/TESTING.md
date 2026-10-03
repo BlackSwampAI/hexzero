@@ -235,11 +235,18 @@ neutral fallback for unknown agents.
 OpenStreetMap tile URLs, visible attribution, source zoom bounds, and a dark
 raster treatment that leaves domain overlays untouched.
 
+`maplibre-worker/route.test.ts` covers matching package versions, rejected
+versions and filenames, immutable versioned responses, and uncached legacy
+responses.
+
 ### Playwright E2E (`tests/e2e/world-lab.spec.ts`)
 
-Two tests: the long swarm-activity log scrolls inside the fixed-height bottom
-dock; and a deterministic scripted swarm tick commits and exports safe
-telemetry without an OpenRouter request. Browser tests fulfill OpenStreetMap
+Three tests: a map renders using matching versioned worker assets even when
+the legacy worker URL is intercepted with a stale response; the long
+swarm-activity log scrolls inside the fixed-height bottom dock; and a
+deterministic scripted swarm tick commits and exports safe telemetry without
+an OpenRouter request. The worker regression also checks both versioned asset
+responses and rejects a mismatched package version. Browser tests fulfill OpenStreetMap
 tile requests with a local image fixture instead of contacting the public tile
 service.
 
