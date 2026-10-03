@@ -33,8 +33,13 @@ the prior tick's physical action. Reaching the directive target has its own
 `at-target` observation status. Zero's worker status uses the same position
 comparison, rather than treating any accepted world action as progress. The
 existing deterministic replanning trigger for repeated waits is unchanged.
-An `expand` directive completes only after its target is worker-controlled;
-arriving on an open target is not completion. A `relocate` directive completes
+An `expand` directive completes only after its target is infected and controlled
+by that worker; arriving on an open target or waiting there is not completion.
+Jev's expand context states this fulfillment condition and identifies
+`at-target` as positional. The infection candidate at the assigned open target
+also explains that infection establishes worker control and fulfills expansion.
+All engine-legal choices remain available, and a valid wait remains acceptable.
+A `relocate` directive completes
 when its worker reaches the target. A `reinforce` directive completes on arrival
 at its target, which must be infected or adjacent to infection when issued. An
 `evade` directive completes on arrival or when a worker that previously faced

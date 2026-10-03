@@ -79,7 +79,10 @@ function actionDescription(
   if (action.type === 'wait')
     return 'Remain on the current cell for this tick.';
   if (action.type === 'infect')
-    return 'Infect the current open cell and establish local territory.';
+    return directive.mission === 'expand' &&
+      directive.targetCell === agent.currentCell
+      ? 'Infect the current open cell and establish local territory. This is the assigned expand target; infecting it establishes this worker’s control and fulfills the directive. Arriving here or waiting does not fulfill it.'
+      : 'Infect the current open cell and establish local territory.';
   if (action.type === 'capture')
     return 'Capture the abandoned infected current cell from another controller.';
   const status = cellStatus(state, action.targetCell, directive.agentId);
