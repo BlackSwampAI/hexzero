@@ -24,6 +24,53 @@ async function openMoreActions(page: Parameters<typeof test>[0]['page']) {
   }
 }
 
+test('renders the map without using stale unversioned worker assets', async ({
+  page,
+  context,
+}) => {
+  const { dependencies } = JSON.parse(
+    await readFile('apps/world-lab/package.json', 'utf8'),
+  );
+  const version = dependencies['maplibre-gl'];
+  const workerRequests: string[] = [];
+  const errors: string[] = [];
+  context.on('request', (request) => {
+    if (request.url().includes('/maplibre-worker/')) {
+      workerRequests.push(new URL(request.url()).pathname);
+    }
+  });
+  page.on('pageerror', (error) => errors.push(error.message));
+  await context.route('**/maplibre-worker/maplibre-gl-*.mjs', (route) =>
+    route.fulfill({
+      contentType: 'text/javascript',
+      body: 'throw new Error("Stale unversioned MapLibre worker loaded");',
+    }),
+  );
+
+  await page.goto('/');
+  await expect(page.getByTestId('world-map')).toHaveAttribute(
+    'data-overlay-status',
+    'ready',
+  );
+  expect(workerRequests).toContain(
+    `/maplibre-worker/v/${version}/maplibre-gl-worker.mjs`,
+  );
+  expect(errors).toEqual([]);
+
+  for (const file of ['maplibre-gl-worker.mjs', 'maplibre-gl-shared.mjs']) {
+    const response = await context.request.get(
+      `/maplibre-worker/v/${version}/${file}`,
+    );
+    expect(response.ok()).toBe(true);
+    expect(response.headers()['cache-control']).toContain('immutable');
+    expect(await response.text()).toContain(`v${version}/LICENSE.txt`);
+  }
+  const mismatched = await context.request.get(
+    '/maplibre-worker/v/0.0.0/maplibre-gl-worker.mjs',
+  );
+  expect(mismatched.status()).toBe(404);
+});
+
 test('keeps long swarm activity scrollable inside the bottom dock', async ({
   page,
 }) => {

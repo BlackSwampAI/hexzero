@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { cellToBoundary, cellToLatLng } from 'h3-js';
 import {
   AttributionControl,
+  getVersion,
   LngLatBounds,
   type GeoJSONSource,
   Map,
@@ -43,7 +44,7 @@ const sourceId = 'development-hexes';
 const fillLayerId = 'development-hex-fills';
 const lineLayerId = 'development-hex-lines';
 
-setWorkerUrl('/maplibre-worker/maplibre-gl-worker.mjs');
+setWorkerUrl(`/maplibre-worker/v/${getVersion()}/maplibre-gl-worker.mjs`);
 
 type OverlayStatus = 'initializing' | 'ready' | 'incomplete' | 'failed';
 
